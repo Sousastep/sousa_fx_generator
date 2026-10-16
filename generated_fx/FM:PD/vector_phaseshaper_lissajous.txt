@@ -52,7 +52,7 @@ function evalVPS(xIn: number, dIn: number, vIn: number, suppressAmt: number): nu
 
 	// Eq. 6: 2D Vector Phaseshaping function phi_vps(x)
 	let p = (x < d) ? ((v * x) / d) : ((1.0 - v) * ((x - d) / (1.0 - d)) + v);
-	let rawCos = -cos(2.0 * pi * p);
+	let rawCos = 0.0 - cos(2.0 * pi * p);
 
 	// Eq. 11 & 12: Incomplete period alias suppression when p > floor(v)
 	let vFloor = floor(v);
@@ -64,12 +64,12 @@ function evalVPS(xIn: number, dIn: number, vIn: number, suppressAmt: number): nu
 		let c = cos(2.0 * pi * b);
 		if (b <= 0.5) {
 			let phiA = clamp(pMod / (2.0 * b), 0.0, 1.0);
-			let sA = -cos(2.0 * pi * phiA);
+			let sA = 0.0 - cos(2.0 * pi * phiA);
 			sa = 0.5 * ((1.0 - c) * sA - 1.0 - c);
 		} else {
 			let phiA = clamp(pMod / b, 0.0, 1.0);
 			if (phiA > 0.5) {
-				let sA = -cos(2.0 * pi * phiA);
+				let sA = 0.0 - cos(2.0 * pi * phiA);
 				sa = 0.5 * ((1.0 + c) * sA + 1.0 - c);
 			}
 		}

@@ -66,21 +66,6 @@ function nextRandBipolar(seedIn: Int): number {
 	return ((s & 65535) / 32768.0) - 1.0;
 }
 
-function readDelay2k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
-	let d = clamp(delSamps, 2.0, 2042.0);
-	let readPos = wIdx - d;
-	while (readPos < 0.0) {
-		readPos += 2048.0;
-	}
-	let idx0: Int = floor(readPos);
-	let frac = readPos - idx0;
-	let i_m1: Int = (idx0 - 1 + 2048) & 2047;
-	let i_0: Int  = idx0 & 2047;
-	let i_1: Int  = (idx0 + 1) & 2047;
-	let i_2: Int  = (idx0 + 2) & 2047;
-	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
-}
-
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = (abs(in2) > 0.0000001) ? in2 : xL;
@@ -180,12 +165,35 @@ let mainHiSamps  = mstosamps(baseMs * 0.75 * (1.0 - 0.45 * colShift * clamp(envH
 
 let modSpan = mstosamps(baseMs * 0.42);
 
-let wetLowL = readDelay2k(bufLowL, writeIdx, mainLowSamps + modSpan * 0.45 * lawLowL);
-let wetLowR = readDelay2k(bufLowR, writeIdx, mainLowSamps + modSpan * 0.45 * lawLowR);
-let wetMidL = readDelay2k(bufMidL, writeIdx, mainMidSamps + modSpan * lawMidL);
-let wetMidR = readDelay2k(bufMidR, writeIdx, mainMidSamps + modSpan * lawMidR);
-let wetHiL  = readDelay2k(bufHiL,  writeIdx, mainHiSamps  + modSpan * 1.15 * lawHiL);
-let wetHiR  = readDelay2k(bufHiR,  writeIdx, mainHiSamps  + modSpan * 1.15 * lawHiR);
+let rpLowL = writeIdx - clamp(mainLowSamps + modSpan * 0.45 * lawLowL, 2.0, 2042.0);
+while (rpLowL < 0.0) { rpLowL += 2048.0; }
+let iLowL: Int = floor(rpLowL);
+let wetLowL = cubicinterp(rpLowL - iLowL, bufLowL[(iLowL - 1 + 2048) & 2047], bufLowL[iLowL & 2047], bufLowL[(iLowL + 1) & 2047], bufLowL[(iLowL + 2) & 2047]);
+
+let rpLowR = writeIdx - clamp(mainLowSamps + modSpan * 0.45 * lawLowR, 2.0, 2042.0);
+while (rpLowR < 0.0) { rpLowR += 2048.0; }
+let iLowR: Int = floor(rpLowR);
+let wetLowR = cubicinterp(rpLowR - iLowR, bufLowR[(iLowR - 1 + 2048) & 2047], bufLowR[iLowR & 2047], bufLowR[(iLowR + 1) & 2047], bufLowR[(iLowR + 2) & 2047]);
+
+let rpMidL = writeIdx - clamp(mainMidSamps + modSpan * lawMidL, 2.0, 2042.0);
+while (rpMidL < 0.0) { rpMidL += 2048.0; }
+let iMidL: Int = floor(rpMidL);
+let wetMidL = cubicinterp(rpMidL - iMidL, bufMidL[(iMidL - 1 + 2048) & 2047], bufMidL[iMidL & 2047], bufMidL[(iMidL + 1) & 2047], bufMidL[(iMidL + 2) & 2047]);
+
+let rpMidR = writeIdx - clamp(mainMidSamps + modSpan * lawMidR, 2.0, 2042.0);
+while (rpMidR < 0.0) { rpMidR += 2048.0; }
+let iMidR: Int = floor(rpMidR);
+let wetMidR = cubicinterp(rpMidR - iMidR, bufMidR[(iMidR - 1 + 2048) & 2047], bufMidR[iMidR & 2047], bufMidR[(iMidR + 1) & 2047], bufMidR[(iMidR + 2) & 2047]);
+
+let rpHiL = writeIdx - clamp(mainHiSamps + modSpan * 1.15 * lawHiL, 2.0, 2042.0);
+while (rpHiL < 0.0) { rpHiL += 2048.0; }
+let iHiL: Int = floor(rpHiL);
+let wetHiL = cubicinterp(rpHiL - iHiL, bufHiL[(iHiL - 1 + 2048) & 2047], bufHiL[iHiL & 2047], bufHiL[(iHiL + 1) & 2047], bufHiL[(iHiL + 2) & 2047]);
+
+let rpHiR = writeIdx - clamp(mainHiSamps + modSpan * 1.15 * lawHiR, 2.0, 2042.0);
+while (rpHiR < 0.0) { rpHiR += 2048.0; }
+let iHiR: Int = floor(rpHiR);
+let wetHiR = cubicinterp(rpHiR - iHiR, bufHiR[(iHiR - 1 + 2048) & 2047], bufHiR[iHiR & 2047], bufHiR[(iHiR + 1) & 2047], bufHiR[(iHiR + 2) & 2047]);
 
 writeIdx = (writeIdx + 1) & 2047;
 

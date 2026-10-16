@@ -64,21 +64,6 @@ function besselI0(x: number): number {
 	return res;
 }
 
-function readDelay4k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
-	let d = clamp(delSamps, 2.0, 4090.0);
-	let readPos = wIdx - d;
-	while (readPos < 0.0) {
-		readPos += 4096.0;
-	}
-	let idx0: Int = floor(readPos);
-	let frac = readPos - idx0;
-	let i_m1: Int = (idx0 - 1 + 4096) & 4095;
-	let i_0: Int  = idx0 & 4095;
-	let i_1: Int  = (idx0 + 1) & 4095;
-	let i_2: Int  = (idx0 + 2) & 4095;
-	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
-}
-
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = (abs(in2) > 0.0000001) ? in2 : xL;
@@ -153,8 +138,15 @@ let baseDel = clamp(sr / f0, 16.0, 2048.0);
 let delL = clamp(baseDel + delPhaseL * (sr / (2.0 * pi * fm)) * 4.0, 4.0, 4090.0);
 let delR = clamp(baseDel + delPhaseR * (sr / (2.0 * pi * fm)) * 4.0, 4.0, 4090.0);
 
-let tvdlL = readDelay4k(delayBufL, writeIdx, delL);
-let tvdlR = readDelay4k(delayBufR, writeIdx, delR);
+let rpTvdlL = writeIdx - clamp(delL, 2.0, 4090.0);
+while (rpTvdlL < 0.0) { rpTvdlL += 4096.0; }
+let iTvdlL: Int = floor(rpTvdlL);
+let tvdlL = cubicinterp(rpTvdlL - iTvdlL, delayBufL[(iTvdlL - 1 + 4096) & 4095], delayBufL[iTvdlL & 4095], delayBufL[(iTvdlL + 1) & 4095], delayBufL[(iTvdlL + 2) & 4095]);
+
+let rpTvdlR = writeIdx - clamp(delR, 2.0, 4090.0);
+while (rpTvdlR < 0.0) { rpTvdlR += 4096.0; }
+let iTvdlR: Int = floor(rpTvdlR);
+let tvdlR = cubicinterp(rpTvdlR - iTvdlR, delayBufR[(iTvdlR - 1 + 4096) & 4095], delayBufR[iTvdlR & 4095], delayBufR[(iTvdlR + 1) & 4095], delayBufR[(iTvdlR + 2) & 4095]);
 
 writeIdx = (writeIdx + 1) & 4095;
 

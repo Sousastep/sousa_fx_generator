@@ -74,7 +74,7 @@ let x_db = atodb(max(sc_peak, 1e-6));
 let T = clamp(thresh_db, -36.0, 0.0);
 let R = clamp(ratio_mode, 2.0, 10.0);
 let raw_gr_db = ssl_static_gr_db(x_db, T, R);
-let target_atten_db = -raw_gr_db; // positive attenuation in dB
+let target_atten_db = 0.0 - raw_gr_db; // positive attenuation in dB
 
 // Attack & dual-pole AUTO release ballistics
 let tau_att = clamp(attack_ms, 0.1, 30.0) * 0.001;

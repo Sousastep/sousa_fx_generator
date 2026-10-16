@@ -87,7 +87,7 @@ let ratio = 3.2 + 14.8 * lim;
 let knee_w = 18.0 - 6.0 * lim;
 
 let target_gr_db = (pr > 0.001) ? soft_knee_gr_db(x_db, thresh_db, ratio, knee_w) : 0.0;
-let target_atten = -target_gr_db; // positive dB of attenuation
+let target_atten = 0.0 - target_gr_db; // positive dB of attenuation
 
 // T4B CdS Photocell two-stage ballistics (Simionato & Fasciani DAFx-2023 Sec. 2.3):
 // - Program-dependent attack (~10 ms, faster on larger transients)

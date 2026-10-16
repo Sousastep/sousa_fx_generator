@@ -48,34 +48,6 @@
 @state prevBarIn = 0.0;
 
 // Evaluate Table 2 Tap Selection & Fig. 3 "There-and-Back-Again" Capacitive Scanner
-function evalScanner(nodes: FixedSampleArray, rotorPhase: number, depthSetting: number): number {
-	// 16-segment "there-and-back-again" scan across terminals t_1 (idx 0) .. t_9 (idx 8)
-	// Angle 0 -> pi scans t_1..t_9; angle pi -> 2*pi scans t_9..t_1 (Fig. 3)
-	let triScan = triangle(wrap(rotorPhase, 0.0, 1.0), 0.5) * 8.0; // in [0.0 .. 8.0]
-	let termIdx: Int = clamp(floor(triScan), 0, 7);
-	let eta = triScan - termIdx; // Capacitive voltage divider overlap C_alpha / (C_alpha + C_beta)
-
-	// Table 2 tap indices (0-based for v_1..v_19) for V1/C1, V2/C2, V3/C3:
-	// V1/C1: 0, 1, 2, 3, 4, 5, 6, 7, 8
-	// V2/C2: 0, 1, 2, 4, 6, 8, 10, 11, 12
-	// V3/C3: 0, 1, 3, 6, 9, 12, 15, 17, 18
-	let v1Tap0: Int = termIdx;
-	let v1Tap1: Int = termIdx + 1;
-
-	let v2Tap0: Int = (termIdx <= 2) ? termIdx : ((termIdx <= 6) ? (2 + (termIdx - 2) * 2) : (termIdx + 4));
-	let nextT: Int = termIdx + 1;
-	let v2Tap1: Int = (nextT <= 2) ? nextT : ((nextT <= 6) ? (2 + (nextT - 2) * 2) : (nextT + 4));
-
-	let v3Tap0: Int = (termIdx <= 1) ? termIdx : ((termIdx == 2) ? 3 : ((termIdx <= 6) ? (3 + (termIdx - 2) * 3) : (termIdx + 10)));
-	let v3Tap1: Int = (nextT <= 1) ? nextT : ((nextT == 2) ? 3 : ((nextT <= 6) ? (3 + (nextT - 2) * 3) : (nextT + 10)));
-
-	let outV1 = (1.0 - eta) * nodes[v1Tap0] + eta * nodes[v1Tap1];
-	let outV2 = (1.0 - eta) * nodes[v2Tap0] + eta * nodes[v2Tap1];
-	let outV3 = (1.0 - eta) * nodes[v3Tap0] + eta * nodes[v3Tap1];
-
-	let d = clamp(depthSetting, 1.0, 3.0);
-	return (d <= 2.0) ? linearinterp(d - 1.0, outV1, outV2) : linearinterp(d - 2.0, outV2, outV3);
-}
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
@@ -134,8 +106,38 @@ let spread = clamp(stereo_rotor_spread, 0.0, 1.0) * 0.5;
 let phR = wrap(phL + spread, 0.0, 1.0);
 
 let effDepth = clamp(scanner_depth_c1_c3 + envMod * 1.2, 1.0, 3.0);
-let scanL = evalScanner(nodeVL, phL, effDepth);
-let scanR = evalScanner(nodeVR, phR, effDepth);
+// 16-segment "there-and-back-again" scan across terminals t_1 (idx 0) .. t_9 (idx 8) on nodeVL
+let triScanL = triangle(wrap(phL, 0.0, 1.0), 0.5) * 8.0; // in [0.0 .. 8.0]
+let termIdxL: Int = clamp(floor(triScanL), 0, 7);
+let etaL = triScanL - termIdxL; // Capacitive voltage divider overlap C_alpha / (C_alpha + C_beta)
+let nextTL: Int = termIdxL + 1;
+let v1Tap0L: Int = termIdxL;
+let v1Tap1L: Int = termIdxL + 1;
+let v2Tap0L: Int = (termIdxL <= 2) ? termIdxL : ((termIdxL <= 6) ? (2 + (termIdxL - 2) * 2) : (termIdxL + 4));
+let v2Tap1L: Int = (nextTL <= 2) ? nextTL : ((nextTL <= 6) ? (2 + (nextTL - 2) * 2) : (nextTL + 4));
+let v3Tap0L: Int = (termIdxL <= 1) ? termIdxL : ((termIdxL == 2) ? 3 : ((termIdxL <= 6) ? (3 + (termIdxL - 2) * 3) : (termIdxL + 10)));
+let v3Tap1L: Int = (nextTL <= 1) ? nextTL : ((nextTL == 2) ? 3 : ((nextTL <= 6) ? (3 + (nextTL - 2) * 3) : (nextTL + 10)));
+let outV1L = (1.0 - etaL) * nodeVL[v1Tap0L] + etaL * nodeVL[v1Tap1L];
+let outV2L = (1.0 - etaL) * nodeVL[v2Tap0L] + etaL * nodeVL[v2Tap1L];
+let outV3L = (1.0 - etaL) * nodeVL[v3Tap0L] + etaL * nodeVL[v3Tap1L];
+let dScanL = clamp(effDepth, 1.0, 3.0);
+let scanL = (dScanL <= 2.0) ? linearinterp(dScanL - 1.0, outV1L, outV2L) : linearinterp(dScanL - 2.0, outV2L, outV3L);
+
+let triScanR = triangle(wrap(phR, 0.0, 1.0), 0.5) * 8.0;
+let termIdxR: Int = clamp(floor(triScanR), 0, 7);
+let etaR = triScanR - termIdxR;
+let nextTR: Int = termIdxR + 1;
+let v1Tap0R: Int = termIdxR;
+let v1Tap1R: Int = termIdxR + 1;
+let v2Tap0R: Int = (termIdxR <= 2) ? termIdxR : ((termIdxR <= 6) ? (2 + (termIdxR - 2) * 2) : (termIdxR + 4));
+let v2Tap1R: Int = (nextTR <= 2) ? nextTR : ((nextTR <= 6) ? (2 + (nextTR - 2) * 2) : (nextTR + 4));
+let v3Tap0R: Int = (termIdxR <= 1) ? termIdxR : ((termIdxR == 2) ? 3 : ((termIdxR <= 6) ? (3 + (termIdxR - 2) * 3) : (termIdxR + 10)));
+let v3Tap1R: Int = (nextTR <= 1) ? nextTR : ((nextTR == 2) ? 3 : ((nextTR <= 6) ? (3 + (nextTR - 2) * 3) : (nextTR + 10)));
+let outV1R = (1.0 - etaR) * nodeVR[v1Tap0R] + etaR * nodeVR[v1Tap1R];
+let outV2R = (1.0 - etaR) * nodeVR[v2Tap0R] + etaR * nodeVR[v2Tap1R];
+let outV3R = (1.0 - etaR) * nodeVR[v3Tap0R] + etaR * nodeVR[v3Tap1R];
+let dScanR = clamp(effDepth, 1.0, 3.0);
+let scanR = (dScanR <= 2.0) ? linearinterp(dScanR - 1.0, outV1R, outV2R) : linearinterp(dScanR - 2.0, outV2R, outV3R);
 
 // --- 3. Chorus (C1/C2/C3) vs. Vibrato (V1/V2/V3) Switch (Fig. 1, Sec 2.1) ---
 // In Chorus mode (switch open), dry signal passes through Rc = 22 kOhm and mixes with scanner

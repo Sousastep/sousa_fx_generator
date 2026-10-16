@@ -47,21 +47,6 @@
 @state smoothF0 = 58.27;
 @state smoothQ = 8.0;
 
-function readDelay4k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
-	let d = clamp(delSamps, 2.0, 4090.0);
-	let readPos = wIdx - d;
-	while (readPos < 0.0) {
-		readPos += 4096.0;
-	}
-	let idx0: Int = floor(readPos);
-	let frac = readPos - idx0;
-	let i_m1: Int = (idx0 - 1 + 4096) & 4095;
-	let i_0: Int  = idx0 & 4095;
-	let i_1: Int  = (idx0 + 1) & 4095;
-	let i_2: Int  = (idx0 + 2) & 4095;
-	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
-}
-
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = (abs(in2) > 0.0000001) ? in2 : xL;
@@ -97,8 +82,15 @@ let aM = clamp((1.0 - beta) * onePlusBetaInv, 0.0, 0.96);
 let b0 = clamp(beta * onePlusBetaInv, 0.02, 0.5);
 
 // --- 3. Canonical Single-Delay-Line Universal Comb Separation (Eq. 8) ---
-let xhDelL = readDelay4k(xhBufL, writeIdx, delayM);
-let xhDelR = readDelay4k(xhBufR, writeIdx, delayM);
+let rpXhL = writeIdx - clamp(delayM, 2.0, 4090.0);
+while (rpXhL < 0.0) { rpXhL += 4096.0; }
+let iXhL: Int = floor(rpXhL);
+let xhDelL = cubicinterp(rpXhL - iXhL, xhBufL[(iXhL - 1 + 4096) & 4095], xhBufL[iXhL & 4095], xhBufL[(iXhL + 1) & 4095], xhBufL[(iXhL + 2) & 4095]);
+
+let rpXhR = writeIdx - clamp(delayM, 2.0, 4090.0);
+while (rpXhR < 0.0) { rpXhR += 4096.0; }
+let iXhR: Int = floor(rpXhR);
+let xhDelR = cubicinterp(rpXhR - iXhR, xhBufR[(iXhR - 1 + 4096) & 4095], xhBufR[iXhR & 4095], xhBufR[(iXhR + 1) & 4095], xhBufR[(iXhR + 2) & 4095]);
 
 let xhL = xL + aM * xhDelL;
 let xhR = xR + aM * xhDelR;

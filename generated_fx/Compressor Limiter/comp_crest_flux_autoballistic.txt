@@ -108,7 +108,7 @@ let R = clamp(ratio, 1.5, 30.0);
 let x_level_db = atodb(max(peak_env, 1e-6));
 
 let raw_gr_db = adaptive_knee_gr_db(x_level_db, T, R, var_knee_mode);
-let target_atten_db = -raw_gr_db;
+let target_atten_db = 0.0 - raw_gr_db;
 
 if (target_atten_db > gr_smooth_db) {
     gr_smooth_db = gr_smooth_db + alpha_att * (target_atten_db - gr_smooth_db);
