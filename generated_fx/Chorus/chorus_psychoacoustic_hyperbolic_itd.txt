@@ -1,0 +1,133 @@
+// ============================================================================
+// chorus_psychoacoustic_hyperbolic_itd.txt
+// Standalone Stereo Chorus Effect: Psychoacoustically Mapped Constant-Excursion
+// Hyperbolic Chorus with Interaural Time Delay (ITD) Spatial Panning
+// Implements William L. Martens & Atsushi Marui (DAFx-06, Paper p_149):
+// "Categories of Perception for Vibrato, Flange, and Stereo Chorus: Mapping out the
+// Musically Useful Ranges of Modulation Rate and Depth for Delay-Based Effects"
+// (Sections 1, 2.1 & 3, Eq. 1-3, Fig. 1-2).
+// Implements the two core psychoacoustic discoveries of the paper:
+//   1. Section 3 & Fig. 2 (Constant Pitch-Excursion Hyperbola):
+//      Listening tests proved that the musically useful chorus depth in microseconds
+//      is a linear function of modulation PERIOD (1 / Rate_Hz):
+//        Depth_lower(us) = 814 / Rate_Hz - 66
+//        Depth_upper(us) = 4800 / Rate_Hz - 350
+//      By coupling modulation depth inversely to modulation rate along this exact
+//      logistic-regression hyperbola, you can sweep Rate from 0.5 Hz to 9.0 Hz and
+//      the chorus NEVER becomes "supra-useful" (seasick/out-of-tune) or "sub-useful"!
+//   2. Section 2.1 (ITD Lead/Lag Spatial Stereo Chorus):
+//      Delays the unmodulated reference path by 0.5 ms (500 us) so the modulated
+//      chorus voices fluctuate symmetrically between LEADING and LAGGING the dry
+//      signal in time of arrival across the +/- 0.65 ms human Interaural Time Delay
+//      (ITD) horizon—making the tuba orbit circularly around the listener's head!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Envelope Modulator [0..1] (shifts position within the useful zone)
+//   in4: Optional 1-Bar Phasor [0..1]
+// Outlets:
+//   out1: Left ITD Lead/Lag Hyperbolic Stereo Chorus Output
+//   out2: Right ITD Lead/Lag Hyperbolic Stereo Chorus Output
+
+@param({ min: 0.4, max: 9.0 }) mod_rate_hz = 3.2;
+@param({ min: 0.0, max: 1.0 }) perceptual_zone = 0.55;
+@param({ min: 0.0, max: 1.0 }) rate_depth_coupling = 0.85;
+@param({ min: 0.2, max: 2.5 }) itd_center_ms = 0.55;
+@param({ min: 0.0, max: 1.0 }) voice_quadrature = 0.65;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.50;
+
+// Stereo circular delay buffers (2048 samples per channel)
+@state itdBufL = new FixedSampleArray(2048);
+@state itdBufR = new FixedSampleArray(2048);
+@state writeIdx: Int = 0;
+
+// Dual quadrature LFO phasors
+@state lfoPh1 = new phasor();
+@state lfoPh2 = new phasor();
+@state prevBarIn = 0.0;
+@state smoothRate = 3.2;
+
+function readDelay2k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
+	let d = clamp(delSamps, 1.0, 2042.0);
+	let readPos = wIdx - d;
+	while (readPos < 0.0) {
+		readPos += 2048.0;
+	}
+	let idx0: Int = floor(readPos);
+	let frac = readPos - idx0;
+	let i_m1: Int = (idx0 - 1 + 2048) & 2047;
+	let i_0: Int  = idx0 & 2047;
+	let i_1: Int  = (idx0 + 1) & 2047;
+	let i_2: Int  = (idx0 + 2) & 2047;
+	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let envMod = clamp(in3, 0.0, 1.0);
+let barIn = in4;
+
+itdBufL[writeIdx] = xL;
+itdBufR[writeIdx] = xR;
+
+// --- 1. Martens & Marui Logistic-Regression Useful Depth Hyperbola (DAFx-06 Fig. 2) ---
+let slew = 1.0 - exp(-1.0 / (0.008 * sr));
+smoothRate += (clamp(mod_rate_hz, 0.4, 9.0) - smoothRate) * slew;
+
+// Effective rate clamped to [1.2 .. 9.0] Hz for the Fig. 2 regression equations
+let rReg = clamp(smoothRate, 1.2, 9.0);
+// Lower boundary of musically useful region (microseconds): Depth_low = 814 * (1/Rate) - 66
+let depthLowUs = clamp(814.0 / rReg - 66.0, 25.0, 800.0);
+// Upper boundary of musically useful region (microseconds): Depth_high = 4800 * (1/Rate) - 350
+let depthHighUs = clamp(4800.0 / rReg - 350.0, 180.0, 2200.0);
+
+// perceptual_zone [0..1] interpolates from sub-useful threshold (0.0) through optimal center (0.5)
+// to supra-useful boundary (1.0)
+let zone = clamp(perceptual_zone + 0.25 * envMod, 0.0, 1.0);
+let hyperDepthMs = (depthLowUs + zone * (depthHighUs - depthLowUs)) * 0.001;
+
+// Allow blending between uncoupled manual depth (at 3 Hz reference) and rate-coupled hyperbola
+let uncoupledDepthMs = (0.20 + zone * 1.05);
+let coup = clamp(rate_depth_coupling, 0.0, 1.0);
+let depthMs = linearinterp(coup, uncoupledDepthMs, hyperDepthMs);
+
+// --- 2. ITD Reference Delay so Modulated Signal Leads AND Lags Dry Signal (Sec 2.1) ---
+// Ensure center delay >= depthMs + 0.05 ms so delay stays strictly causal while leading/lagging
+let centerMs = maximum(clamp(itd_center_ms, 0.2, 2.5), depthMs + 0.06);
+let centerSamps = mstosamps(centerMs);
+let modDepthSamps = mstosamps(depthMs);
+
+// Delayed unmodulated reference signals (at exactly centerSamps)
+let refDryL = readDelay2k(itdBufL, writeIdx, centerSamps);
+let refDryR = readDelay2k(itdBufR, writeIdx, centerSamps);
+
+// --- 3. Quadrature Circular Head-Orbit Delay Modulation (Sec 2.1) ---
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+
+let ph1 = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : lfoPh1.next(smoothRate);
+let ph2 = lfoPh2.next(smoothRate * 1.19); // Secondary chorus voice
+
+let quadSpread = clamp(voice_quadrature, 0.0, 1.0);
+let lfo1L = sin(2.0 * pi * ph1);
+let lfo1R = sin(2.0 * pi * (ph1 + 0.25 + 0.25 * quadSpread));
+let lfo2L = cos(2.0 * pi * ph2);
+let lfo2R = -cos(2.0 * pi * ph2);
+
+// Modulated taps swing both AHEAD of (< centerSamps) and BEHIND (> centerSamps) refDry!
+let mod1L = readDelay2k(itdBufL, writeIdx, centerSamps + modDepthSamps * lfo1L);
+let mod1R = readDelay2k(itdBufR, writeIdx, centerSamps + modDepthSamps * lfo1R);
+let mod2L = readDelay2k(itdBufL, writeIdx, centerSamps * 1.35 + modDepthSamps * 0.7 * lfo2L);
+let mod2R = readDelay2k(itdBufR, writeIdx, centerSamps * 1.35 + modDepthSamps * 0.7 * lfo2R);
+
+writeIdx = (writeIdx + 1) & 2047;
+
+let wetL = linearinterp(quadSpread * 0.45, mod1L, 0.7 * mod1L + 0.5 * mod2L);
+let wetR = linearinterp(quadSpread * 0.45, mod1R, 0.7 * mod1R + 0.5 * mod2R);
+
+// In ITD Stereo Chorus (Sec 1 & 2.1), reference dry and leading/lagging modulated voices combine
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = cos(mix * 0.5 * pi) * refDryL + sin(mix * 0.5 * pi) * wetL;
+out2 = cos(mix * 0.5 * pi) * refDryR + sin(mix * 0.5 * pi) * wetR;

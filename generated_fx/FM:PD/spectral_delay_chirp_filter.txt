@@ -1,0 +1,158 @@
+// ============================================================================
+// spectral_delay_chirp_filter.txt
+// Unix-Style Stereo Effect: Stretched Spectral Delay Filter (SDF) with Feedback
+// Implements Pekonen, Valimaki, Abel & Smith (DAFx-09, Paper 36):
+// "Spectral Delay Filters with Feedback and Time-Varying Coefficients"
+// (Sections 2.1, 2.3, 2.4, 3 & 4, Eq. 2, 5, 14-25, Fig. 1-8).
+// Passes the stereo tuba through a cascade of M=24 stretched allpass filters:
+//   A_k(z) = (a1 + z^-K) / (1 + a1 * z^-K)   (Sec 2.4 Stretched SDF)
+// Replacing the unit delay z^-1 with K = 1..8 unit delays multiplies the chirp
+// duration by K and creates K-1 opposing-direction image chirps in the audible
+// low/midrange (Fig. 6b), complete with global feedback B(z) (Sec 3) and
+// inverse-envelope equalization H_eq,d(z) (Sec 2.3, Eq. 15) for constant-energy
+// laser transient chirps!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Mod Envelope [0..1] (e.g. out2 of 00b_tuba_transient_valve_detector)
+//   in4: Optional 1-Bar Phasor [0..1] (modulates allpass coefficient a1 when mod_depth > 0)
+// Outlets:
+//   out1: Left Stretched Spectral Delay Chirp Output
+//   out2: Right Stretched Spectral Delay Chirp Output
+
+@param({ min: -0.85, max: 0.85 }) chirp_coeff_a1 = 0.6;
+@param({ min: 1.0, max: 8.0, steps: 8 }) stretch_k = 3.0;
+@param({ min: 4.0, max: 24.0 }) allpass_stages = 20.0;
+@param({ min: -0.88, max: 0.88 }) sdf_feedback = 0.55;
+@param({ min: 0.0, max: 1.0 }) mod_depth = 0.3;
+@param({ min: 0.0, max: 1.0 }) chirp_eq = 0.65;
+@param({ min: 0.0, max: 1.0 }) mix = 0.75;
+
+// 24 stretched allpass stages per channel, each with an 8-sample circular delay buffer
+// Flattened as 24 * 8 = 192 samples per state array
+@state apXBufL = new FixedSampleArray(192);
+@state apYBufL = new FixedSampleArray(192);
+@state apXBufR = new FixedSampleArray(192);
+@state apYBufR = new FixedSampleArray(192);
+@state headIdx: Int = 0;
+
+// Feedback path unit delay + B(z) one-zero lowpass (Paper Eq. 25: 0.5*(1 + z^-1))
+@state fbPrevL = 0.0; @state fbLpL = 0.0;
+@state fbPrevR = 0.0; @state fbLpR = 0.0;
+
+// Inverse-envelope denominator equalizer H_eq,d(z^K) states (Paper Eq. 15 & 17)
+@state eqY1L = new FixedSampleArray(8); @state eqY2L = new FixedSampleArray(8);
+@state eqY1R = new FixedSampleArray(8); @state eqY2R = new FixedSampleArray(8);
+
+@state barFallback = new phasor();
+@state prevBarIn = 0.0;
+@state smoothA1 = 0.6;
+@state smoothFb = 0.55;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let envIn = clamp(in3, -1.0, 1.0);
+let barIn = in4;
+
+// --- 1. Time-Varying Coefficient Modulation (Paper Sec 4) ---
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : barFallback.next(0.5);
+let lfoMod = sin(2.0 * pi * barPh);
+
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothA1 += (clamp(chirp_coeff_a1, -0.85, 0.85) - smoothA1) * slew;
+smoothFb += (clamp(sdf_feedback, -0.88, 0.88) - smoothFb) * slew;
+
+// Combine 1-bar LFO (in4) and transient envelope (in3) to sweep a1(n)
+let mDepth = clamp(mod_depth, 0.0, 1.0) * 0.35;
+let modSigL = mDepth * (lfoMod + envIn);
+let modSigR = mDepth * (-lfoMod + envIn);
+
+let a1L = clamp(smoothA1 + modSigL - 0.03, -0.88, 0.88);
+let a1R = clamp(smoothA1 + modSigR + 0.03, -0.88, 0.88);
+
+// Stretch factor K in [1..8] unit delays (Paper Sec 2.4)
+let kStretch: Int = floor(clamp(stretch_k, 1.0, 8.0) + 0.5);
+let readTap: Int = (headIdx - kStretch + 8) & 7;
+
+// --- 2. Global Feedback Loop with Lowpass Damping Filter B(z) (Paper Sec 3, Eq. 18 & 25) ---
+let bLpL = 0.5 * (fbPrevL + fbLpL);
+fbLpL = fbPrevL;
+let bLpR = 0.5 * (fbPrevR + fbLpR);
+fbLpR = fbPrevR;
+
+let wL = tanh(xL + smoothFb * bLpL);
+let wR = tanh(xR + smoothFb * bLpR);
+
+// --- 3. Cascade of M Stretched First-Order Allpass Stages (Paper Eq. 2 & Sec 2.4) ---
+// y(n) = a1 * x(n) + x(n - K) - a1 * y(n - K)
+let stgPos = clamp(allpass_stages, 4.0, 24.0);
+let numFull: Int = floor(stgPos);
+let frac = stgPos - numFull;
+
+let sigL = wL;
+let sigR = wR;
+let prevL = wL;
+let prevR = wR;
+
+for (let i: Int = 0; i < 24; i++) {
+	let baseIdx: Int = i * 8;
+	let rIdx: Int = baseIdx + readTap;
+	let wIdx: Int = baseIdx + headIdx;
+
+	let xDelL = apXBufL[rIdx];
+	let yDelL = apYBufL[rIdx];
+	let ynL = a1L * sigL + xDelL - a1L * yDelL;
+	apXBufL[wIdx] = sigL;
+	apYBufL[wIdx] = ynL;
+
+	let xDelR = apXBufR[rIdx];
+	let yDelR = apYBufR[rIdx];
+	let ynR = a1R * sigR + xDelR - a1R * yDelR;
+	apXBufR[wIdx] = sigR;
+	apYBufR[wIdx] = ynR;
+
+	if (i < numFull) {
+		prevL = sigL;
+		prevR = sigR;
+		sigL = ynL;
+		sigR = ynR;
+	} else if (i == numFull) {
+		sigL = linearinterp(frac, sigL, ynL);
+		sigR = linearinterp(frac, sigR, ynR);
+	}
+}
+
+// Store cascade output for next sample's feedback path
+fbPrevL = sigL;
+fbPrevR = sigR;
+
+// --- 4. Allpass Chirp Envelope Equalization Filter H_eq,d(z^K) (Paper Sec 2.3, Eq. 14-15) ---
+// Compensates amplitude drop where the chirp lingers in frequency
+let eqPoleL = clamp(-a1L * 0.55, -0.5, 0.5);
+let eqPoleR = clamp(-a1R * 0.55, -0.5, 0.5);
+let normScaleL = sqrt(maximum(1.0 - eqPoleL * eqPoleL, 0.2));
+let normScaleR = sqrt(maximum(1.0 - eqPoleR * eqPoleR, 0.2));
+
+let eq1L = sigL * normScaleL - eqPoleL * eqY1L[readTap];
+eqY1L[headIdx] = eq1L;
+let eq2L = eq1L * normScaleL - eqPoleL * eqY2L[readTap];
+eqY2L[headIdx] = eq2L;
+
+let eq1R = sigR * normScaleR - eqPoleR * eqY1R[readTap];
+eqY1R[headIdx] = eq1R;
+let eq2R = eq1R * normScaleR - eqPoleR * eqY2R[readTap];
+eqY2R[headIdx] = eq2R;
+
+headIdx = (headIdx + 1) & 7;
+
+let eqBlend = clamp(chirp_eq, 0.0, 1.0);
+let wetL = linearinterp(eqBlend, sigL, eq2L);
+let wetR = linearinterp(eqBlend, sigR, eq2R);
+
+let m = clamp(mix, 0.0, 1.0);
+out1 = linearinterp(m, xL, wetL);
+out2 = linearinterp(m, xR, wetR);

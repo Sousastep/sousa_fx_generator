@@ -1,0 +1,118 @@
+// ============================================================================
+// 11_bode_ssb_freq_shifter.txt
+// Unix-Style Effect 11: Pitch-Relative Bode / SSB Frequency Shifter
+// Implements Approach 3c from "Novel Distortion Approaches for Live Tuba" and
+// Wardle (DAFx-99) Hilbert Transform Single-Sideband Frequency Shifter:
+//   y_up   = s*cos(w_s*t) - s_hat*sin(w_s*t)
+//   y_down = s*cos(w_s*t) + s_hat*sin(w_s*t)
+// Shifts every harmonic of the tuba by a fixed Hz OR a tracked ratio of f0
+// (e.g., -0.5*f0 folds the fundamental toward sub-bass while making upper
+// partials clangorously inharmonic or creating lush barber-pole stereo detune).
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input
+//   in2: Right Audio Input
+//   in3: Optional Tracked Pitch in Hz (if > 20 Hz, enables pitch-proportional shift)
+// Outlets:
+//   out1: Left Frequency-Shifted Output
+//   out2: Right Frequency-Shifted Output
+
+@param({ min: -500.0, max: 500.0 }) shift_hz = -28.0;
+@param({ min: 0.0, max: 1.0 }) f0_track_amt = 0.5;
+@param({ min: -1.0, max: 1.0 }) up_down_stereo = 0.0;
+@param({ min: 0.0, max: 1.0 }) mix = 0.65;
+
+// Stereo 4-stage IIR Hilbert transform states (Left and Right channels)
+@state lReX = new FixedSampleArray(4); @state lReY = new FixedSampleArray(4);
+@state lImX = new FixedSampleArray(4); @state lImY = new FixedSampleArray(4);
+@state lDelRe = 0.0;
+
+@state rReX = new FixedSampleArray(4); @state rReY = new FixedSampleArray(4);
+@state rImX = new FixedSampleArray(4); @state rImY = new FixedSampleArray(4);
+@state rDelRe = 0.0;
+
+@state shiftPhasor = new phasor();
+@state smoothF0 = 55.0;
+
+// DC Blockers (for shifts near -f0 that fold fundamental to 0 Hz DC)
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+
+// --- 1. Pitch-Proportional vs. Fixed Hz Shift Calculation ---
+if (pitchIn > 20.0 && pitchIn < 1000.0) {
+	smoothF0 += (pitchIn - smoothF0) * (1.0 - exp(-1.0 / (0.008 * sr)));
+}
+
+// Nonlinear cubic taper around 0 Hz on shift_hz so small barber-pole shifts (0.5..15 Hz)
+// are easy to dial in, while outer extremes reach +/- 500 Hz clangorous metal
+let normShift = clamp(shift_hz / 500.0, -1.0, 1.0);
+let taperedHz = 500.0 * (0.25 * normShift + 0.75 * normShift * normShift * normShift);
+
+// When f0_track_amt > 0, scale shift proportionally to smoothF0 / 55 Hz
+let pitchScale = linearinterp(clamp(f0_track_amt, 0.0, 1.0), 1.0, smoothF0 / 55.0);
+let finalShiftHz = clamp(taperedHz * pitchScale, -2000.0, 2000.0);
+
+// --- 2. Quadrature Hilbert Transform on Left & Right Channels ---
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+// Left Channel Hilbert -> (sL, shatL)
+let tL = xL;
+let yl0 = cRe0 * (tL - lReY[0]) + lReX[0]; lReX[0] = tL; lReY[0] = yl0; tL = yl0;
+let yl1 = cRe1 * (tL - lReY[1]) + lReX[1]; lReX[1] = tL; lReY[1] = yl1; tL = yl1;
+let yl2 = cRe2 * (tL - lReY[2]) + lReX[2]; lReX[2] = tL; lReY[2] = yl2; tL = yl2;
+let yl3 = cRe3 * (tL - lReY[3]) + lReX[3]; lReX[3] = tL; lReY[3] = yl3;
+let sL = lDelRe; lDelRe = yl3;
+
+let tLi = xL;
+let yli0 = cIm0 * (tLi - lImY[0]) + lImX[0]; lImX[0] = tLi; lImY[0] = yli0; tLi = yli0;
+let yli1 = cIm1 * (tLi - lImY[1]) + lImX[1]; lImX[1] = tLi; lImY[1] = yli1; tLi = yli1;
+let yli2 = cIm2 * (tLi - lImY[2]) + lImX[2]; lImX[2] = tLi; lImY[2] = yli2; tLi = yli2;
+let yli3 = cIm3 * (tLi - lImY[3]) + lImX[3]; lImX[3] = tLi; lImY[3] = yli3;
+let shatL = yli3;
+
+// Right Channel Hilbert -> (sR, shatR)
+let tR = xR;
+let yr0 = cRe0 * (tR - rReY[0]) + rReX[0]; rReX[0] = tR; rReY[0] = yr0; tR = yr0;
+let yr1 = cRe1 * (tR - rReY[1]) + rReX[1]; rReX[1] = tR; rReY[1] = yr1; tR = yr1;
+let yr2 = cRe2 * (tR - rReY[2]) + rReX[2]; rReX[2] = tR; rReY[2] = yr2; tR = yr2;
+let yr3 = cRe3 * (tR - rReY[3]) + rReX[3]; rReX[3] = tR; rReY[3] = yr3;
+let sR = rDelRe; rDelRe = yr3;
+
+let tRi = xR;
+let yri0 = cIm0 * (tRi - rImY[0]) + rImX[0]; rImX[0] = tRi; rImY[0] = yri0; tRi = yri0;
+let yri1 = cIm1 * (tRi - rImY[1]) + rImX[1]; rImX[1] = tRi; rImY[1] = yri1; tRi = yri1;
+let yri2 = cIm2 * (tRi - rImY[2]) + rImX[2]; rImX[2] = tRi; rImY[2] = yri2; tRi = yri2;
+let yri3 = cIm3 * (tRi - rImY[3]) + rImX[3]; rImX[3] = tRi; rImY[3] = yri3;
+let shatR = yri3;
+
+// --- 3. Quadrature Oscillator & SSB Sideband Selection ---
+let ph = shiftPhasor.next(finalShiftHz);
+let cosW = cos(2.0 * pi * ph);
+let sinW = sin(2.0 * pi * ph);
+
+let upL = sL * cosW - shatL * sinW;
+let dnL = sL * cosW + shatL * sinW;
+let upR = sR * cosW - shatR * sinW;
+let dnR = sR * cosW + shatR * sinW;
+
+// up_down_stereo:
+//  -1.0: Both channels Down-shifted
+//   0.0: Stereo Split (Left = Up-shifted, Right = Down-shifted -> huge barber-pole reese)
+//  +1.0: Both channels Up-shifted
+let uds = clamp(up_down_stereo, -1.0, 1.0);
+let wetL = (uds < 0.0) ? linearinterp(uds + 1.0, dnL, upL) : upL;
+let wetR = (uds < 0.0) ? dnR : linearinterp(uds, dnR, upR);
+
+// --- 4. DC Blocker (essential when shift approaches -f0 "through-zero" gnarl) ---
+let dcCoeff = 1.0 - (2.0 * pi * 12.0 / sr);
+let cleanL = wetL - dcXL + dcCoeff * dcYL; dcXL = wetL; dcYL = cleanL;
+let cleanR = wetR - dcXR + dcCoeff * dcYR; dcXR = wetR; dcYR = cleanR;
+
+out1 = linearinterp(clamp(mix, 0.0, 1.0), xL, cleanL);
+out2 = linearinterp(clamp(mix, 0.0, 1.0), xR, cleanR);

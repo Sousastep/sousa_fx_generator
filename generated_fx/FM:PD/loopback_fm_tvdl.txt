@@ -1,0 +1,163 @@
+// ============================================================================
+// loopback_fm_tvdl.txt
+// Unix-Style Stereo Effect: Loopback FM (LBFM) Time-Varying Delay Line Processor
+// Implements Tamara Smyth (DAFx-26, Paper 36):
+// "Loopback Frequency Modulation Using a Time-Varying Delay Line"
+// (Sections 2.2, 2.4, 3.2 & 3.3, Eq. 10-12, 18-27, 55-58, Fig. 1-5).
+// Applies self-coupled Loopback FM to the arbitrary stereo tuba signal using
+// Smyth's closed-form analytic phase phi(n) = atan2(b0*sin(w0*nT), 1 + b0*cos(w0*nT))
+// where b0 = (sqrt(1 - B^2) - 1) / B and w0 = wc * sqrt(1 - B^2), combined with
+// phase-continuous wrapped delay warping D_hat_b(n) and integer-period offset
+// d0 = fs / fc (Eq. 56-58).
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba Carrier)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
+//   in4: Optional 1-Bar Phasor [0..1] (modulates loopback coefficient B when b_glide_mod > 0)
+// Outlets:
+//   out1: Left Loopback FM TVDL Output
+//   out2: Right Loopback FM TVDL Output
+
+@param({ min: -0.92, max: 0.92 }) loopback_b = 0.65;
+@param({ min: 0.25, max: 4.0 }) harmonic_mult = 1.0;
+@param({ min: 0.0, max: 1.0 }) pitch_lock = 1.0;
+@param({ min: 0.0, max: 1.0 }) b_glide_mod = 0.35;
+@param({ min: 0.0, max: 1.0 }) stereo_b_spread = 0.2;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// Circular delay lines (8192 samples per channel -> supports pedal notes + wrapped LBFM)
+@state delayBufL = new FixedSampleArray(8192);
+@state delayBufR = new FixedSampleArray(8192);
+@state writeIdx: Int = 0;
+
+// Closed-form LBFM phase accumulators & wrapped sample counters n_hat
+@state w0PhasorL = new phasor();
+@state w0PhasorR = new phasor();
+@state nHatL = 0.0;
+@state nHatR = 0.0;
+
+// Fallback trackers & smoothing
+@state barFallback = new phasor();
+@state prevBarIn = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothB = 0.65;
+
+// Cubic-interpolated circular buffer reader (8192-sample wrap)
+function readDelay8k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
+	let d = clamp(delSamps, 2.0, 8185.0);
+	let readPos = wIdx - d;
+	while (readPos < 0.0) {
+		readPos += 8192.0;
+	}
+	let idx0: Int = floor(readPos);
+	let frac = readPos - idx0;
+
+	let i_m1: Int = (idx0 - 1 + 8192) & 8191;
+	let i_0: Int  = idx0 & 8191;
+	let i_1: Int  = (idx0 + 1) & 8191;
+	let i_2: Int  = (idx0 + 2) & 8191;
+
+	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch Conditioning ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// Write incoming stereo tuba to circular TVDL buffers
+delayBufL[writeIdx] = xL;
+delayBufR[writeIdx] = xR;
+
+// --- 2. Bar Phasor & Loopback Coefficient B Calculation ---
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn * 4.0, 0.0, 1.0) : barFallback.next(0.75);
+// Exponential decay envelope per beat for classic LBFM gong/bass pitch-timbre glide
+let beatEnv = exp(-3.5 * barPh);
+
+smoothB += (clamp(loopback_b, -0.92, 0.92) - smoothB) * slew;
+let glideOffset = clamp(b_glide_mod, 0.0, 1.0) * 0.45 * (beatEnv - 0.3);
+let spreadB = clamp(stereo_b_spread, 0.0, 1.0) * 0.14;
+
+let BL = clamp(smoothB + glideOffset - spreadB, -0.94, 0.94);
+let BR = clamp(smoothB + glideOffset + spreadB, -0.94, 0.94);
+
+// Avoid B == 0 division singularity in Eq. 26: b0 = (sqrt(1 - B^2) - 1) / B
+if (abs(BL) < 0.0005) { BL = 0.0005; }
+if (abs(BR) < 0.0005) { BR = 0.0005; }
+
+let sqrtOneMinusB2_L = sqrt(maximum(1.0 - BL * BL, 0.04));
+let sqrtOneMinusB2_R = sqrt(maximum(1.0 - BR * BR, 0.04));
+
+// Paper Eq. 26: Closed-form allpass parameter b0
+let b0L = (sqrtOneMinusB2_L - 1.0) / BL;
+let b0R = (sqrtOneMinusB2_R - 1.0) / BR;
+
+// --- 3. Sounding Frequency f0 vs. Carrier Frequency fc (Paper Eq. 12, 27, 55-58) ---
+let fc = clamp(f0 * clamp(harmonic_mult, 0.25, 4.0), 20.0, 2000.0);
+let wc = 2.0 * pi * fc;
+
+// When pitch_lock = 1, sounding frequency w0 stays locked to concert fc (no pitch drop)
+// When pitch_lock = 0, w0 = wc * sqrt(1 - B^2) produces Smyth's natural LBFM pitch glide (Eq. 12)
+let pLock = clamp(pitch_lock, 0.0, 1.0);
+let fSoundL = linearinterp(pLock, fc * sqrtOneMinusB2_L, fc);
+let fSoundR = linearinterp(pLock, fc * sqrtOneMinusB2_R, fc);
+
+let ph0L = w0PhasorL.next(fSoundL);
+let ph0R = wrap(w0PhasorR.next(fSoundR) + 0.05, 0.0, 1.0);
+
+// Paper Eq. 20: phi(t) = atan2(b0 * sin(w0*t), 1 + b0 * cos(w0*t))
+let phiL = atan2(b0L * sin(2.0 * pi * ph0L), 1.0 + b0L * cos(2.0 * pi * ph0L));
+let phiR = atan2(b0R * sin(2.0 * pi * ph0R), 1.0 + b0R * cos(2.0 * pi * ph0R));
+
+// Paper Eq. 55 & 56: Wrapped linear delay term n_hat * (1 - w0/wc) when pitch_lock < 1
+let freqDiffL = maximum(abs(fc - fSoundL), 0.1);
+let freqDiffR = maximum(abs(fc - fSoundR), 0.1);
+let nTildeL = clamp(sr / freqDiffL, 16.0, 4096.0);
+let nTildeR = clamp(sr / freqDiffR, 16.0, 4096.0);
+
+nHatL = wrap(nHatL + 1.0, 0.0, floor(nTildeL));
+nHatR = wrap(nHatR + 1.0, 0.0, floor(nTildeR));
+
+let linWarpL = (1.0 - pLock) * nHatL * (1.0 - sqrtOneMinusB2_L);
+let linWarpR = (1.0 - pLock) * nHatR * (1.0 - sqrtOneMinusB2_R);
+
+// Paper Eq. 58: Minimum integer-period offset d0 = k * (fs / fc) ensures D_hat_b > 0
+// without introducing phase-offset distortion
+let d0 = sr / fc;
+
+// Paper Eq. 56: D_hat_b(n) = n_hat*(1 - w0/wc) + 2*phi(n)*(fs / wc) + d0
+let delSampsL = d0 + linWarpL + 2.0 * phiL * (sr / wc);
+let delSampsR = d0 + linWarpR + 2.0 * phiR * (sr / wc);
+
+let wetL = readDelay8k(delayBufL, writeIdx, delSampsL);
+let wetR = readDelay8k(delayBufR, writeIdx, delSampsR);
+
+writeIdx = (writeIdx + 1) & 8191;
+
+let m = clamp(mix, 0.0, 1.0);
+out1 = linearinterp(m, xL, wetL);
+out2 = linearinterp(m, xR, wetR);

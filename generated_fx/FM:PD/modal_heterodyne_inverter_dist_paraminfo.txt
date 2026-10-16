@@ -1,0 +1,48 @@
+================================================================================
+modal_heterodyne_inverter_dist — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the Modal Heterodyne-Smooth-Modulate Distortion, Pitch Shifting, and Spectral Inversion Processor from Jonathan S. Abel and Kurt James Werner (DAFx-15 Paper 72, Sections 2, 3.3 & 3.4, Eq. 5–8, 13–14, Fig. 2, 8, 11, 12). Tracks the first four harmonics of the tuba (f0, 2*f0, 3*f0, 4*f0) and processes each partial through a complex heterodyne analysis-synthesis channel:
+1. Heterodynes each harmonic to DC baseband (`e^(-j*w_m*t)`).
+2. Smooths the complex envelope with a 2-stage exponential modal decay filter (`mode_decay_ms`).
+3. Re-modulates each mode to a new synthesis frequency (`e^(j*nu_m*t)`), allowing Spectral Inversion (flipping the tuba's harmonic series upside down so the fundamental energy drives the 4th harmonic while the 4th harmonic drives the sub-fundamental!) and pitch shifting.
+4. Applies memoryless saturation to each mode INDIVIDUALLY before summing (Fig. 12), generating rich harmonic distortion with zero intermodulation dissonance, and routes the Real part to Left and Imaginary part to Right (Section 2) for true quadrature stereo!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional Thru / Control Inlet
+- out1 / out2: Stereo Modal Output (out1 = Real Mode Sum, out2 = Quadrature Imaginary Mode Sum)
+
+PARAMETERS (6)
+
+1. mode_decay_ms
+   - Range: 5.0 to 600.0 ms (Modal Smoothing / Reverberant Sustain Time T60, Default: 45.0 ms)
+   - Taper: Direct decay time in milliseconds.
+   - Function: Controls the bandwidth and sustain tail of the four complex baseband smoothers (DAFx-15 Section 3.3–3.4, Fig. 14). Short times (10–40 ms) track fast articulation tightly; longer times (150–600 ms) turn the distorted harmonics into a shimmering modal resonator pad.
+
+2. mode_drive_db
+   - Range: 0.0 to 24.0 dB (Per-Mode Saturation Drive, Default: 9.0 dB)
+   - Taper: Logarithmic dB-to-linear gain.
+   - Function: Saturates each isolated harmonic mode independently prior to summing (DAFx-15 Fig. 12), adding overtones to each partial without intermodulation mud.
+
+3. spectral_invert
+   - Range: 0.0 to 1.0 (0.0 = Normal Harmonic Order {1, 2, 3, 4}, 1.0 = Inverted Harmonic Order {4, 3, 2, 1})
+   - Taper: Continuous frequency glide between normal and inverted modal synthesis frequencies (DAFx-15 Section 3.3, Eq. 14, Fig. 11).
+   - Function: Flips the tuba's harmonic spectrum upside down around the 2.5*f0 pivot so soft fundamental playing excites high screaming partials while brassy overtones drop into the sub-fundamental!
+
+4. pitch_shift_semi
+   - Range: -12.0 to +12.0 Semitones (Modal Re-Modulation Transposition sigma, Default: 0.0 st)
+   - Taper: Linear in semitones (mapped via nu_m = 2^(sigma/12) * w_m, Eq. 13, Fig. 8–9).
+   - Function: Pitch-shifts all four modal synthesis oscillators across +/- 1 octave with zero FFT window latency.
+
+5. odd_even_mode_tilt
+   - Range: -1.0 to +1.0 (-1.0 = Emphasize Modes 1 & 3, +1.0 = Emphasize Modes 2 & 4)
+   - Taper: Linear modal balance.
+   - Function: Tilts the output mix between odd and even heterodyne modes.
+
+6. mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet Modal Processor)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba with the 4-mode quadrature processor.

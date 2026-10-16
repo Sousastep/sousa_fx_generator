@@ -1,0 +1,33 @@
+================================================================================
+04_hilbert_phasor_sync — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the single-oscillator Hard Sync (Eq. 22) and Soft Sync (Eq. 12 & 24) phaseshaping algorithms from Kleimola, Lazzarini, Timoney, and Välimäki (SMC 2010), driven directly by the tuba player's instantaneous phase. A 4-stage quadrature IIR Hilbert allpass network extracts the analytic signal s_a(t) = A(t)*e^(j*theta(t)), turning the tuba into a player-driven phasor phi(t) in [0, 1). Because no free-running oscillator is used, every lip bend, vibrato, and articulation is 100% phase-locked to the brass fundamental, with 2-sample PolyBLEP antialiasing smoothing the phase-reset discontinuities.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (works best when fed by 01_harmonic_isolator)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0, used to compute the PolyBLEP phase increment Ts = f0/fs)
+- out1 / out2: Stereo Phaseshaped Sync Output
+
+PARAMETERS (4)
+
+1. sync_ratio
+   - Range: 1.0 to 12.0 (Slave-to-Master Frequency Ratio a1 = f_slave / f_master)
+   - Taper: Continuous linear ratio (smoothly slewed over 5 ms). Sweeping this knob sweeps a screaming, phase-locked formant across the harmonic series without needing a filter.
+   - Function: Sets the fractional period multiplier a1 in the phaseshaper mod1(a1 * phi(t)).
+
+2. soft_hard
+   - Range: 0.0 to 1.0 (0.0 = Soft Sync gtri, 1.0 = Hard Sync mod1 o glin)
+   - Taper: Linear crossfade.
+   - Function: Morphs between time-reversed triangular Soft Sync (where the phase slope inverts at the midpoint of the tuba cycle, producing hollow vocal formants) and aggressive PolyBLEP Hard Sync (sawtooth reset on every tuba period).
+
+3. wave_sin
+   - Range: 0.0 to 1.0 (0.0 = Geometric Saw/Triangle Terminal, 1.0 = Sinusoidal Waveshaper cos(2*pi*g(phi)))
+   - Taper: Linear crossfade.
+   - Function: Selects the outer terminal function f[.] of the nested phaseshaper composition (SMC 2010 Eq. 6 & 8): either raw geometric sync waveforms (0.0) or rounded sinusoidal phase distortion (1.0).
+
+4. mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet)
+   - Taper: Linear crossfade (because the sync signal is phase-locked to the tuba's analytic phase, blending with dry audio reinforces the fundamental constructively without phasing).
+   - Function: Balances the dry tuba signal with the amplitude-tracked phaseshaped output.

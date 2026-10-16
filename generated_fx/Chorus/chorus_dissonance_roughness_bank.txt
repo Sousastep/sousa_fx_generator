@@ -1,0 +1,164 @@
+// ============================================================================
+// chorus_dissonance_roughness_bank.txt
+// Standalone Stereo Chorus Effect: Kameoka-Kuriyagawa Critical-Band Dissonance
+// & Subband Noise-Smearing Chorus ("Dissonancizer / De-Dissonancizer")
+// Implements Matthew Hoffman & Perry Cook (DAFx-08, Paper 30):
+// "Real-Time Dissonancizers: Two Dissonance-Augmenting Audio Effects"
+// (Sections 2, 2.1, 3 & 4, Eq. 1-4, Fig. 1-5).
+// Implements the psychoacoustic critical-band modulation framework from the paper:
+//   1. Section 2 & Eq. 1 (Kameoka & Kuriyagawa Optimal Beat-Frequency Law):
+//      For any partial at frequency f_1, maximum sensory roughness occurs when a
+//      second partial beats at f_2 = f_1 + g(f_1), where:
+//        g(f_1) = 2.27 * (f_1 ^ 0.477)
+//      By splitting the tuba into 4 critical-band regions (Sub/Bass ~95 Hz, Low-Mid
+//      ~280 Hz, Mid ~850 Hz, High ~2600 Hz) and modulating each band i by a
+//      quadrature/ring modulator at m_i = scale * 0.5 * g(f_i) via Eq. 2.1
+//      a_i(t) = (1 - p) + p * sin(2*pi * m_i * t), you can dial continuously from
+//      lush critical-band chorusing (scale = 0.15..0.35 of g(f_1)) up to maximum
+//      dubstep/riddim sensory roughness (scale = 1.0 of g(f_1))!
+//   2. Section 4 ("Dissonance Reduction / Noisy Chorus"):
+//      Blends lowpass-filtered subband random noise into the modulator (Sec 4, p. 4)
+//      to smear sharp beating peaks into a warm, wide ensemble resonance, while
+//      protecting the sub-bass band via `bass_clean_protect` (Sec 2.1)!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Envelope Modulator [0..1] (dynamically boosts roughness impact p)
+//   in4: Optional 1-Bar Phasor [0..1]
+// Outlets:
+//   out1: Left Critical-Band Roughness / Smooth Chorus Output
+//   out2: Right Critical-Band Roughness / Smooth Chorus Output
+
+@param({ min: 0.0, max: 1.0 }) impact_depth_p = 0.65;
+@param({ min: 0.08, max: 1.25 }) roughness_scale_g = 0.32;
+@param({ min: 0.0, max: 1.0 }) noise_smear_chorus = 0.40;
+@param({ min: 0.0, max: 1.0 }) bass_clean_protect = 0.70;
+@param({ min: 0.0, max: 1.0 }) subband_am_expand = 0.30;
+@param({ min: 0.0, max: 1.0 }) stereo_phase_spread = 0.75;
+
+// 4-Band Crossover Filters (Band 0: <160 Hz, Band 1: 160..500 Hz, Band 2: 500..1500 Hz, Band 3: >1500 Hz)
+@state lp0L = new onepole(); @state lp0R = new onepole();
+@state lp1L = new onepole(); @state lp1R = new onepole();
+@state lp2L = new onepole(); @state lp2R = new onepole();
+
+// 4 Subband Modulator Phasors (calibrated to Kameoka-Kuriyagawa g(f_i)/2, Eq. 1)
+@state modPh0 = new phasor();
+@state modPh1 = new phasor();
+@state modPh2 = new phasor();
+@state modPh3 = new phasor();
+
+// Lowpass-filtered noise generators for Section 4 Dissonance-Reduction Chorus
+@state noiseGenL = new noise();
+@state noiseGenR = new noise();
+@state nLp0L = new onepole(); @state nLp0R = new onepole();
+@state nLp1L = new onepole(); @state nLp1R = new onepole();
+@state nLp2L = new onepole(); @state nLp2R = new onepole();
+@state nLp3L = new onepole(); @state nLp3R = new onepole();
+
+// Fast & Slow Envelope Followers for Section 3 Spectral Dynamics Expansion (Fig. 4, Eq. 3-4)
+@state fastEnv = new FixedSampleArray(4);
+@state slowEnv = new FixedSampleArray(4);
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let envIn = clamp(in3, 0.0, 1.0);
+
+// --- 1. Split Stereo Signal into 4 Critical-Band Regions (DAFx-08 Sec 2 & 3.1) ---
+let b0L = lp0L.next(xL, 160.0);
+let b0R = lp0R.next(xR, 160.0);
+let rem0L = xL - b0L;
+let rem0R = xR - b0R;
+
+let b1L = lp1L.next(rem0L, 500.0);
+let b1R = lp1R.next(rem0R, 500.0);
+let rem1L = rem0L - b1L;
+let rem1R = rem0R - b1R;
+
+let b2L = lp2L.next(rem1L, 1500.0);
+let b2R = lp2R.next(rem1R, 1500.0);
+let b3L = rem1L - b2L;
+let b3R = rem1R - b2R;
+
+// --- 2. Kameoka & Kuriyagawa Beat Frequencies m_i = scale * 0.5 * 2.27 * f_i^0.477 (Eq. 1) ---
+// Band centers f_i = {95 Hz, 290 Hz, 880 Hz, 2600 Hz}:
+//   g(95)/2   = 9.96 Hz
+//   g(290)/2  = 16.97 Hz
+//   g(880)/2  = 28.85 Hz
+//   g(2600)/2 = 48.33 Hz
+// When roughness_scale_g = 0.15..0.35, m_i sits in the lush 1.5 - 15 Hz chorus beating zone;
+// When roughness_scale_g = 1.00, m_i hits the exact Kameoka-Kuriyagawa maximum roughness peak!
+let gScale = clamp(roughness_scale_g, 0.08, 1.25);
+let m0 = 9.96  * gScale;
+let m1 = 16.97 * gScale;
+let m2 = 28.85 * gScale;
+let m3 = 48.33 * gScale;
+
+let ph0 = modPh0.next(m0);
+let ph1 = modPh1.next(m1);
+let ph2 = modPh2.next(m2);
+let ph3 = modPh3.next(m3);
+
+// --- 3. Lowpass-Filtered Subband Noise Modulators (DAFx-08 Sec 4 Chorus Mode) ---
+let rawNL = noiseGenL.next();
+let rawNR = noiseGenR.next();
+let n0L = nLp0L.next(rawNL, m0 * 1.5) * 3.5; let n0R = nLp0R.next(rawNR, m0 * 1.5) * 3.5;
+let n1L = nLp1L.next(rawNL, m1 * 1.5) * 3.0; let n1R = nLp1R.next(rawNR, m1 * 1.5) * 3.0;
+let n2L = nLp2L.next(rawNL, m2 * 1.5) * 2.5; let n2R = nLp2R.next(rawNR, m2 * 1.5) * 2.5;
+let n3L = nLp3L.next(rawNL, m3 * 1.5) * 2.2; let n3R = nLp3R.next(rawNR, m3 * 1.5) * 2.2;
+
+let nBlend = clamp(noise_smear_chorus, 0.0, 1.0);
+let stPhase = clamp(stereo_phase_spread, 0.0, 1.0) * 0.5 * pi;
+
+let osc0L = linearinterp(nBlend, sin(2.0 * pi * ph0), tanh(n0L));
+let osc0R = linearinterp(nBlend, sin(2.0 * pi * ph0 + stPhase), tanh(n0R));
+let osc1L = linearinterp(nBlend, sin(2.0 * pi * ph1), tanh(n1L));
+let osc1R = linearinterp(nBlend, sin(2.0 * pi * ph1 + stPhase), tanh(n1R));
+let osc2L = linearinterp(nBlend, sin(2.0 * pi * ph2), tanh(n2L));
+let osc2R = linearinterp(nBlend, sin(2.0 * pi * ph2 + stPhase), tanh(n2R));
+let osc3L = linearinterp(nBlend, sin(2.0 * pi * ph3), tanh(n3L));
+let osc3R = linearinterp(nBlend, sin(2.0 * pi * ph3 + stPhase), tanh(n3R));
+
+// --- 4. Section 3 Spectral Dynamics Expansion per Subband (Eq. 3-4, Fig. 4) ---
+let expPow = clamp(subband_am_expand, 0.0, 1.0) * 0.85;
+let mag0 = 0.5 * (abs(b0L) + abs(b0R));
+let mag1 = 0.5 * (abs(b1L) + abs(b1R));
+let mag2 = 0.5 * (abs(b2L) + abs(b2R));
+let mag3 = 0.5 * (abs(b3L) + abs(b3R));
+
+// Optimal fast decay cf = 1 - 0.00083734 * sqrt(b_i) (Eq. 4)
+fastEnv[0] = (mag0 > fastEnv[0]) ? mag0 : (fastEnv[0] + (mag0 - fastEnv[0]) * 0.008);
+fastEnv[1] = (mag1 > fastEnv[1]) ? mag1 : (fastEnv[1] + (mag1 - fastEnv[1]) * 0.014);
+fastEnv[2] = (mag2 > fastEnv[2]) ? mag2 : (fastEnv[2] + (mag2 - fastEnv[2]) * 0.025);
+fastEnv[3] = (mag3 > fastEnv[3]) ? mag3 : (fastEnv[3] + (mag3 - fastEnv[3]) * 0.042);
+
+slowEnv[0] += (mag0 - slowEnv[0]) * 0.0004;
+slowEnv[1] += (mag1 - slowEnv[1]) * 0.0007;
+slowEnv[2] += (mag2 - slowEnv[2]) * 0.0012;
+slowEnv[3] += (mag3 - slowEnv[3]) * 0.0020;
+
+let gainExp0 = clamp(pow((fastEnv[0] + 0.001) / (slowEnv[0] + 0.001), expPow), 0.4, 2.2);
+let gainExp1 = clamp(pow((fastEnv[1] + 0.001) / (slowEnv[1] + 0.001), expPow), 0.4, 2.2);
+let gainExp2 = clamp(pow((fastEnv[2] + 0.001) / (slowEnv[2] + 0.001), expPow), 0.4, 2.2);
+let gainExp3 = clamp(pow((fastEnv[3] + 0.001) / (slowEnv[3] + 0.001), expPow), 0.4, 2.2);
+
+// --- 5. Apply Section 2.1 Modulator Law a_i = (1 - p_i) + p_i * osc_i ---
+let pBase = clamp(impact_depth_p + 0.35 * envIn, 0.0, 1.0);
+// Sec 2.1: Protect bass range from muddy beating when bass_clean_protect > 0
+let p0 = pBase * (1.0 - clamp(bass_clean_protect, 0.0, 1.0));
+let p1 = pBase * (1.0 - 0.35 * clamp(bass_clean_protect, 0.0, 1.0));
+let p2 = pBase;
+let p3 = pBase;
+
+let out0L = b0L * ((1.0 - p0) + p0 * osc0L) * gainExp0;
+let out0R = b0R * ((1.0 - p0) + p0 * osc0R) * gainExp0;
+let out1L = b1L * ((1.0 - p1) + p1 * osc1L) * gainExp1;
+let out1R = b1R * ((1.0 - p1) + p1 * osc1R) * gainExp1;
+let out2L = b2L * ((1.0 - p2) + p2 * osc2L) * gainExp2;
+let out2R = b2R * ((1.0 - p2) + p2 * osc2R) * gainExp2;
+let out3L = b3L * ((1.0 - p3) + p3 * osc3L) * gainExp3;
+let out3R = b3R * ((1.0 - p3) + p3 * osc3R) * gainExp3;
+
+out1 = out0L + out1L + out2L + out3L;
+out2 = out0R + out1R + out2R + out3R;

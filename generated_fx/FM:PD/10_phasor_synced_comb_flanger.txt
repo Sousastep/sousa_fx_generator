@@ -1,0 +1,94 @@
+// ============================================================================
+// 10_phasor_synced_comb_flanger.txt
+// Unix-Style Effect 10: 1-Bar Phasor-Synced Riddim Comb Sweeper
+// Driven by the 1-bar audio-rate phasor (0..1) on in3.
+// Sweeps a stereo pair of high-resonance comb filters using customizable
+// rhythmic subdivisions and warp curves (kink / triangle / exponential drop)
+// to create tempo-locked riddim "wonk", laser sweeps, and metallic talk-comb grooves.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input
+//   in2: Right Audio Input
+//   in3: 1-Bar Audio-Rate Phasor [0..1] (if unpatched/0, uses internal 0.5 Hz LFO)
+// Outlets:
+//   out1: Left Rhythmic Comb Output
+//   out2: Right Rhythmic Comb Output
+
+@param({ min: 1.0, max: 16.0, steps: 16 }) subdiv_rate = 4.0;
+@param({ min: 0.15, max: 15.0 }) base_ms = 2.5;
+@param({ min: 0.0, max: 1.0 }) sweep_depth = 0.7;
+@param({ min: -0.96, max: 0.96 }) resonance = 0.8;
+
+@state combBufL = new FixedSampleArray(2048);
+@state combBufR = new FixedSampleArray(2048);
+@state writeIdx: Int = 0;
+
+@state fallbackPhasor = new phasor();
+@state prevBarIn = 0.0;
+@state smoothDelL = 120.0;
+@state smoothDelR = 120.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let barIn = in3;
+
+// Detect if external 1-bar phasor is active; otherwise fall back to internal LFO
+let barActive = (abs(barIn - prevBarIn) > 0.0000001 || (barIn > 0.0001 && barIn < 0.9999));
+prevBarIn = barIn;
+let masterPh = barActive ? wrap(barIn, 0.0, 1.0) : fallbackPhasor.next(0.5);
+
+// --- 1. Rhythmic Subdivision & Riddim Envelope Shaping ---
+let sub = floor(clamp(subdiv_rate, 1.0, 16.0));
+let cyclePhL = wrap(masterPh * sub, 0.0, 1.0);
+let cyclePhR = wrap(cyclePhL + 0.08, 0.0, 1.0); // Stereo phase offset for wide whip
+
+// Use RNBO triangle() with duty=0.25 for classic fast-attack / slow-decay riddim whip
+let lfoL = pow(triangle(cyclePhL, 0.25), 1.6);
+let lfoR = pow(triangle(cyclePhR, 0.25), 1.6);
+
+// --- 2. Exponential Delay Time Calculation (in ms -> samples) ---
+// Sweeps up to 3.5 octaves down/up from base_ms
+let depthOct = pow(clamp(sweep_depth, 0.0, 1.0), 1.3) * 3.5;
+let msL = clamp(base_ms * pow(2.0, (lfoL - 0.3) * depthOct), 0.12, 35.0);
+let msR = clamp(base_ms * pow(2.0, (lfoR - 0.3) * depthOct), 0.12, 35.0);
+
+let targetSampsL = clamp(mstosamps(msL), 2.0, 2040.0);
+let targetSampsR = clamp(mstosamps(msR), 2.0, 2040.0);
+
+let slew = 1.0 - exp(-1.0 / (0.002 * sr));
+smoothDelL += (targetSampsL - smoothDelL) * slew;
+smoothDelR += (targetSampsR - smoothDelR) * slew;
+
+// --- 3. Cubic Interpolated Comb Read & Feedback ---
+let rPosL = writeIdx - smoothDelL;
+while (rPosL < 0.0) { rPosL += 2048.0; }
+let iL0: Int = floor(rPosL);
+let fracL = rPosL - iL0;
+let delL = cubicinterp(fracL,
+	combBufL[(iL0 - 1 + 2048) % 2048],
+	combBufL[iL0 % 2048],
+	combBufL[(iL0 + 1) % 2048],
+	combBufL[(iL0 + 2) % 2048]
+);
+
+let rPosR = writeIdx - smoothDelR;
+while (rPosR < 0.0) { rPosR += 2048.0; }
+let iR0: Int = floor(rPosR);
+let fracR = rPosR - iR0;
+let delR = cubicinterp(fracR,
+	combBufR[(iR0 - 1 + 2048) % 2048],
+	combBufR[iR0 % 2048],
+	combBufR[(iR0 + 1) % 2048],
+	combBufR[(iR0 + 2) % 2048]
+);
+
+let fb = clamp(resonance, -0.96, 0.96);
+combBufL[writeIdx] = tanh(xL + fb * delL);
+combBufR[writeIdx] = tanh(xR + fb * delR);
+writeIdx = (writeIdx + 1) % 2048;
+
+// Output combines feedforward + feedback comb response for deep notches & peaks
+let norm = 1.0 / (1.0 + 0.6 * abs(fb));
+out1 = (xL + fb * delL) * norm;
+out2 = (xR + fb * delR) * norm;

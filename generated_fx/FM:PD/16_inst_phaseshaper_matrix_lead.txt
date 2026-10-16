@@ -1,0 +1,200 @@
+// ============================================================================
+// 16_inst_phaseshaper_matrix_lead.txt
+// Advanced Instrument 4: Nested Phaseshaper Matrix Instrument (SMC 2010 Suite)
+// Turns the tuba into an analytic phasor phi(t) in [0, 1) and runs it through
+// a live-morphable 2D matrix of the oscillator algorithms from Kleimola,
+// Lazzarini, Timoney & Valimaki (SMC 2010):
+//   - PolyBLEP Hard Sync (Eq. 22)
+//   - Tilted Parabolic Triangle Phase gvtri -> Sinusoid (Eq. 16-17, Fig. 15-16)
+//   - Roland JP-8000 Triangle Modulation (Eq. 26)
+//   - Roland JP-8000 Ripple Supersaw (Eq. 28)
+//   - Phase-Divided Sub-Octave Lock (cos(theta/2))
+// With 1-Bar Phasor rhythmic sync-ratio envelopes and Joystick X/Y control.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (Tuba)
+//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+//   in4: 1-Bar Audio-Rate Phasor [0..1] (syncs rhythmic phase-sync sweep)
+// Outlets:
+//   out1: Left Phaseshaper Matrix Output
+//   out2: Right Phaseshaper Matrix Output
+
+@param({ min: -1.0, max: 1.0 }) joy_x_sync_sweep = 0.0;
+@param({ min: -1.0, max: 1.0 }) joy_y_morph_algo = 0.0;
+@param({ min: 0.1, max: 0.9 }) tilt_duty_w = 0.5;
+@param({ min: 0.0, max: 1.0 }) supersaw_ripple = 0.55;
+@param({ min: 1.0, max: 16.0, steps: 16 }) rhythm_subdiv = 4.0;
+@param({ min: 0.0, max: 1.0 }) rhythm_depth = 0.5;
+@param({ min: 0.0, max: 1.0 }) sub_lock_mix = 0.5;
+@param({ min: 0.0, max: 1.0 }) pre_sine_iso = 0.7;
+
+// Pre-isolation SVF for clean phasor extraction
+@state svfIso = new svf();
+
+// 4-stage Quadrature Hilbert network for analytic phasor phi(t)
+@state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
+@state hDelRe = 0.0;
+
+// Unwrapped phase counter for locked sub-octave cos(theta/2)
+@state prevTheta = 0.0;
+@state wrapBit: Int = 0;
+
+// Fallback pitch & bar phasor
+@state fallbackBar = new phasor();
+@state prevBarIn = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+@state smoothJoyX = 0.0;
+@state smoothJoyY = 0.0;
+
+function polyblep(t: number, dt: number): number {
+	let corr = 0.0;
+	let sDt = clamp(dt, 0.0001, 0.45);
+	if (t < sDt) {
+		let u = t / sDt;
+		corr = u + u - u * u - 1.0;
+	} else if (t > 1.0 - sDt) {
+		let u = (t - 1.0) / sDt;
+		corr = u * u + u + u + 1.0;
+	}
+	return corr;
+}
+
+function modm(x: number, m: number): number {
+	let sm = maximum(m, 0.01);
+	return x - sm * floor(x / sm);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch & Joystick Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 180.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.005 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothJoyX += (clamp(joy_x_sync_sweep, -1.0, 1.0) - smoothJoyX) * slew;
+smoothJoyY += (clamp(joy_y_morph_algo, -1.0, 1.0) - smoothJoyY) * slew;
+
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Pre-Filter & Analytic Phasor Extraction ---
+let isoAmt = clamp(pre_sine_iso, 0.0, 1.0);
+let bpSig = svfIso.next(mono, f0, clamp(0.55 + 0.38 * isoAmt, 0.5, 0.94))[2] * 2.2;
+let cleanIn = linearinterp(isoAmt, mono, bpSig);
+
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+let sRe = cleanIn;
+let yRe0 = cRe0 * (sRe - hReY[0]) + hReX[0]; hReX[0] = sRe; hReY[0] = yRe0; sRe = yRe0;
+let yRe1 = cRe1 * (sRe - hReY[1]) + hReX[1]; hReX[1] = sRe; hReY[1] = yRe1; sRe = yRe1;
+let yRe2 = cRe2 * (sRe - hReY[2]) + hReX[2]; hReX[2] = sRe; hReY[2] = yRe2; sRe = yRe2;
+let yRe3 = cRe3 * (sRe - hReY[3]) + hReX[3]; hReX[3] = sRe; hReY[3] = yRe3;
+let outRe = hDelRe; hDelRe = yRe3;
+
+let sIm = cleanIn;
+let yIm0 = cIm0 * (sIm - hImY[0]) + hImX[0]; hImX[0] = sIm; hImY[0] = yIm0; sIm = yIm0;
+let yIm1 = cIm1 * (sIm - hImY[1]) + hImX[1]; hImX[1] = sIm; hImY[1] = yIm1; sIm = yIm1;
+let yIm2 = cIm2 * (sIm - hImY[2]) + hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm = yIm2;
+let yIm3 = cIm3 * (sIm - hImY[3]) + hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;
+let outIm = yIm3;
+
+let pol = cartopol(outRe, outIm);
+let instAmp = pol[0];
+let theta = pol[1];
+let phi = wrap((theta + pi) / (2.0 * pi), 0.0, 1.0);
+
+// Track wraps for zero-drift sub-octave cos(theta / 2)
+let dTheta = theta - prevTheta;
+if (dTheta < -pi || dTheta > pi) {
+	wrapBit = 1 - wrapBit;
+}
+prevTheta = theta;
+let subOctWave = cos(0.5 * (theta + 2.0 * pi * wrapBit));
+
+// --- 3. 1-Bar Rhythmic Phasor & Sync Ratio Calculation (a1) ---
+let barActive = (abs(barIn - prevBarIn) > 0.0000001 || (barIn > 0.0001 && barIn < 0.9999));
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn, 0.0, 1.0) : fallbackBar.next(0.5);
+
+let rSub = floor(clamp(rhythm_subdiv, 1.0, 16.0));
+let cycPh = wrap(barPh * rSub, 0.0, 1.0);
+let cycEnv = pow(triangle(cycPh, 0.2), 1.5);
+
+// Master phase scaling a1 controlled by Joystick X (0.5x waveslice to 10x hard sync) + Rhythmic Env
+let a1 = clamp(2.5 * pow(3.2, smoothJoyX) + 5.0 * clamp(rhythm_depth, 0.0, 1.0) * cycEnv, 0.35, 12.0);
+let Ts = clamp((f0 * a1) / sr, 0.0001, 0.45);
+
+// --- 4. Variable-Slope Tilted Triangle Pre-Shaper svtri (SMC 2010 Eq. 16) ---
+let w = clamp(tilt_duty_w, 0.1, 0.9);
+let aT = 1.0 / (8.0 * maximum(w - w * w, 0.01));
+let gb1 = 2.0 * phi - 1.0;
+let gb2 = 2.0 * wrap(phi - w, 0.0, 1.0) - 1.0;
+let svtri = clamp(aT * (gb1 * gb1 - gb2 * gb2) + 0.5, 0.0, 1.0);
+
+let phiL = linearinterp(abs(w - 0.5) * 2.0, phi, svtri);
+let phiR = wrap(phiL + 0.03, 0.0, 1.0);
+
+// --- 5. Compute the 3 SMC 2010 Phaseshaper Voices ---
+// Voice 1 (Joy Y = -1): Tilted-Triangle Sinusoidal Formant Waveshaper (Eq. 17 & Fig. 15)
+let gvtriL = wrap(a1 * svtri, 0.0, 1.0);
+let gvtriR = wrap(a1 * wrap(svtri + 0.03, 0.0, 1.0), 0.0, 1.0);
+let v1L = sin(2.0 * pi * gvtriL);
+let v1R = sin(2.0 * pi * gvtriR);
+
+// Voice 2 (Joy Y = 0): PolyBLEP Hard Sync + JP-8000 Triangle Modulation Hybrid (Eq. 22 & 26)
+let syncPhL = wrap(a1 * phiL, 0.0, 1.0);
+let syncPhR = wrap(a1 * phiR, 0.0, 1.0);
+let hSyncL = (2.0 * syncPhL - 1.0) - polyblep(syncPhL, Ts);
+let hSyncR = (2.0 * syncPhR - 1.0) - polyblep(syncPhR, Ts);
+
+let aTM = clamp(0.72 + 0.28 * (0.5 * (smoothJoyX + 1.0)), 0.7, 1.0);
+let xTL = aTM * wrap(2.0 * abs(2.0 * phiL - 1.0), 0.0, 1.0) - 1.0;
+let xTR = aTM * wrap(2.0 * abs(2.0 * phiR - 1.0), 0.0, 1.0) - 1.0;
+let triModL = 2.0 * (xTL - ceil(xTL) - 0.5);
+let triModR = 2.0 * (xTR - ceil(xTR) - 0.5);
+
+let v2L = 0.55 * hSyncL + 0.45 * triModL;
+let v2R = 0.55 * hSyncR + 0.45 * triModR;
+
+// Voice 3 (Joy Y = +1): Ripple Supersaw Unison (Eq. 28)
+let rip = clamp(supersaw_ripple, 0.0, 1.0);
+let m1L = 0.2 + 0.55 * rip * (0.6 + 0.4 * sin(2.0 * pi * barPh));
+let m1R = 0.2 + 0.55 * rip * (0.6 + 0.4 * cos(2.0 * pi * barPh));
+let xssL = a1 * phiL;
+let xssR = a1 * phiR;
+let v3L = sin(2.0 * pi * (2.0 * modm(modm(xssL, m1L) + xssL, 0.88) - 1.0));
+let v3R = sin(2.0 * pi * (2.0 * modm(modm(xssR, m1R) + xssR, 0.88) - 1.0));
+
+// Morph across Voice 1 -> Voice 2 -> Voice 3 using Joystick Y
+let jy = smoothJoyY;
+let leadL = (jy < 0.0) ? linearinterp(jy + 1.0, v1L, v2L) : linearinterp(jy, v2L, v3L);
+let leadR = (jy < 0.0) ? linearinterp(jy + 1.0, v1R, v2R) : linearinterp(jy, v2R, v3R);
+
+// --- 6. Combine with Phase-Locked Sub-Octave & Restore Tuba Breath Dynamics ---
+let gate = clamp((instAmp - 0.0008) * 250.0, 0.0, 1.0);
+let sMix = clamp(sub_lock_mix, 0.0, 1.0);
+let finalL = ((1.0 - 0.4 * sMix) * leadL + sMix * subOctWave) * instAmp * 1.8 * gate;
+let finalR = ((1.0 - 0.4 * sMix) * leadR + sMix * subOctWave) * instAmp * 1.8 * gate;
+
+out1 = tanh(finalL);
+out2 = tanh(finalR);

@@ -1,0 +1,189 @@
+// ============================================================================
+// deformed_circle_map_fbfm.txt
+// Unix-Style Stereo Effect: Sine Circle Map (Feedback FM) & Deformed Loop Projection
+// Implements Georg Essl (DAFx-22, Paper 23):
+// "Deforming the Oscillator: Iterative Phases Over Parametrizable Closed Paths"
+// (Sections 3.1-3.4, 4.1-4.4 & 6.2, Eq. 2, 5-6, 12-16, Fig. 6-14).
+// Formulates Feedback FM as the discrete dynamical Sine Circle Map on S^1:
+//   x_n = (x_{n-1} + Omega + (k / 2*pi) * sin(2*pi * x_{n-1})) mod 1   (Eq. 5)
+// Synchronized to the tuba's analytic phase (or pitch increment Omega = f0 / fs),
+// where k = 1.0 marks the exact Arnold-tongue invertibility boundary between smooth
+// harmonic feedback FM and subharmonic period-doubling / tearout chaos!
+// Then projects the deformed phase x_n onto a continuously morphable 2D closed
+// geometric path in R^2 (Euclidean Circle <-> 4-Point Diamond <-> Concave L-Loop,
+// Sec 4.3 & 4.4) with stereo orthogonal viewing angles!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba or 01_harmonic_isolator)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
+//   in4: Optional 1-Bar Phasor [0..1] (rotates the 2D geometric projection angle)
+// Outlets:
+//   out1: Left Deformed Loop X-Projection Output
+//   out2: Right Deformed Loop Y-Projection Output
+
+@param({ min: 0.0, max: 3.5 }) circle_map_k = 0.95;
+@param({ min: 0.0, max: 1.0 }) loop_deformation = 0.45;
+@param({ min: 0.0, max: 1.0 }) phase_lock_strength = 0.65;
+@param({ min: -3.14159, max: 3.14159 }) proj_angle_rad = 0.0;
+@param({ min: 0.0, max: 1.0 }) angle_spin = 0.25;
+@param({ min: 0.0, max: 1.0 }) env_follow = 0.85;
+
+// 4-stage Quadrature IIR Hilbert network for analytic phase & envelope extraction
+@state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
+@state hDelRe = 0.0;
+
+// Iterative Sine Circle Map state x_{n-1} in [0, 1) (Paper Eq. 5)
+@state mapX_L = 0.0;
+@state mapX_R = 0.0;
+
+// Fallback trackers & DC blockers
+@state barFallback = new phasor();
+@state prevBarIn = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothEnv = 0.0;
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+// Evaluate 2D Closed-Loop Geometric Projection (Paper Sec 4.1-4.4: Circle -> Diamond -> Concave L-Loop)
+function evalDeformedLoop(phaseIn: number, deform: number, rotAngle: number): number {
+	let t = wrap(phaseIn, 0.0, 1.0);
+	let rad = 2.0 * pi * t;
+
+	// 1) Standard Euclidean Circle (Sec 3, Eq. 1)
+	let cirX = cos(rad);
+	let cirY = sin(rad);
+
+	// 2) 4-Point Diamond P_D = [(0,1), (1,0), (0,-1), (-1,0)] with corner tension (Sec 4.3)
+	let segFloat = t * 4.0;
+	let segIdx: Int = floor(segFloat);
+	let u = segFloat - segIdx;
+	// Smooth cubic Hermite / spline tensioning along segment
+	let uSmooth = u * u * (3.0 - 2.0 * u);
+
+	let dX0 = 0.0; let dY0 = 1.0;
+	let dX1 = 1.0; let dY1 = 0.0;
+	if (segIdx == 1) {
+		dX0 = 1.0;  dY0 = 0.0;
+		dX1 = 0.0;  dY1 = -1.0;
+	} else if (segIdx == 2) {
+		dX0 = 0.0;  dY0 = -1.0;
+		dX1 = -1.0; dY1 = 0.0;
+	} else if (segIdx >= 3) {
+		dX0 = -1.0; dY0 = 0.0;
+		dX1 = 0.0;  dY1 = 1.0;
+	}
+	let diaX = linearinterp(u, dX0, dX1);
+	let diaY = linearinterp(u, dY0, dY1);
+
+	// 3) 4-Point Irregular Concave L-Shaped Loop (Sec 4.4: P_L = [(0.65,0.65), (0.75,-0.7), (-0.8,-0.85), (0.6,-0.6)])
+	let lX0 = 0.65;  let lY0 = 0.65;
+	let lX1 = 0.75;  let lY1 = -0.70;
+	if (segIdx == 1) {
+		lX0 = 0.75;  lY0 = -0.70;
+		lX1 = -0.80; lY1 = -0.85;
+	} else if (segIdx == 2) {
+		lX0 = -0.80; lY0 = -0.85;
+		lX1 = 0.60;  lY1 = -0.60;
+	} else if (segIdx >= 3) {
+		lX0 = 0.60;  lY0 = -0.60;
+		lX1 = 0.65;  lY1 = 0.65;
+	}
+	// Add spline curvature harmonic to Concave L-Loop
+	let lX = linearinterp(uSmooth, lX0, lX1) + 0.25 * sin(4.0 * rad);
+	let lY = linearinterp(uSmooth, lY0, lY1) - 0.25 * cos(4.0 * rad);
+
+	// Morph continuously across Circle (0.0) -> Diamond (0.5) -> Concave L-Loop (1.0)
+	let def = clamp(deform, 0.0, 1.0);
+	let px = (def <= 0.5) ? linearinterp(def * 2.0, cirX, diaX) : linearinterp((def - 0.5) * 2.0, diaX, lX);
+	let py = (def <= 0.5) ? linearinterp(def * 2.0, cirY, diaY) : linearinterp((def - 0.5) * 2.0, diaY, lY);
+
+	// Orthogonal planar projection at angle rotAngle (Sec 3.4)
+	return px * cos(rotAngle) + py * sin(rotAngle);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Extract Tuba Analytic Phase & Amplitude ---
+let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+let re = mono;
+let t = cR0 * (re + hReY[0]) - hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
+t = cR1 * (re + hReY[1]) - hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
+t = cR2 * (re + hReY[2]) - hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
+t = cR3 * (re + hReY[3]) - hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
+let sigRe = hDelRe; hDelRe = re;
+
+let im = mono;
+t = cI0 * (im + hImY[0]) - hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
+t = cI1 * (im + hImY[1]) - hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
+t = cI2 * (im + hImY[2]) - hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
+t = cI3 * (im + hImY[3]) - hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
+let sigIm = im;
+
+let instAmp = sqrt(sigRe * sigRe + sigIm * sigIm);
+smoothEnv += (instAmp - smoothEnv) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let tubaPhi = wrap((atan2(sigIm, sigRe) + pi) / (2.0 * pi), 0.0, 1.0);
+
+// --- 3. Iterative Sine Circle Map (Feedback FM, Paper Sec 3.3, Eq. 5) ---
+// x_n = (x_{n-1} + Omega + (k / 2*pi) * sin(2*pi * x_{n-1})) mod 1
+let omega = f0 / sr;
+let kVal = clamp(circle_map_k, 0.0, 3.5);
+let lockAmt = clamp(phase_lock_strength, 0.0, 1.0) * 0.15;
+
+// Couple circle map phase softly to tuba's analytic phase so Arnold-tongue subharmonics
+// stay locked to the live horn
+let errL = wrap(tubaPhi - mapX_L + 0.5, 0.0, 1.0) - 0.5;
+let errR = wrap(tubaPhi - mapX_R + 0.5, 0.0, 1.0) - 0.5;
+
+mapX_L = wrap(mapX_L + omega + (kVal / (2.0 * pi)) * sin(2.0 * pi * mapX_L) + lockAmt * errL, 0.0, 1.0);
+mapX_R = wrap(mapX_R + omega + ((kVal * 1.04) / (2.0 * pi)) * sin(2.0 * pi * mapX_R) + lockAmt * errR, 0.0, 1.0);
+
+// --- 4. 2D Closed-Loop Geometric Projection (Paper Sec 4 & 6) ---
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn, 0.0, 1.0) : barFallback.next(0.4);
+let rotAngle = clamp(proj_angle_rad, -3.14159, 3.14159) + 2.0 * pi * barPh * clamp(angle_spin, 0.0, 1.0);
+
+// Left channel projects onto rotAngle (X-axis), Right channel onto rotAngle + pi/2 (Y-axis)
+let rawOutL = evalDeformedLoop(mapX_L, loop_deformation, rotAngle);
+let rawOutR = evalDeformedLoop(mapX_R, loop_deformation, rotAngle + 0.5 * pi);
+
+// DC blocker (Concave L-Loop is intentionally asymmetric around origin!)
+let dcOutL = rawOutL - dcXL + 0.995 * dcYL;
+dcXL = rawOutL; dcYL = dcOutL;
+let dcOutR = rawOutR - dcXR + 0.995 * dcYR;
+dcXR = rawOutR; dcYR = dcOutR;
+
+let gate = clamp((smoothEnv - 0.002) * 200.0, 0.0, 1.0);
+let ampScale = linearinterp(clamp(env_follow, 0.0, 1.0), gate * 0.75, clamp(smoothEnv * 1.6, 0.0, 1.5));
+
+out1 = dcOutL * ampScale;
+out2 = dcOutR * ampScale;

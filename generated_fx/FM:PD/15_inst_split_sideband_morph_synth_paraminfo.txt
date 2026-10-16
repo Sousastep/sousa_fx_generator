@@ -1,0 +1,54 @@
+================================================================================
+15_inst_split_sideband_morph_synth — Parameter Information
+================================================================================
+
+OVERVIEW
+Turns the Adaptive Split-Sideband (ASpSB) synthesis matrix from Lazzarini, Timoney, and Lysaght (DAFx-08, Section 3, Eq. 20) into a 2D joystick-controlled vector synthesizer for the live tuba. Separates FM distortion into four orthogonal sideband quadrants — Upper-Even, Upper-Odd, Lower-Even, and Lower-Odd — while simultaneously applying opposite-polarity Bode SSB micro-frequency shifting to the Left and Right analytic carrier channels for massive "Reese bass" stereo swirling.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Tuba Audio Input (Left / Right)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
+- in4: 1-Bar Audio-Rate Phasor [0..1] (syncs the rhythmic sideband index pulse; internal 0.5 Hz fallback if unpatched)
+- out1 / out2: Stereo ASpSB Vector Morph Output
+
+PARAMETERS (8)
+
+1. joy_x_odd_even (Joystick X-Axis)
+   - Range: -1.0 to +1.0 (Left = 100% Odd Sidebands, Center = Balanced, Right = 100% Even Sidebands)
+   - Taper: Linear 2D vector weight.
+   - Function: Sweeps horizontally between hollow, clarinet/square-like Odd sidebands (-1.0) and warm, octave-doubled Even sidebands (+1.0).
+
+2. joy_y_low_high (Joystick Y-Axis)
+   - Range: -1.0 to +1.0 (Down = 100% Lower Sub-Sidebands, Up = 100% Upper Screech Sidebands + Index Boost)
+   - Taper: Linear 2D vector weight coupled with a 1.0x +/- 0.65x multiplier on the FM modulation index.
+   - Function: Sweeps vertically from deep sub-harmonic multiphonics (DAFx-08 Fig. 15) to screaming upper-sideband brass growls (DAFx-08 Fig. 14).
+
+3. cm_ratio
+   - Range: 0.10 to 4.00 (Carrier-to-Modulator Frequency Ratio c:m, where f_m = f_0 / cm_ratio)
+   - Taper: Linear ratio (1.5 = sub-harmonics at 2/3 f0; 1.0 = harmonic series; 0.1–0.25 = wide inharmonic sideband spacing; 3.0–4.0 = tight beating growl clusters).
+   - Function: Sets the pitch-tracked modulator frequency relative to the tuba's fundamental.
+
+4. base_index
+   - Range: 0.0 to 6.0 (Base FM Modulation Index I)
+   - Taper: Continuous linear index (internally scaled by Joystick Y and the rhythmic Hann pulse).
+   - Function: Controls the baseline Bessel harmonic expansion of the four sideband quadrants.
+
+5. pulse_rate
+   - Range: 1 to 16 cycles per bar (Quantized in 16 integer steps)
+   - Taper: Stepped integer multiplier of the 1-bar phasor.
+   - Function: Sets the rhythmic subdivision of the synced Hann-window sideband index pulse.
+
+6. pulse_depth
+   - Range: 0.0 to 1.0 (0% Steady Index to 100% Pulsed Sideband Wobble)
+   - Taper: Linear modulation depth.
+   - Function: Modulates the ASpSB modulation index I rhythmically in lockstep with the 1-bar phasor.
+
+7. stereo_bode_hz
+   - Range: 0.0 to 25.0 Hz
+   - Taper: Power curve (x^1.6) giving fine 0.1–3.0 Hz resolution in the first half of the knob for lush, slow barber-pole Reese detuning, and faster metallic vibrato toward 25 Hz.
+   - Function: Rotates the Left analytic carrier upward by +Hz and the Right analytic carrier downward by -Hz before the ASpSB matrix multiply.
+
+8. carrier_focus
+   - Range: 0.0 to 1.0 (0% Full Raw Tuba Carrier to 100% Isolated Fundamental Sine Carrier)
+   - Taper: Linear crossfade with simultaneous SVF Q tightening.
+   - Function: Controls whether ASpSB sidebands are generated around every brass partial (0.0, dense multicarrier growl) or purely around the isolated fundamental sine wave (1.0, laser-clean synthetic FM).

@@ -1,0 +1,48 @@
+================================================================================
+EFFECT: comp_crest_flux_autoballistic
+SOURCE: Maddams, Finn & Reiss (DAFx-2012, "An Autonomous Method for Multi-Track
+        Dynamic Range Compression", Section 4.2, Fig. 2A/2B; citing Giannoulis
+        et al.) and Hilsamer & Herzog (DAFx-2014, Sections 2-3, Fig. 1)
+TYPE:   Stereo Crest-Factor & Spectral-Flux Adaptive Auto-Ballistic FET/VCA
+        Compressor with Variable-Knee Threshold Mode
+================================================================================
+
+OVERVIEW
+--------
+Implements the signal-adaptive compressor architecture of Maddams et al.
+(DAFx-2012, Sec. 4.2) and Hilsamer & Herzog (DAFx-2014). Attack and release
+ballistics are continuously modulated in real time by both instantaneous Crest
+Factor (Peak-to-RMS ratio in dB) and 2-band Spectral Flux onset velocity,
+dropping attack time down toward 40 microseconds (1176 FET speed) on sharp
+transients and releasing rapidly to avoid pumping and "breathing" drop-outs.
+Also includes Maddams' "Threshold Mode" (Sec. 4.2.1, Fig. 2A) where knee width
+scales dynamically with |Threshold| toward an infinite-ratio soft limiter.
+
+PARAMETERS (8 total)
+--------------------
+1. thresh_db         [-40.0 .. 0.0 dB, default: -20.0]
+   Compression threshold (with automatic loudness makeup compensation).
+
+2. ratio             [1.5 .. 30.0, default: 8.0]
+   Base compression ratio in "Ratio Mode" (when var_knee_mode = 0).
+
+3. var_knee_mode     [0.0 .. 1.0, default: 0.65]
+   Morphs between Maddams' "Ratio Mode" (0.0: fixed 3 dB knee, variable ratio,
+   Fig. 2B) and "Threshold Mode" (1.0: ratio -> inf:1 with knee width = |T|,
+   Fig. 2A).
+
+4. base_attack_ms    [0.1 .. 50.0 ms, default: 8.0]
+   Nominal steady-state attack time before crest/spectral-flux acceleration.
+
+5. base_release_ms   [20.0 .. 800.0 ms, default: 180.0]
+   Nominal steady-state release time before crest/spectral-flux acceleration.
+
+6. crest_flux_adapt  [0.0 .. 1.0, default: 0.75]
+   Depth of real-time Crest-Factor and Spectral-Flux modulation accelerating
+   attack and release times during percussive transients.
+
+7. fet_slam_sat      [0.0 .. 1.0, default: 0.40]
+   1176-style FET "All-Buttons-In" harmonic saturation driven by gain reduction.
+
+8. mix               [0.0 .. 1.0, default: 1.0]
+   Dry/wet parallel compression blend.

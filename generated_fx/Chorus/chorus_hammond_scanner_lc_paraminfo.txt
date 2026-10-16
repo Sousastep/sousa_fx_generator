@@ -1,0 +1,47 @@
+================================================================================
+chorus_hammond_scanner_lc — Parameter Information
+================================================================================
+
+OVERVIEW
+A standalone stereo model of the Hammond B-3 Organ Vibrato/Chorus Line Box and Electromechanical Scanner from Kurt James Werner, W. Ross Dunkel, and François G. Germain (DAFx-16 Paper 54, Sections 2.1, 2.2 & 3, Tables 1–2, Fig. 1–3). Unlike a standard digital delay-line chorus, the Hammond Vibrato/Chorus propagates the audio signal down an 18-stage dispersive inductor-capacitor (LC) ladder (`v1..v19`) with bidirectional passband ripple and a progressive lowpass rolloff, while a 16-plate motorized capacitive rotor scans "there-and-back-again" across 9 non-uniformly wired tap terminals (`t1..t9` per Table 2 for V1/C1, V2/C2, and V3/C3). As noted in DAFx-16 Section 2, the overlapping keystone capacitor plates perform physical linear crossfading (`v_out = eta*v_a + (1-eta)*v_b`), producing a uniquely warm, frequency-dependent phase/pitch chorus that makes low brass sound colossal.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Optional Envelope Modulator [0..1] (dynamically pushes scanner tap wiring from C1 toward C3 on loud attacks)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (locks scanner motor to 4x bar tempo when patched)
+- out1 / out2: Stereo Hammond LC Scanner Chorus/Vibrato Output
+
+PARAMETERS (6)
+
+1. scanner_depth_c1_c3
+   - Range: 1.00 to 3.00 (1.00 = V1/C1 Shallow, 2.00 = V2/C2 Medium, 3.00 = V3/C3 Deep; Default: 2.50)
+   - Taper: Continuous interpolation across the exact Hammond B-3 Table 2 tap-wiring matrix:
+     * 1.0 (C1): Taps v1, v2, v3, v4, v5, v6, v7, v8, v9
+     * 2.0 (C2): Taps v1, v2, v3, v5, v7, v9, v11, v12, v13
+     * 3.0 (C3): Taps v1, v2, v4, v7, v10, v13, v16, v18, v19
+   - Function: Controls how far down the 18-stage LC ladder the capacitive scanner reaches.
+
+2. scanner_rate_hz
+   - Range: 0.50 to 12.00 Hz (Scanner Synchronous Motor Rotation Rate, Default: 6.12 Hz matching the physical B-3 run motor)
+   - Taper: Direct frequency in Hz (DAFx-16 Section 3).
+   - Function: Sets the speed of the "there-and-back-again" capacitive rotor scan.
+
+3. lc_cutoff_hz
+   - Range: 1800.0 to 12000.0 Hz (LC Ladder Line-Box Cutoff & Dispersion Frequency, Default: 4800.0 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the per-stage LC phase dispersion and high-frequency rolloff across the 18 ladder sections (`L = 500 mH`, `C = 0.004 uF`).
+
+4. lc_passband_ripple
+   - Range: 0.0 to 0.75 (Bidirectional LC Ladder Passband Ripple, Default: 0.35)
+   - Taper: Linear inter-stage reflection coupling (DAFx-16 Section 2 & 5).
+   - Function: Introduces the non-unidirectional impedance reflections between adjacent LC stages that give the Hammond C3 chorus its throatier, more vocal coloration compared to an ideal delay line.
+
+5. stereo_rotor_spread
+   - Range: 0.0 to 1.0 (maps to 0 to 180 degrees Left/Right Scanner Rotor Angle Offset, Default: 0.50 = 90 deg Quadrature)
+   - Taper: Linear rotor phase offset.
+   - Function: Offsets the Left and Right capacitive scanner plates around the 16-stack stator circle so Left scans outward while Right scans inward.
+
+6. chorus_to_vibrato
+   - Range: 0.0 to 1.0 (0.0 = Hammond Chorus C1/C2/C3 Mode, 1.0 = Hammond Vibrato V1/V2/V3 Mode; Default: 0.0)
+   - Taper: Linear crossfade modeling the Hammond Chorus/Vibrato switch across resistor Rc (Fig. 1).
+   - Function: Morphs between lush dry+scanner Chorus (C1–C3) and pure scanner Vibrato (V1–V3).

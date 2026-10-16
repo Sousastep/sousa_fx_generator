@@ -1,0 +1,121 @@
+// ============================================================================
+// 05_phaseshaper_supersaw_tri.txt
+// Unix-Style Effect 5: JP-8000 Triangle Modulation & Ripple Supersaw Phaseshaper
+// Implements Kleimola, Lazzarini, Timoney & Valimaki (SMC 2010, Sec 2.4, 3.5, 3.6):
+//   - Mode 0..0.5: Roland JP-8000 Triangle Modulation (Eq. 26: xT = aTM*gtri(phi,2)-1,
+//     y = 2*(xT - ceil(xT) - 0.5)) -> odd-harmonic formant sweeps with dominant 3rd partial.
+//   - Mode 0.5..1.0: Single-oscillator Ripple Supersaw (Eq. 28: sin(2*pi*gb(modm(modm(a1*phi,m1)+a1*phi,m2))))
+//     plus Variable-Slope Tilted Triangle Phase (Eq. 16-17: gvtri) for stereo unison & spectral tilt.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input
+//   in2: Right Audio Input
+//   in3: Tracked Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+//   in4: Optional 1-Bar Phasor [0..1] (modulates supersaw ripple detune if connected)
+// Outlets:
+//   out1: Left Phaseshaped Output
+//   out2: Right Phaseshaped Output
+
+@param({ min: 0.0, max: 1.0 }) shape_mod = 0.55;
+@param({ min: 0.0, max: 1.0 }) ripple_detune = 0.5;
+@param({ min: 0.1, max: 0.9 }) tilt_duty = 0.5;
+@param({ min: 0.0, max: 1.0 }) mode_blend = 0.5;
+
+// Quadrature Hilbert pair for analytic phase extraction
+@state hReX = new FixedSampleArray(4);
+@state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4);
+@state hImY = new FixedSampleArray(4);
+@state hDelayRe = 0.0;
+
+// Internal slow LFO for Supersaw m1 animation (Paper Fig. 13)
+@state lfoPhasor = new phasor();
+
+// Real-valued modulo helper modm[x, m] = x - m * floor(x / m) (Paper Eq. 18)
+function modm(x: number, m: number): number {
+	let safeM = maximum(m, 0.01);
+	return x - safeM * floor(x / safeM);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let barPhasor = in4;
+
+let mono = 0.5 * (xL + xR);
+
+// --- 1. Hilbert Transform Analytic Phase Extraction ---
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+let sRe = mono;
+let yRe0 = cRe0 * (sRe - hReY[0]) + hReX[0]; hReX[0] = sRe; hReY[0] = yRe0; sRe = yRe0;
+let yRe1 = cRe1 * (sRe - hReY[1]) + hReX[1]; hReX[1] = sRe; hReY[1] = yRe1; sRe = yRe1;
+let yRe2 = cRe2 * (sRe - hReY[2]) + hReX[2]; hReX[2] = sRe; hReY[2] = yRe2; sRe = yRe2;
+let yRe3 = cRe3 * (sRe - hReY[3]) + hReX[3]; hReX[3] = sRe; hReY[3] = yRe3;
+let outRe = hDelayRe;
+hDelayRe = yRe3;
+
+let sIm = mono;
+let yIm0 = cIm0 * (sIm - hImY[0]) + hImX[0]; hImX[0] = sIm; hImY[0] = yIm0; sIm = yIm0;
+let yIm1 = cIm1 * (sIm - hImY[1]) + hImX[1]; hImX[1] = sIm; hImY[1] = yIm1; sIm = yIm1;
+let yIm2 = cIm2 * (sIm - hImY[2]) + hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm = yIm2;
+let yIm3 = cIm3 * (sIm - hImY[3]) + hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;
+let outIm = yIm3;
+
+let pol = cartopol(outRe, outIm);
+let instAmp = pol[0];
+let phi = wrap((pol[1] + pi) / (2.0 * pi), 0.0, 1.0);
+
+// --- 2. Variable-Slope Parabolic Triangle Phase svtri (Paper Eq. 16) ---
+let w = clamp(tilt_duty, 0.1, 0.9);
+let aT = 1.0 / (8.0 * maximum(w - w * w, 0.01));
+let gb1 = 2.0 * phi - 1.0;
+let phiShift = wrap(phi - w, 0.0, 1.0);
+let gb2 = 2.0 * phiShift - 1.0;
+let svtri = clamp(aT * (gb1 * gb1 - gb2 * gb2) + 0.5, 0.0, 1.0);
+
+// Blend raw phasor phi with tilted triangle phase based on distance of tilt_duty from 0.5
+let tiltAmt = abs(w - 0.5) * 2.0;
+let basePhiL = linearinterp(tiltAmt, phi, svtri);
+let basePhiR = wrap(basePhiL + 0.025 * ripple_detune, 0.0, 1.0);
+
+// --- 3. Algorithm A: Roland JP-8000 Triangle Modulation (Paper Eq. 26) ---
+// aTM in [0.7, 1.0] controls the V-fold depth of the 3rd-harmonic-dominant odd spectrum
+let aTM = 0.7 + 0.3 * clamp(shape_mod, 0.0, 1.0);
+
+let gtri2L = wrap(2.0 * abs(2.0 * basePhiL - 1.0), 0.0, 1.0);
+let xTL = aTM * gtri2L - 1.0;
+let yTriModL = 2.0 * (xTL - ceil(xTL) - 0.5);
+
+let gtri2R = wrap(2.0 * abs(2.0 * basePhiR - 1.0), 0.0, 1.0);
+let xTR = aTM * gtri2R - 1.0;
+let yTriModR = 2.0 * (xTR - ceil(xTR) - 0.5);
+
+// --- 4. Algorithm B: Ripple Supersaw Simulation (Paper Eq. 28 & Fig. 13) ---
+// y(n) = sin(2*pi * gb{ modm[ modm[a1*phi, m1] + a1*phi, m2 ] })
+let lfoPhase = (barPhasor > 0.0001 && barPhasor < 0.9999) ? barPhasor : lfoPhasor.next(0.35);
+let lfoL = 0.5 + 0.5 * sin(2.0 * pi * lfoPhase);
+let lfoR = 0.5 + 0.5 * cos(2.0 * pi * lfoPhase);
+
+let a1_ss = 1.15 + 1.1 * clamp(shape_mod, 0.0, 1.0); // Paper uses a1 = 1.5
+let m2 = 0.88; // Paper Fig. 12 constant
+let detDepth = clamp(ripple_detune, 0.0, 1.0);
+let m1L = 0.18 + 0.62 * (0.6 * detDepth + 0.4 * detDepth * lfoL);
+let m1R = 0.18 + 0.62 * (0.6 * detDepth + 0.4 * detDepth * lfoR);
+
+let xssL = a1_ss * basePhiL;
+let ripInnerL = modm(modm(xssL, m1L) + xssL, m2);
+let ySuperL = sin(2.0 * pi * (2.0 * ripInnerL - 1.0));
+
+let xssR = a1_ss * basePhiR;
+let ripInnerR = modm(modm(xssR, m1R) + xssR, m2);
+let ySuperR = sin(2.0 * pi * (2.0 * ripInnerR - 1.0));
+
+// --- 5. Blend Triangle Modulation and Ripple Supersaw & Restore Envelope ---
+let envGate = clamp((instAmp - 0.001) * 200.0, 0.0, 1.0);
+let wetL = linearinterp(clamp(mode_blend, 0.0, 1.0), yTriModL, ySuperL) * instAmp * 1.5 * envGate;
+let wetR = linearinterp(clamp(mode_blend, 0.0, 1.0), yTriModR, ySuperR) * instAmp * 1.5 * envGate;
+
+out1 = wetL;
+out2 = wetR;

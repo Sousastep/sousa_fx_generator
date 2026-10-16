@@ -1,0 +1,170 @@
+// ============================================================================
+// amfm_hilbert_transcolorifer.txt
+// Unix-Style Stereo Effect: Hilbert AM/FM Decomposition "OctIFer / TransColorIFer / WahIFer"
+// Implements Goulart, Lazzarini, Timoney & Queiroz (DAFx-15 Paper 30 & DAFx-18 Paper 28):
+// "AM/FM DAFx" (Sec 2 & 3.1-3.5, Eq. 4-13) and "Interpretation and Control in AM/FM-Based
+// Audio Effects" (Sec 2.3 & 3.1-3.3, Eq. 8-11).
+// Decomposes the stereo tuba signal via a 4-stage quadrature Hilbert transform into:
+//   - Instantaneous Amplitude (IA): a(t) = sqrt(x^2 + x_hat^2)
+//   - Instantaneous Frequency (IF): f(t) = d(atan2(x_hat, x))/dt
+// Then processes f(t) in the FM domain (interval scaling r for OctIFer/TransColorIFer,
+// SVF lowpass/wah filtering on the IF signal for WahIFer chirps, and stereo ChorIFer
+// detune) before phase-integrated resynthesis multiplied by the unmodified IA a(t):
+//   x_FX(t) = a(t) * cos(2*pi * integral(f_FX(t) dt))
+// Convolves the transposed FM carrier spectrum with the original AM envelope!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Tracked Pitch f0 in Hz (stabilizes IF floor during silence)
+//   in4: Optional Second Audio/Modulator Input for HybridIFer IF Cross-Synthesis (Eq. 11)
+// Outlets:
+//   out1: Left AM/FM Resynthesized Output
+//   out2: Right AM/FM Resynthesized Output
+
+@param({ min: 0.25, max: 3.0 }) if_ratio_r = 0.5;
+@param({ min: 1.0, max: 1000.0 }) if_filter_hz = 250.0;
+@param({ min: 0.0, max: 1.0 }) wah_if_res = 0.35;
+@param({ min: 0.0, max: 1.0 }) chorifer_detune = 0.2;
+@param({ min: 0.0, max: 1.0 }) hybrid_in4_mix = 0.0;
+@param({ min: 0.0, max: 1.0 }) mix = 0.85;
+
+// Stereo 4-stage IIR Hilbert transform states (Left, Right, and Hybrid in4)
+@state lReX = new FixedSampleArray(4); @state lReY = new FixedSampleArray(4);
+@state lImX = new FixedSampleArray(4); @state lImY = new FixedSampleArray(4);
+@state lDelRe = 0.0;
+@state prevThetaL = 0.0;
+
+@state rReX = new FixedSampleArray(4); @state rReY = new FixedSampleArray(4);
+@state rImX = new FixedSampleArray(4); @state rImY = new FixedSampleArray(4);
+@state rDelRe = 0.0;
+@state prevThetaR = 0.0;
+
+@state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
+@state hDelRe = 0.0;
+@state prevThetaH = 0.0;
+
+// IF domain filters (DAFx-18 Sec 3.1 lowpass IF smoothing & DAFx-15 Sec 3.5 WahIFer)
+@state ifSvfL = new svf();
+@state ifSvfR = new svf();
+
+// Resynthesis phase accumulators (Left main, Right main, plus ChorIFer detuned voices)
+@state resPhL = 0.0;
+@state resPhR = 0.0;
+@state chorPhL = 0.0;
+@state chorPhR = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchHint = (in3 > 20.0 && in3 < 1000.0) ? in3 : 58.27;
+let xHyb = in4;
+
+let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+// --- 1. Left Channel AM/FM Hilbert Decomposition ---
+let reL = xL;
+let t = cR0 * (reL + lReY[0]) - lReX[0]; lReX[0] = reL; lReY[0] = t; reL = t;
+t = cR1 * (reL + lReY[1]) - lReX[1]; lReX[1] = reL; lReY[1] = t; reL = t;
+t = cR2 * (reL + lReY[2]) - lReX[2]; lReX[2] = reL; lReY[2] = t; reL = t;
+t = cR3 * (reL + lReY[3]) - lReX[3]; lReX[3] = reL; lReY[3] = t; reL = t;
+let sReL = lDelRe;
+lDelRe = reL;
+
+let imL = xL;
+t = cI0 * (imL + lImY[0]) - lImX[0]; lImX[0] = imL; lImY[0] = t; imL = t;
+t = cI1 * (imL + lImY[1]) - lImX[1]; lImX[1] = imL; lImY[1] = t; imL = t;
+t = cI2 * (imL + lImY[2]) - lImX[2]; lImX[2] = imL; lImY[2] = t; imL = t;
+t = cI3 * (imL + lImY[3]) - lImX[3]; lImX[3] = imL; lImY[3] = t; imL = t;
+let sImL = imL;
+
+let iaL = sqrt(sReL * sReL + sImL * sImL);
+let thetaL = atan2(sImL, sReL);
+let dThetaL = phasewrap(thetaL - prevThetaL);
+prevThetaL = thetaL;
+// Suppress IF spikes during near-zero envelope instants (DAFx-18 Sec 3, Fig. 5-6)
+let rawIfL = (iaL > 0.001) ? clamp((dThetaL * sr) / (2.0 * pi), 15.0, 3500.0) : pitchHint;
+
+// --- 2. Right Channel AM/FM Hilbert Decomposition ---
+let reR = xR;
+t = cR0 * (reR + rReY[0]) - rReX[0]; rReX[0] = reR; rReY[0] = t; reR = t;
+t = cR1 * (reR + rReY[1]) - rReX[1]; rReX[1] = reR; rReY[1] = t; reR = t;
+t = cR2 * (reR + rReY[2]) - rReX[2]; rReX[2] = reR; rReY[2] = t; reR = t;
+t = cR3 * (reR + rReY[3]) - rReX[3]; rReX[3] = reR; rReY[3] = t; reR = t;
+let sReR = rDelRe;
+rDelRe = reR;
+
+let imR = xR;
+t = cI0 * (imR + rImY[0]) - rImX[0]; rImX[0] = imR; rImY[0] = t; imR = t;
+t = cI1 * (imR + rImY[1]) - rImX[1]; rImX[1] = imR; rImY[1] = t; imR = t;
+t = cI2 * (imR + rImY[2]) - rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
+t = cI3 * (imR + rImY[3]) - rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
+let sImR = imR;
+
+let iaR = sqrt(sReR * sReR + sImR * sImR);
+let thetaR = atan2(sImR, sReR);
+let dThetaR = phasewrap(thetaR - prevThetaR);
+prevThetaR = thetaR;
+let rawIfR = (iaR > 0.001) ? clamp((dThetaR * sr) / (2.0 * pi), 15.0, 3500.0) : pitchHint;
+
+// --- 3. Optional HybridIFer Second Input Decomposition (DAFx-15 Sec 3.3, Eq. 11) ---
+let reH = xHyb;
+t = cR0 * (reH + hReY[0]) - hReX[0]; hReX[0] = reH; hReY[0] = t; reH = t;
+t = cR1 * (reH + hReY[1]) - hReX[1]; hReX[1] = reH; hReY[1] = t; reH = t;
+t = cR2 * (reH + hReY[2]) - hReX[2]; hReX[2] = reH; hReY[2] = t; reH = t;
+t = cR3 * (reH + hReY[3]) - hReX[3]; hReX[3] = reH; hReY[3] = t; reH = t;
+let sReH = hDelRe;
+hDelRe = reH;
+
+let imH = xHyb;
+t = cI0 * (imH + hImY[0]) - hImX[0]; hImX[0] = imH; hImY[0] = t; imH = t;
+t = cI1 * (imH + hImY[1]) - hImX[1]; hImX[1] = imH; hImY[1] = t; imH = t;
+t = cI2 * (imH + hImY[2]) - hImX[2]; hImX[2] = imH; hImY[2] = t; imH = t;
+t = cI3 * (imH + hImY[3]) - hImX[3]; hImX[3] = imH; hImY[3] = t; imH = t;
+let sImH = imH;
+
+let iaH = sqrt(sReH * sReH + sImH * sImH);
+let thetaH = atan2(sImH, sReH);
+let dThetaH = phasewrap(thetaH - prevThetaH);
+prevThetaH = thetaH;
+let rawIfH = (iaH > 0.0005) ? clamp((dThetaH * sr) / (2.0 * pi), 15.0, 3500.0) : rawIfL;
+
+let pHyb = clamp(hybrid_in4_mix, 0.0, 1.0);
+let hybIfL = linearinterp(pHyb, rawIfL, rawIfH);
+let hybIfR = linearinterp(pHyb, rawIfR, rawIfH);
+
+// --- 4. IF Domain Filtering (WahIFer / Lowpass Chirp Smoothing, DAFx-15 Eq. 13 & DAFx-18 Sec 3.1) ---
+let filtCut = clamp(if_filter_hz, 1.0, 1000.0);
+let wahQ = 0.5 + clamp(wah_if_res, 0.0, 1.0) * 0.42;
+let svfOutL = ifSvfL.next(hybIfL, filtCut, wahQ);
+let svfOutR = ifSvfR.next(hybIfR, filtCut, wahQ);
+
+// Blend LP-smoothed IF with resonant BP-modulated IF (WahIFer)
+let filtIfL = svfOutL[0] + clamp(wah_if_res, 0.0, 1.0) * 0.8 * svfOutL[2];
+let filtIfR = svfOutR[0] + clamp(wah_if_res, 0.0, 1.0) * 0.8 * svfOutR[2];
+
+// --- 5. OctIFer / TransColorIFer Scaling & ChorIFer Detuned Resynthesis (Eq. 10 & 12) ---
+let rScale = clamp(if_ratio_r, 0.25, 3.0);
+let detAmt = pow(clamp(chorifer_detune, 0.0, 1.0), 1.4) * 0.04; // up to 4% IF detune (Sec 3.4)
+
+let fFxL = clamp(filtIfL * rScale, 10.0, sr * 0.45);
+let fFxR = clamp(filtIfR * rScale, 10.0, sr * 0.45);
+
+resPhL = wrap(resPhL + fFxL / sr, 0.0, 1.0);
+resPhR = wrap(resPhR + fFxR / sr, 0.0, 1.0);
+chorPhL = wrap(chorPhL + (fFxL * (1.0 + detAmt)) / sr, 0.0, 1.0);
+chorPhR = wrap(chorPhR + (fFxR * (1.0 - detAmt)) / sr, 0.0, 1.0);
+
+let cMix = clamp(chorifer_detune, 0.0, 1.0) * 0.5;
+let carrierL = (1.0 - cMix) * cos(2.0 * pi * resPhL) + cMix * cos(2.0 * pi * chorPhL);
+let carrierR = (1.0 - cMix) * cos(2.0 * pi * resPhR) + cMix * cos(2.0 * pi * chorPhR);
+
+// Multiply resynthesized FM carrier by unmodified Instantaneous Amplitude a(t) (Eq. 10)
+let wetL = iaL * carrierL;
+let wetR = iaR * carrierR;
+
+let m = clamp(mix, 0.0, 1.0);
+out1 = linearinterp(m, sReL, wetL);
+out2 = linearinterp(m, sReR, wetR);

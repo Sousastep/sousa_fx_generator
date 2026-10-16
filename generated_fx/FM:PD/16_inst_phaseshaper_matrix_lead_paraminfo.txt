@@ -1,0 +1,58 @@
+================================================================================
+16_inst_phaseshaper_matrix_lead — Parameter Information
+================================================================================
+
+OVERVIEW
+A full phaseshaping synthesizer instrument driven by the tuba's analytic phase phi(t), uniting all four oscillator algorithms from Kleimola, Lazzarini, Timoney, and Välimäki (SMC 2010):
+- Voice 1 (Joystick Y Down): Variable-Slope Parabolic Triangle Phase gvtri -> Sinusoid (Eq. 16–17), producing vocal formant peaks where every 4th harmonic outside the formant is suppressed.
+- Voice 2 (Joystick Y Center): PolyBLEP Single-Oscillator Hard Sync (Eq. 22) layered with Roland JP-8000 Triangle Modulation (Eq. 26).
+- Voice 3 (Joystick Y Up): Roland JP-8000 Ripple Supersaw (Eq. 28) with quadrature stereo m1 modulation.
+Includes a phase-unwrapped sub-octave foundation cos(theta/2) so every voice stays anchored to massive dubstep sub-bass.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Tuba Audio Input (Left / Right)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
+- in4: 1-Bar Audio-Rate Phasor [0..1] (drives rhythmic sync-ratio sweeps and supersaw LFO; internal 0.5 Hz fallback if unpatched)
+- out1 / out2: Stereo Phaseshaper Matrix Instrument Output
+
+PARAMETERS (8)
+
+1. joy_x_sync_sweep (Joystick X-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Exponential ratio taper (2.5 * 3.2^x, spanning 0.78x Minimoog waveslice at -1.0 to 8.0x screaming hard-sync formant at +1.0).
+   - Function: Sweeps the master fractional-period multiplier a1 across all three phaseshaper engines simultaneously.
+
+2. joy_y_morph_algo (Joystick Y-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Three-point continuous crossfade (-1.0 = Tilted-Triangle Sinusoidal Formant, 0.0 = PolyBLEP Hard Sync + JP-8000 Triangle Mod, +1.0 = Ripple Supersaw Unison).
+   - Function: Morphs the phaseshaping topology in real time while playing.
+
+3. tilt_duty_w
+   - Range: 0.10 to 0.90 (Duty Width w of Parabolic Triangle Phase svtri, Eq. 16)
+   - Taper: Linear duty cycle centered at 0.50.
+   - Function: Tilts the up-ramp vs. down-ramp slope of the extracted phase cycle, shifting the spectral tilt and hollow formant notches.
+
+4. supersaw_ripple
+   - Range: 0.0 to 1.0 (maps to ripple modulus m1 in [0.20, 0.75] with m2 = 0.88)
+   - Taper: Linear ripple depth.
+   - Function: Sets the detuned sawtooth density and stereo chorus spread of the Voice 3 Ripple Supersaw generator.
+
+5. rhythm_subdiv
+   - Range: 1 to 16 cycles per bar (Quantized in 16 integer steps)
+   - Taper: Stepped integer multiplier of the 1-bar phasor.
+   - Function: Sets the rhythmic subdivision rate of the synced phase-ratio envelope.
+
+6. rhythm_depth
+   - Range: 0.0 to 1.0 (adds 0.0 to +5.0 to the sync ratio a1 on each beat)
+   - Taper: Asymmetric fast-attack triangle envelope (duty = 0.20, power 1.5).
+   - Function: Whips the phaseshaper sync ratio a1 rhythmically in sync with the 1-bar phasor.
+
+7. sub_lock_mix
+   - Range: 0.0 to 1.0 (0% to 100% Phase-Divided Sub-Octave cos(theta / 2))
+   - Taper: Linear blend with automatic headroom compensation on the upper lead voices.
+   - Function: Mixes in the zero-drift unwrapped sub-octave sine wave underneath the phaseshaped lead.
+
+8. pre_sine_iso
+   - Range: 0.0 to 1.0 (0% Raw Tuba into Hilbert to 100% SVF-Isolated Fundamental into Hilbert)
+   - Taper: Linear crossfade with Q scaling.
+   - Function: Controls the purity of the analytic phasor phi(t). At 1.0, phi(t) is a glass-smooth ramp; lower values let residual brass overtones inject organic phase grain.

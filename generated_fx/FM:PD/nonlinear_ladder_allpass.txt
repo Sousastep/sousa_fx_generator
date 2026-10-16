@@ -1,0 +1,161 @@
+// ============================================================================
+// nonlinear_ladder_allpass.txt
+// Unix-Style Stereo Effect: Passive Energy-Conserving Nonlinear Allpass Ladder
+// Implements Julius O. Smith & Romain Michon (DAFx-11, Paper 38_e):
+// "Nonlinear Allpass Ladder Filters in FAUST" (Sections 2, 3 & 4, Fig. 2-5).
+// Uses an N-stage Normalized Ladder Filter (NLF) allpass cascade where each
+// stage's reflection angle theta_k(n) is modulated directly by the instantaneous
+// signal amplitude:
+//   theta_k(n) = theta_0 + g * x(n)
+//   c_k(n) = cos(theta_k(n)),   s_k(n) = sin(theta_k(n))
+// Because the 2x2 planar rotation matrix [s, c; c, -s] is strictly orthogonal
+// (c^2 + s^2 = 1) at EVERY sample regardless of how violently theta_k(n) changes,
+// the filter is 100% passive and energy-conserving! Produces lossless nonlinear
+// spectral expansion and gong/cymbal-like modal coupling when feedback is added.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Tracked Pitch f0 in Hz (if > 20 Hz, tunes the waveguide loop delay)
+//   in4: Optional Sidechain Modulator (if patched, drives theta(n) alongside input)
+// Outlets:
+//   out1: Left Nonlinear Allpass Ladder Output
+//   out2: Right Nonlinear Allpass Ladder Output
+
+@param({ min: 0.0, max: 3.14159 }) nl_drive_g = 1.15;
+@param({ min: -1.4, max: 1.4 }) base_angle = -0.35;
+@param({ min: 1.0, max: 12.0 }) ladder_order = 8.0;
+@param({ min: -0.92, max: 0.92 }) loop_feedback = 0.65;
+@param({ min: 0.0, max: 1.0 }) damp_bright = 0.75;
+@param({ min: 0.0, max: 1.0 }) stereo_asym = 0.25;
+
+// 12 Normalized Ladder Allpass state cells per channel
+@state stateL = new FixedSampleArray(12);
+@state stateR = new FixedSampleArray(12);
+
+// Short pitch-tracked waveguide loop delay (2048 samples per channel, Paper Sec 4.4)
+@state wgBufL = new FixedSampleArray(2048);
+@state wgBufR = new FixedSampleArray(2048);
+@state writeIdx: Int = 0;
+
+// Loop damping one-pole lowpass + DC blockers
+@state dampLpL = new onepole();
+@state dampLpR = new onepole();
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+// Fallback ZC pitch tracker & smoothing
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothG = 1.15;
+@state smoothBase = -0.35;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let sideMod = in4;
+
+// --- 1. Pitch Conditioning for Waveguide Loop Tuning (Paper Sec 4.4) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+smoothG += (clamp(nl_drive_g, 0.0, 3.14159) - smoothG) * slew;
+smoothBase += (clamp(base_angle, -1.4, 1.4) - smoothBase) * slew;
+
+// --- 2. Read Pitch-Tracked Waveguide Feedback Loop ---
+let delSamps = clamp(sr / (2.0 * f0), 8.0, 2040.0);
+let rPosL = writeIdx - delSamps;
+while (rPosL < 0.0) { rPosL += 2048.0; }
+let i0L: Int = floor(rPosL);
+let frL = rPosL - i0L;
+let fbDelayedL = linearinterp(frL, wgBufL[i0L & 2047], wgBufL[(i0L + 1) & 2047]);
+
+let asym = clamp(stereo_asym, 0.0, 1.0);
+let rPosR = writeIdx - clamp(delSamps * (1.0 + 0.03 * asym), 8.0, 2040.0);
+while (rPosR < 0.0) { rPosR += 2048.0; }
+let i0R: Int = floor(rPosR);
+let frR = rPosR - i0R;
+let fbDelayedR = linearinterp(frR, wgBufR[i0R & 2047], wgBufR[(i0R + 1) & 2047]);
+
+let dampHz = 400.0 * pow(30.0, clamp(damp_bright, 0.0, 1.0));
+let loopL = dampLpL.next(fbDelayedL, dampHz);
+let loopR = dampLpR.next(fbDelayedR, dampHz);
+
+let fbGain = clamp(loop_feedback, -0.92, 0.92);
+let uL = xL + fbGain * loopL;
+let uR = xR + fbGain * loopR;
+
+// --- 3. Passive Normalized Ladder Filter (NLF) Nonlinear Allpass Cascade ---
+// Paper Fig. 2 & 3: Orthogonal rotation [s, c; c, -s] with c = cos(theta), s = sin(theta)
+// Guaranteeing |y|^2 + |state_next|^2 == |u|^2 + |state_prev|^2 (Exact energy conservation!)
+let ordPos = clamp(ladder_order, 1.0, 12.0);
+let numFull: Int = floor(ordPos);
+let frac = ordPos - numFull;
+
+let sigL = uL;
+let sigR = uR;
+let prevStageL = uL;
+let prevStageR = uR;
+
+let modInL = uL + sideMod;
+let modInR = uR - sideMod;
+
+for (let k: Int = 0; k < 12; k++) {
+	// Slight harmonic stagger across stages for richer modal spreading
+	let stageScale = 1.0 - 0.04 * k;
+	let thetaL = smoothBase + smoothG * stageScale * modInL;
+	let thetaR = (smoothBase + 0.2 * asym) - smoothG * stageScale * modInR;
+
+	let cL = cos(thetaL);
+	let sL = sin(thetaL);
+	let memL = stateL[k];
+	// Orthogonal planar rotation:
+	let yL = sL * sigL + cL * memL;
+	stateL[k] = cL * sigL - sL * memL;
+
+	let cR = cos(thetaR);
+	let sR = sin(thetaR);
+	let memR = stateR[k];
+	let yR = sR * sigR + cR * memR;
+	stateR[k] = cR * sigR - sR * memR;
+
+	if (k < numFull) {
+		prevStageL = sigL;
+		prevStageR = sigR;
+		sigL = yL;
+		sigR = yR;
+	} else if (k == numFull) {
+		sigL = linearinterp(frac, sigL, yL);
+		sigR = linearinterp(frac, sigR, yR);
+	}
+}
+
+// Soft passive termination & write into waveguide delay line
+wgBufL[writeIdx] = tanh(sigL);
+wgBufR[writeIdx] = tanh(sigR);
+writeIdx = (writeIdx + 1) & 2047;
+
+// DC blocker
+let outL = sigL - dcXL + 0.996 * dcYL;
+dcXL = sigL; dcYL = outL;
+let outR = sigR - dcXR + 0.996 * dcYR;
+dcXR = sigR; dcYR = outR;
+
+out1 = outL;
+out2 = outR;

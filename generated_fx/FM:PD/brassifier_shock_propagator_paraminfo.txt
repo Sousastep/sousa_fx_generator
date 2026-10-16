@@ -1,0 +1,44 @@
+================================================================================
+brassifier_shock_propagator — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the Nonlinear Acoustic Wave Steepening & Amplitude-Dependent Propagation Delay ("Brassifier") from Charles M. Cooper and Jonathan S. Abel (DAFx-10 Paper P77, Sections 2.1, 3.2, 4.1–4.2 & 5.1–5.2, Eq. 2, 5, 12, Fig. 5–9). Inside a brass instrument bore at fortissimo levels (>140 dB SPL), the speed of sound v(x,t) = c0 + beta * p(x,t)/P0 increases with instantaneous pressure, causing high-pressure peaks to travel faster than troughs and sharpening smooth waveforms into sawtooth-like shock waves ("cuivré" brassiness). Combines both the Equalized Brassifier (Fig. 7: pre-emphasis bore filter c(z) + complementary bell high-pass transmission filter q(z)) and the Sidechain Brassifier (Fig. 8: lowpass-isolated bore pressure modulating a cubic-interpolated variable delay line), allowing even soft, warm tuba playing to erupt into hyper-brassy shock fronts.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Optional Tracked Fundamental Pitch f0 in Hz (scales maximum shock excursion proportionally to the note period)
+- in4: Optional External Sidechain Pressure Signal (adds to the internal bore pressure modulator)
+- out1 / out2: Stereo Brassified / Shock-Steepened Output
+
+PARAMETERS (6)
+
+1. shock_drive_beta
+   - Range: 0.0 to 1.0 (Nonlinearity Coefficient beta, Default: 0.65)
+   - Taper: Power curve (x^1.25).
+   - Function: Controls how much faster high-pressure peaks propagate relative to low-pressure troughs (DAFx-10 Eq. 2 & 12). Following Section 5.1, late-arriving samples are not discarded so high settings transition smoothly from natural acoustic shock steepening into intense multi-carrier Bessel PM sidebands.
+
+2. bore_length_m
+   - Range: 0.5 to 12.0 meters (Simulated Nonlinear Acoustic Bore Path Length, Default: 4.5 m, matching a BBb/CC tuba)
+   - Taper: Linear acoustic length in meters (converted to samples via c0 = 343 m/s).
+   - Function: Sets the nominal propagation delay d0 and scales cumulative wave steepening over distance (DAFx-10 Section 2.1).
+
+3. sidechain_lp_hz
+   - Range: 80.0 to 1200.0 Hz (Sidechain Bore Pressure Lowpass Cutoff, Default: 280.0 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the cutoff of the 2-stage lowpass filter in the sidechain path (DAFx-10 Fig. 8) so the dominant low-frequency standing wave inside the tuba bore cleanly phase-modulates the upper harmonics without intermodulation hash.
+
+4. bell_eq_comp
+   - Range: 0.0 to 1.0 (Complementary Bore Pre-Emphasis / Bell High-Frequency Equalization, Default: 0.70)
+   - Taper: Linear EQ depth (DAFx-10 Fig. 7).
+   - Function: Boosts low frequencies entering the bore delay line c(z) and applies the inverse high-frequency emphasis q(z) at the output, simulating frequency-selective transmission through the flared tuba bell while leaving quiet passages uncolored.
+
+5. bi_waveguide_fb
+   - Range: 0.0 to 1.0 (Bidirectional Backward-Wave Bore Reflection Feedback, Default: 0.25)
+   - Taper: Linear feedback gain (scaled to 0.0–0.55 of lowpass bell reflection).
+   - Function: Implements the bidirectional waveguide coupling of DAFx-10 Section 4.1–4.2 (Fig. 5), where low frequencies reflected from the bell sum with the outgoing pressure wave to further enrich bore brassiness.
+
+6. stereo_bore_diff
+   - Range: 0.0 to 1.0 (maps to +/- 18% Left/Right Bore Length Offset)
+   - Taper: Linear stereo path-length difference.
+   - Function: Creates a wider stereo image by simulating slightly different nonlinear tube lengths on Left and Right channels.

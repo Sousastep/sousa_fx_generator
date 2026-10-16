@@ -1,0 +1,36 @@
+================================================================================
+11_bode_ssb_freq_shifter — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements a stereo Bode / Single-Sideband (SSB) Frequency Shifter using dual 4-stage quadrature IIR Hilbert transforms (Approach 3c from "Novel Distortion Approaches for Live Tuba"). Unlike pitch shifting (which scales frequencies by a ratio), frequency shifting offsets every partial by a fixed number of Hz, turning harmonic brass overtones into either lush, swirling "Reese bass" barber-pole phasers (at 0.5–8 Hz) or clangorous, through-zero metallic dubstep textures (at 20–500 Hz). Includes pitch-relative scaling so the inharmonic character can stay constant across the tuba's register.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Left / Right)
+- in3: Optional Tracked Pitch in Hz (from fluid.pitch~; scales the frequency shift relative to a 55 Hz A1 reference when f0_track_amt > 0)
+- out1 / out2: Stereo SSB Frequency-Shifted Output
+
+PARAMETERS (4)
+
+1. shift_hz
+   - Range: -500.0 to +500.0 Hz
+   - Taper: Cubic center-weighted taper (500 * (0.25*x + 0.75*x^3)) providing fine sub-Hertz resolution near 0 Hz for slow barber-pole Reese detuning while reaching +/- 500 Hz at the extremes.
+   - Function: Sets the base frequency shift in Hz. Setting shift_hz near -f0 (e.g., -55 Hz) folds the fundamental to DC (removed by the internal 12 Hz highpass) and inverts lower sidebands for "through-zero" metallic gnarl.
+
+2. f0_track_amt
+   - Range: 0.0 to 1.0 (0% Fixed Hz Shift to 100% Pitch-Proportional Shift)
+   - Taper: Linear crossfade between fixed Hz and f0-scaled Hz (normalized to 55 Hz).
+   - Function: When set toward 1.0 with fluid.pitch~ connected to in3, the shift amount becomes a fixed fraction of the played pitch (e.g., -0.5 * f0), keeping the exact type of metallic inharmonicity consistent across all notes.
+
+3. up_down_stereo
+   - Range: -1.0 to +1.0
+   - Taper: Three-state continuous stereo morph:
+     * -1.0: Both Left & Right output the Lower sideband (Down-shift)
+     *  0.0: Stereo Split — Left outputs Upper sideband (+Hz), Right outputs Lower sideband (-Hz) for massive stereo Reese width
+     * +1.0: Both Left & Right output the Upper sideband (Up-shift)
+   - Function: Controls the stereo routing of the upper and lower single-sideband outputs.
+
+4. mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet)
+   - Taper: Linear crossfade (50% mix with small shift_hz produces endless rising/falling barber-pole phaser sweeps).
+   - Function: Blends dry and frequency-shifted signals.

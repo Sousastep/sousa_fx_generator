@@ -1,0 +1,145 @@
+// ============================================================================
+// chorus_velvet_noise_ensemble.txt
+// Standalone Stereo Chorus Effect: Logarithmically-Spaced Segmented Velvet-Noise
+// Decorrelation & Micro-Modulated Tap Ensemble
+// Implements Benoit Alary, Archontis Politis & Vesa Valimaki (DAFx-17, Paper 96):
+// "Velvet-Noise Decorrelator" (Sections 2.1, 2.2 & 3.1-3.3, Eq. 1-12, Fig. 1-4).
+// Convolves the stereo input with two mutually orthogonal, sparse {-1, 0, +1}
+// Velvet-Noise Sequences (VNS) concentrated at the beginning of a <30 ms delay
+// buffer via Logarithmic Impulse Distribution (Sec 3.3, Eq. 11-12, Fig. 4) with
+// a 4-Segment Staircase Decay Envelope (Sec 3.2, Eq. 10, Fig. 3) to achieve
+// maximum stereo widening (low Interaural Cross-Correlation) WITHOUT smearing
+// sharp tuba tongue transients or coloring the spectrum with regular comb notches!
+// Extends the static VND into a lush stereo ensemble by gently modulating the
+// velvet impulse tap locations with quadrature LFOs (`tap_shimmer_depth`).
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Transient Ducking Envelope [0..1] (tightens decay on hard attacks)
+//   in4: Optional 1-Bar Phasor [0..1]
+// Outlets:
+//   out1: Left Velvet-Noise Ensemble Chorus Output
+//   out2: Right Velvet-Noise Ensemble Chorus Output
+
+@param({ min: 5.0, max: 35.0 }) sequence_length_ms = 22.0;
+@param({ min: 0.0, max: 1.0 }) log_tap_concentration = 0.65;
+@param({ min: 3.0, max: 24.0 }) segment_decay_db = 12.0;
+@param({ min: 0.0, max: 1.0 }) tap_shimmer_depth = 0.45;
+@param({ min: 0.1, max: 4.0 }) shimmer_rate_hz = 0.75;
+@param({ min: 0.0, max: 1.0 }) stereo_decorrelation = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.55;
+
+// Stereo circular delay buffers (2048 samples -> up to 42.6 ms at 48 kHz)
+@state vndBufL = new FixedSampleArray(2048);
+@state vndBufR = new FixedSampleArray(2048);
+@state writeIdx: Int = 0;
+
+@state lfoPh1 = new phasor();
+@state lfoPh2 = new phasor();
+@state prevBarIn = 0.0;
+
+function readDelay2k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
+	let d = clamp(delSamps, 1.0, 2042.0);
+	let readPos = wIdx - d;
+	while (readPos < 0.0) {
+		readPos += 2048.0;
+	}
+	let idx0: Int = floor(readPos);
+	let frac = readPos - idx0;
+	let i_m1: Int = (idx0 - 1 + 2048) & 2047;
+	let i_0: Int  = idx0 & 2047;
+	let i_1: Int  = (idx0 + 1) & 2047;
+	let i_2: Int  = (idx0 + 2) & 4095 & 2047;
+	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let transEnv = clamp(in3, 0.0, 1.0);
+let barIn = in4;
+
+vndBufL[writeIdx] = xL;
+vndBufR[writeIdx] = xR;
+
+// --- 1. Total Velvet Sequence Length Ls & 4-Segment Decay Gains (DAFx-17 Sec 3.1-3.2, Eq. 7, 10) ---
+let lenMs = clamp(sequence_length_ms, 5.0, 35.0) * (1.0 - 0.35 * transEnv);
+let totalSamps = clamp(mstosamps(lenMs), 64.0, 1950.0);
+
+let decayDb = clamp(segment_decay_db, 3.0, 24.0);
+// 4 Staircase Segments (I = 4, Sec 3.2 Fig. 3): s_0 = 1.0, s_1, s_2, s_3
+let s0 = 1.0;
+let s1 = dbtoa(-decayDb * 0.333);
+let s2 = dbtoa(-decayDb * 0.667);
+let s3 = dbtoa(-decayDb);
+
+// --- 2. Quadrature Shimmer LFOs for Velvet Tap Micro-Modulation ---
+let rate = clamp(shimmer_rate_hz, 0.1, 4.0);
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+
+let ph1 = barActive ? wrap(barIn, 0.0, 1.0) : lfoPh1.next(rate);
+let ph2 = lfoPh2.next(rate * 1.31);
+let shimSamps = clamp(tap_shimmer_depth, 0.0, 1.0) * mstosamps(1.25);
+
+let logConc = clamp(log_tap_concentration, 0.0, 1.0);
+let stDecorr = clamp(stereo_decorrelation, 0.0, 1.0);
+
+// --- 3. 16-Tap Sparse Velvet-Noise Convolution (4 Segments x 4 Impulses, Eq. 4, 10, 11-12) ---
+// Pre-computed orthogonal Golden-Ratio / Prime jittered offsets r2[m] in (0, 1) and balanced signs s(m) in {-1, +1}
+let accSeg0L = 0.0; let accSeg1L = 0.0; let accSeg2L = 0.0; let accSeg3L = 0.0;
+let accSeg0R = 0.0; let accSeg1R = 0.0; let accSeg2R = 0.0; let accSeg3R = 0.0;
+
+for (let m: Int = 0; m < 16; m++) {
+	// Normalized impulse index u in (0.04 .. 0.98)
+	let r2L = wrap((m + 1) * 0.6180339887, 0.1, 0.9);
+	let r2R = wrap((m + 1) * 0.3819660112 + 0.23, 0.1, 0.9);
+
+	let uLinL = (m + r2L) / 16.0;
+	let uLinR = (m + linearinterp(stDecorr, r2L, r2R)) / 16.0;
+
+	// Sec 3.3 Eq. 11-12: Logarithmic impulse distribution concentrates taps near beginning
+	// of sequence so early impulses thicken without smearing transients!
+	let uLogL = pow(uLinL, 1.85);
+	let uLogR = pow(uLinR, 1.85);
+
+	let normPosL = linearinterp(logConc, uLinL, uLogL);
+	let normPosR = linearinterp(logConc, uLinR, uLogR);
+
+	// Subtle per-tap quadrature shimmer
+	let tapLfoL = sin(2.0 * pi * ph1 + m * 0.785398) * shimSamps;
+	let tapLfoR = cos(2.0 * pi * ph2 + m * 0.785398) * shimSamps;
+
+	let delL = clamp(2.0 + normPosL * totalSamps + tapLfoL, 2.0, 2040.0);
+	let delR = clamp(2.0 + normPosR * totalSamps + tapLfoR, 2.0, 2040.0);
+
+	// Balanced pseudorandom signs s(m) in {-1, +1} (orthogonal between L and R when stDecorr = 1)
+	let signL = (((m * 7 + 3) & 2) == 0) ? 1.0 : -1.0;
+	let signROrtho = (((m * 5 + 1) & 2) == 0) ? 1.0 : -1.0;
+	let signR = (stDecorr > 0.5) ? signROrtho : signL;
+
+	let valL = signL * readDelay2k(vndBufL, writeIdx, delL);
+	let valR = signR * readDelay2k(vndBufR, writeIdx, delR);
+
+	if (m < 4) {
+		accSeg0L += valL; accSeg0R += valR;
+	} else if (m < 8) {
+		accSeg1L += valL; accSeg1R += valR;
+	} else if (m < 12) {
+		accSeg2L += valL; accSeg2R += valR;
+	} else {
+		accSeg3L += valL; accSeg3R += valR;
+	}
+}
+
+writeIdx = (writeIdx + 1) & 2047;
+
+// Eq. 10: Segmented Velvet-Noise Convolution sum_i s_i * (sum x[n - k_+[m]] - sum x[n - k_-[m]])
+let normEnergy = 1.0 / sqrt(4.0 * (s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3));
+let vndOutL = (s0 * accSeg0L + s1 * accSeg1L + s2 * accSeg2L + s3 * accSeg3L) * normEnergy;
+let vndOutR = (s0 * accSeg0R + s1 * accSeg1R + s2 * accSeg2R + s3 * accSeg3R) * normEnergy;
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = cos(mix * 0.5 * pi) * xL + sin(mix * 0.5 * pi) * vndOutL;
+out2 = cos(mix * 0.5 * pi) * xR + sin(mix * 0.5 * pi) * vndOutR;

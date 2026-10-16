@@ -1,0 +1,46 @@
+================================================================================
+even_odd_harmonic_comb_splitter — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the Unity-Gain Normalized Universal Comb Filter (UCF) Even/Odd Harmonic Separator and Intermodulation-Free Distortion Engine from DAFx-21 Paper 2 (Sections 2.3 & 4.1–4.5, Eq. 1–18, Fig. 4–5). By tuning a canonical single-delay-line Universal Comb Filter to twice the tuba's fundamental frequency (delay M = fs / (2 * f0)), the sum tap b0*(xh[n] + xh[n-M]) isolates all EVEN harmonics (2*f0, 4*f0, 6*f0...), while the difference tap b0*(xh[n] - xh[n-M]) shifts the comb peaks by pi/M to isolate all ODD harmonics (f0, 3*f0, 5*f0...). Outputs both a differentially distorted stereo mix on out1/out2 AND the isolated Odd (out3) and Even (out4) harmonic stems so you can patch completely different FM/PD/comb chains onto the tuba's odd and even partials!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps odd/even balance when tilt_wobble > 0)
+- out1 / out2: Stereo Main Output (Differentially Driven Odd/Even Harmonic Mix)
+- out3: Isolated Odd Harmonics Stem (f0, 3*f0, 5*f0... for external Unix chaining)
+- out4: Isolated Even Harmonics Stem (2*f0, 4*f0, 6*f0... for external Unix chaining)
+
+PARAMETERS (6)
+
+1. comb_selectivity_q
+   - Range: 2.0 to 35.0 (Universal Comb Quality Factor Q, Default: 8.0)
+   - Taper: Linear Q mapped via DAFx-21 Eq. 10 & 14: beta = tan(pi / (2*Q)), a_M = (1 - beta)/(1 + beta), b_0 = beta/(1 + beta).
+   - Function: Controls the 3-dB tooth width of the harmonic comb while keeping peak gain strictly normalized to 0 dB (1.0). Moderate Q (4–10) tracks fast pitch slurs effortlessly; high Q (15–35) locks razor-thin comb teeth onto sustained notes.
+
+2. odd_even_balance
+   - Range: -1.0 to +1.0 (-1.0 = 100% Odd Harmonics Hollow Square/Clarinet Tone, 0.0 = Balanced, +1.0 = 100% Even Harmonics Octave-Doubled Tone)
+   - Taper: Linear crossfade centered at 0.0.
+   - Function: Morphs the main stereo output between the Odd-Harmonic bus and Even-Harmonic bus.
+
+3. odd_drive_db
+   - Range: 0.0 to 24.0 dB (Odd-Harmonic Bus Saturation Drive, Default: 6.0 dB)
+   - Taper: Logarithmic dB-to-linear gain into level-compensated tanh saturation.
+   - Function: Saturates the Odd-Harmonic bus (f0, 3*f0, 5*f0...) without intermodulating against the even partials.
+
+4. even_fold_db
+   - Range: 0.0 to 24.0 dB (Even-Harmonic Bus Wavefolder Drive, Default: 9.0 dB)
+   - Taper: Logarithmic dB-to-linear gain into a sinusoidal wavefolder.
+   - Function: Folds the isolated Even-Harmonic bus (2*f0, 4*f0...) independently for bright octave overtone bloom while keeping the fundamental in the Odd bus clean.
+
+5. stereo_odd_even_split
+   - Range: 0.0 to 1.0 (Default: 0.35)
+   - Taper: Linear stereo pan offset.
+   - Function: Tilts the Left channel toward Odd harmonics and the Right channel toward Even harmonics for ultra-wide, phase-coherent stereo harmonic separation.
+
+6. tilt_wobble
+   - Range: 0.0 to 1.0 (1-Bar Synced Odd/Even Morph Depth, Default: 0.0)
+   - Taper: Linear modulation depth.
+   - Function: Sweeps between hollow Odd harmonics and bright Even harmonics at quarter-note subdivisions of the 1-bar phasor on in4.

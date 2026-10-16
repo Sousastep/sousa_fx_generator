@@ -1,0 +1,36 @@
+================================================================================
+05_phaseshaper_supersaw_tri — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the two flagship Roland JP-8000 phaseshaping algorithms plus the Variable-Slope Tilted Triangle phaseshaper from Kleimola, Lazzarini, Timoney, and Välimäki (SMC 2010, Sections 2.4, 3.5, and 3.6):
+1. Triangle Modulation (Eq. 26): Folds a doubled triangular phase via a ceiling staircase function to generate an odd-harmonic-only spectrum where the 3rd partial dominates and upper formants sweep dramatically.
+2. Single-Oscillator Ripple Supersaw (Eq. 28 & Fig. 13): Uses nested real-valued modulo operations (gripple) inside a single sinusoidal waveshaper to synthesize a thick, 7-saw detuned unison pad phase-locked to the live tuba note.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (ideally fed from 01_harmonic_isolator)
+- in3: Optional Tracked Pitch in Hz (reserved for chain compatibility)
+- in4: Optional 1-Bar Phasor [0..1] (if patched, locks the Supersaw m1 quadrature detune animation to the bar tempo; otherwise uses an internal 0.35 Hz LFO)
+- out1 / out2: Stereo Phaseshaped Output
+
+PARAMETERS (4)
+
+1. shape_mod
+   - Range: 0.0 to 1.0
+   - Taper: Linear mapping to the paper's exact active parameter ranges: a_TM in [0.70, 1.00] for Triangle Modulation (Eq. 26) and phase extension a1 in [1.15, 2.25] for Supersaw (Eq. 28).
+   - Function: Drives the V-fold depth of the Triangle Modulator and the harmonic brightness/sync discontinuity of the Ripple Supersaw.
+
+2. ripple_detune
+   - Range: 0.0 to 1.0 (maps to ripple modulus m1 in [0.18, 0.80] with quadrature L/R animation)
+   - Taper: Linear depth scaling of the ripple modulus m1 (Paper Fig. 12: m1 = 0.25 to 0.75, m2 = 0.88).
+   - Function: Controls the density and stereo unison beating of the ripple-edged phaseshaper.
+
+3. tilt_duty
+   - Range: 0.10 to 0.90 (Duty Width w of Parabolic Tilted Triangle Phase svtri, Eq. 16)
+   - Taper: Linear around 0.50 (at 0.50 the phase ramp is symmetric; moving toward 0.10 or 0.90 tilts the up/down ramp slopes, shifting formants and eliminating every 4th harmonic outside the formant band).
+   - Function: Pre-warps the extracted tuba phasor through the paper's parabolic variable-slope triangle generator before entering the Triangle Mod or Supersaw stage.
+
+4. mode_blend
+   - Range: 0.0 to 1.0 (0.0 = 100% JP-8000 Triangle Modulation, 1.0 = 100% Ripple Supersaw)
+   - Taper: Linear crossfade.
+   - Function: Seamlessly morphs between hollow, 3rd-harmonic-heavy Triangle Modulation growls and massive stereo Supersaw brass chords.

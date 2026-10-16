@@ -1,0 +1,143 @@
+// ============================================================================
+// heterodyne_fof_resonator.txt
+// Unix-Style Stereo Effect: Filterless Heterodyne & FOF Formant Resonator
+// Implements Lazzarini & Timoney (DAFx-12, Paper 58):
+// "Synthesis of Resonant Sounds with a Heterodyne Model"
+// (Sections 2.1, 2.2, 3 & 3.1, Eq. 5-14, Fig. 2-4).
+// Generates high-Q vocal/brass resonant formants and Casio CZ-style resonant
+// waveforms WITHOUT an IIR filter (zero self-oscillation blowup or phase smear):
+//   1. Resets an exponential decay envelope `ephasor` M(n) = R^(n mod T0)
+//      (or dual-exponential FOF skirt Ma(n) - Mb(n), Eq. 12) at every period T0
+//      of the tuba's fundamental phase.
+//   2. Crossfades two adjacent harmonic carriers cos(k*w0*n) and cos((k+1)*w0*n)
+//      (Eq. 8-10) so the formant frequency f_c sweeps smoothly without aliasing!
+//   3. Can either ring-modulate the live stereo tuba with the heterodyne grain
+//      or synthesize the pure FOF/CZ resonant wave tracked to the tuba's envelope.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
+//   in4: Optional 1-Bar Phasor [0..1] (sweeps formant_ratio when sweep_depth > 0)
+// Outlets:
+//   out1: Left Heterodyne / FOF Resonant Output
+//   out2: Right Heterodyne / FOF Resonant Output
+
+@param({ min: 1.0, max: 16.0 }) formant_ratio = 4.5;
+@param({ min: 1.0, max: 40.0 }) resonance_q = 12.0;
+@param({ min: 0.0, max: 1.0 }) fof_attack_skirt = 0.5;
+@param({ min: 0.0, max: 1.0 }) cz_window_mode = 0.0;
+@param({ min: 0.0, max: 1.0 }) sweep_depth = 0.35;
+@param({ min: 0.0, max: 1.0 }) tuba_ring_blend = 0.45;
+
+// 4-stage Quadrature IIR Hilbert network for phase-locked tuba period & envelope
+@state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
+@state hDelRe = 0.0;
+
+// Fallback trackers & state
+@state barFallback = new phasor();
+@state prevBarIn = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothEnv = 0.0;
+@state smoothRatio = 4.5;
+@state smoothQ = 12.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Extract Phase-Locked Fundamental Phasor phi in [0, 1) & Envelope ---
+let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+let re = mono;
+let t = cR0 * (re + hReY[0]) - hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
+t = cR1 * (re + hReY[1]) - hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
+t = cR2 * (re + hReY[2]) - hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
+t = cR3 * (re + hReY[3]) - hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
+let sigRe = hDelRe;
+hDelRe = re;
+
+let im = mono;
+t = cI0 * (im + hImY[0]) - hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
+t = cI1 * (im + hImY[1]) - hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
+t = cI2 * (im + hImY[2]) - hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
+t = cI3 * (im + hImY[3]) - hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
+let sigIm = im;
+
+let instAmp = sqrt(sigRe * sigRe + sigIm * sigIm);
+smoothEnv += (instAmp - smoothEnv) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let phi = wrap((atan2(sigIm, sigRe) + pi) / (2.0 * pi), 0.0, 1.0);
+
+// --- 3. Bar-Synced Formant Sweep & Pole Radius R (DAFx-12 Eq. 4, 6, 12) ---
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn * 4.0, 0.0, 1.0) : barFallback.next(1.0);
+let lfoBi = sin(2.0 * pi * barPh);
+
+smoothRatio += (clamp(formant_ratio, 1.0, 16.0) - smoothRatio) * slew;
+smoothQ += (clamp(resonance_q, 1.0, 40.0) - smoothQ) * slew;
+
+let swOct = clamp(sweep_depth, 0.0, 1.0) * 1.2;
+let ratioL = clamp(smoothRatio * pow(2.0, swOct * lfoBi - 0.04), 1.0, 20.0);
+let ratioR = clamp(smoothRatio * pow(2.0, -swOct * lfoBi + 0.04), 1.0, 20.0);
+
+// Paper Eq. 4: R = exp(-pi * fc / (sr * Q)), so R^(n mod T0) = exp(-pi * (fc/f0) * phi / Q)
+let decayExpL = exp(-pi * ratioL * phi / smoothQ);
+let decayExpR = exp(-pi * ratioR * phi / smoothQ);
+
+// Paper Eq. 12: FOF attack skirt subtracts a second faster-decaying exponential Mb(n)
+let skirtAmt = clamp(fof_attack_skirt, 0.0, 1.0);
+let fastMult = 3.0 + 12.0 * skirtAmt;
+let fofEnvL = decayExpL - skirtAmt * exp(-pi * ratioL * fastMult * phi / smoothQ);
+let fofEnvR = decayExpR - skirtAmt * exp(-pi * ratioR * fastMult * phi / smoothQ);
+
+// Paper Section 3.1 (Eq. 13-14): Casio CZ Resonant Wave modulator (inverted saw / triangle)
+let czEnv = linearinterp(skirtAmt, 1.0 - phi, triangle(phi, 0.25));
+let czBlend = clamp(cz_window_mode, 0.0, 1.0);
+let modEnvL = linearinterp(czBlend, fofEnvL, czEnv);
+let modEnvR = linearinterp(czBlend, fofEnvR, czEnv);
+
+// --- 4. Fine-Grained Adjacent-Harmonic Dual Carrier Interpolation (Paper Eq. 8-10) ---
+let kL = floor(ratioL);
+let aL = ratioL - kL;
+let carL = (1.0 - aL) * cos(2.0 * pi * kL * phi) + aL * cos(2.0 * pi * (kL + 1.0) * phi);
+
+let kR = floor(ratioR);
+let aR = ratioR - kR;
+let carR = (1.0 - aR) * cos(2.0 * pi * kR * phi) + aR * cos(2.0 * pi * (kR + 1.0) * phi);
+
+// Pure heterodyne FOF resonant wave vs. heterodyne-modulated acoustic tuba
+let fofWaveL = modEnvL * carL * clamp(smoothEnv * 2.0, 0.0, 1.5);
+let fofWaveR = modEnvR * carR * clamp(smoothEnv * 2.0, 0.0, 1.5);
+
+let ringTubaL = xL * (1.0 + 1.6 * modEnvL * carL);
+let ringTubaR = xR * (1.0 + 1.6 * modEnvR * carR);
+
+let b = clamp(tuba_ring_blend, 0.0, 1.0);
+out1 = linearinterp(b, fofWaveL, ringTubaL);
+out2 = linearinterp(b, fofWaveR, ringTubaR);

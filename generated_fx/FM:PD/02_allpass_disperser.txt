@@ -1,0 +1,106 @@
+// ============================================================================
+// 02_allpass_disperser.txt
+// Unix-Style Effect 2: Cascaded Allpass Phase Disperser
+// Passes the stereo signal through a pure series cascade of up to 32
+// second-order biquad allpass filters per channel (no dry/wet phaser notches).
+// Accumulates frequency-selective group delay around the cutoff to smear
+// brass attacks into liquid, laser-like dubstep transient chirps.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input
+//   in2: Right Audio Input
+//   in3: Optional Tracked Pitch in Hz (if > 20 Hz, gently biases cutoff tracking)
+//   in4: Optional 1-Bar Phasor [0..1] (unused when static, available for chain thru)
+// Outlets:
+//   out1: Left Dispersed Audio Output
+//   out2: Right Dispersed Audio Output
+
+@param({ min: 1.0, max: 32.0 }) stages = 16.0;
+@param({ min: 30.0, max: 4000.0 }) freq_hz = 180.0;
+@param({ min: 0.707, max: 12.0 }) pinch_q = 2.2;
+@param({ min: 0.0, max: 1.0 }) spread = 0.25;
+
+// 32 second-order allpass stages per channel (2 states per biquad = 64 per channel)
+@state z1L = new FixedSampleArray(32);
+@state z2L = new FixedSampleArray(32);
+@state z1R = new FixedSampleArray(32);
+@state z2R = new FixedSampleArray(32);
+
+@state smoothFreq = 180.0;
+@state smoothQ = 2.2;
+@state smoothSpread = 0.25;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+
+// Smooth parameters to avoid zipper noise in long allpass cascades
+let slew = 1.0 - exp(-1.0 / (0.005 * sr));
+let targetFreq = clamp(freq_hz, 30.0, 4000.0);
+if (pitchIn > 20.0 && pitchIn < 1000.0) {
+	// Optional pitch-relative offset when fluid.pitch~ is patched into in3
+	targetFreq = clamp(targetFreq * (pitchIn / 110.0), 28.0, 6000.0);
+}
+smoothFreq += (targetFreq - smoothFreq) * slew;
+smoothQ += (clamp(pinch_q, 0.707, 12.0) - smoothQ) * slew;
+smoothSpread += (clamp(spread, 0.0, 1.0) - smoothSpread) * slew;
+
+// Stereo frequency offset (up to +/- 1 octave spread at max spread)
+let spreadRatio = pow(2.0, smoothSpread * 0.75);
+let freqL = clamp(smoothFreq / spreadRatio, 24.0, sr * 0.45);
+let freqR = clamp(smoothFreq * spreadRatio, 24.0, sr * 0.45);
+
+// RBJ 2nd-order Allpass coefficients for Left channel
+let w0L = 2.0 * pi * freqL / sr;
+let cosL = cos(w0L);
+let alphaL = sin(w0L) / (2.0 * smoothQ);
+let a0L_inv = 1.0 / (1.0 + alphaL);
+let b0L = (1.0 - alphaL) * a0L_inv;
+let b1L = (-2.0 * cosL) * a0L_inv;
+// In RBJ allpass: b2 = 1.0, a1 = b1, a2 = b0
+
+// RBJ 2nd-order Allpass coefficients for Right channel
+let w0R = 2.0 * pi * freqR / sr;
+let cosR = cos(w0R);
+let alphaR = sin(w0R) / (2.0 * smoothQ);
+let a0R_inv = 1.0 / (1.0 + alphaR);
+let b0R = (1.0 - alphaR) * a0R_inv;
+let b1R = (-2.0 * cosR) * a0R_inv;
+
+// Fractional stage count allows click-free morphing of dispersion depth
+let stagePos = clamp(stages, 1.0, 32.0);
+let numFull: Int = floor(stagePos);
+let frac = stagePos - numFull;
+
+let sigL = xL;
+let sigR = xR;
+let prevL = xL;
+let prevR = xR;
+
+for (let i: Int = 0; i < 32; i++) {
+	if (i < numFull + 1) {
+		prevL = sigL;
+		prevR = sigR;
+
+		// Direct Form II Transposed 2nd-order allpass
+		let yL = b0L * sigL + z1L[i];
+		z1L[i] = b1L * sigL - b1L * yL + z2L[i];
+		z2L[i] = sigL - b0L * yL;
+		sigL = yL;
+
+		let yR = b0R * sigR + z1R[i];
+		z1R[i] = b1R * sigR - b1R * yR + z2R[i];
+		z2R[i] = sigR - b0R * yR;
+		sigR = yR;
+	}
+}
+
+// Smoothly interpolate the final fractional stage
+if (numFull < 32) {
+	sigL = linearinterp(frac, prevL, sigL);
+	sigR = linearinterp(frac, prevR, sigR);
+}
+
+out1 = sigL;
+out2 = sigR;

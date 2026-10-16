@@ -1,0 +1,185 @@
+// ============================================================================
+// 17_inst_cyber_tuba_tearout_engine.txt
+// Advanced Instrument 5: Cyber-Tuba Tearout & Machine-Gun Engine
+// Designed for extreme Tearout / Brostep / Riddim drops:
+//   - Pitch-tracked fundamental isolator + Self-FM Feedback Delay Loop (Approach 1c)
+//   - Rotating Analytic Ring Modulator / Harmonic Slider (Approach 3f: Re{s_a * e^(j*psi)})
+//   - 16-Stage Stereo Allpass Phase Disperser with Joystick-swept Cutoff & Pinch
+//   - 1-Bar Phasor-Synced "Machine-Gun" Chop & Pitch-Drop Envelope Generator
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (Tuba)
+//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+//   in4: 1-Bar Audio-Rate Phasor [0..1] (syncs machine-gun tearout chops)
+// Outlets:
+//   out1: Left Tearout Engine Output
+//   out2: Right Tearout Engine Output
+
+@param({ min: -1.0, max: 1.0 }) joy_x_disperse_freq = 0.0;
+@param({ min: -1.0, max: 1.0 }) joy_y_fb_tearout = 0.0;
+@param({ min: -1.0, max: 2.0 }) rot_harmonic = 0.0;
+@param({ min: 1.0, max: 16.0, steps: 16 }) gun_subdiv = 8.0;
+@param({ min: 0.0, max: 1.0 }) gun_chop_depth = 0.65;
+@param({ min: 0.0, max: 1.0 }) pitch_drop_env = 0.5;
+@param({ min: 1.0, max: 10.0 }) disperse_q = 3.5;
+@param({ min: 0.0, max: 24.0 }) post_slam_db = 9.0;
+
+// Quadrature Hilbert pair for Rotating Ring Modulation (Approach 3f)
+@state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
+@state hDelRe = 0.0;
+@state prevTheta = 0.0;
+@state wrapCnt: Int = 0;
+
+// Feedback FM Delay Line (1024 samples per channel)
+@state fbBufL = new FixedSampleArray(1024);
+@state fbBufR = new FixedSampleArray(1024);
+@state fbWrite: Int = 0;
+@state prevFmL = 0.0;
+@state prevFmR = 0.0;
+
+// 16-stage 2nd-order Allpass Disperser per channel
+@state apZ1L = new FixedSampleArray(16);
+@state apZ2L = new FixedSampleArray(16);
+@state apZ1R = new FixedSampleArray(16);
+@state apZ2R = new FixedSampleArray(16);
+
+// Pitch & Phasor states
+@state fallbackBar = new phasor();
+@state prevBarIn = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+@state smoothJoyX = 0.0;
+@state smoothJoyY = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch & Joystick Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 180.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.005 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothJoyX += (clamp(joy_x_disperse_freq, -1.0, 1.0) - smoothJoyX) * slew;
+smoothJoyY += (clamp(joy_y_fb_tearout, -1.0, 1.0) - smoothJoyY) * slew;
+
+let f0 = clamp(smoothF0, 24.0, 900.0);
+
+// --- 2. 1-Bar Rhythmic Machine-Gun Envelope & Pitch-Drop ---
+let barActive = (abs(barIn - prevBarIn) > 0.0000001 || (barIn > 0.0001 && barIn < 0.9999));
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn, 0.0, 1.0) : fallbackBar.next(0.5);
+
+let gSub = floor(clamp(gun_subdiv, 1.0, 16.0));
+let gunPh = wrap(barPh * gSub, 0.0, 1.0);
+// Steep decaying punch envelope for each machine-gun repeat
+let punchEnv = pow(1.0 - gunPh, 2.2);
+let gateWindow = trapezoid(gunPh, 0.02, 0.72);
+let chopGain = linearinterp(clamp(gun_chop_depth, 0.0, 1.0), 1.0, gateWindow * (0.35 + 0.65 * punchEnv));
+
+// --- 3. Analytic Signal & Rotating Ring Modulation (Approach 3f) ---
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+let sRe = mono;
+let yRe0 = cRe0 * (sRe - hReY[0]) + hReX[0]; hReX[0] = sRe; hReY[0] = yRe0; sRe = yRe0;
+let yRe1 = cRe1 * (sRe - hReY[1]) + hReX[1]; hReX[1] = sRe; hReY[1] = yRe1; sRe = yRe1;
+let yRe2 = cRe2 * (sRe - hReY[2]) + hReX[2]; hReX[2] = sRe; hReY[2] = yRe2; sRe = yRe2;
+let yRe3 = cRe3 * (sRe - hReY[3]) + hReX[3]; hReX[3] = sRe; hReY[3] = yRe3;
+let outRe = hDelRe; hDelRe = yRe3;
+
+let sIm = mono;
+let yIm0 = cIm0 * (sIm - hImY[0]) + hImX[0]; hImX[0] = sIm; hImY[0] = yIm0; sIm = yIm0;
+let yIm1 = cIm1 * (sIm - hImY[1]) + hImX[1]; hImX[1] = sIm; hImY[1] = yIm1; sIm = yIm1;
+let yIm2 = cIm2 * (sIm - hImY[2]) + hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm = yIm2;
+let yIm3 = cIm3 * (sIm - hImY[3]) + hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;
+let outIm = yIm3;
+
+let pol = cartopol(outRe, outIm);
+let theta = pol[1];
+let dTh = theta - prevTheta;
+if (dTh < -pi) { wrapCnt = (wrapCnt + 1) % 4; }
+else if (dTh > pi) { wrapCnt = (wrapCnt + 3) % 4; }
+prevTheta = theta;
+
+let unwTheta = theta + 2.0 * pi * wrapCnt;
+// Rotating phase trajectory psi = (rot_harmonic + pitch_drop_env * punchEnv) * unwTheta
+// rot_harmonic = -0.5 gives locked sub-octave; 0.0 = original; +1.0 = octave up
+let rotMult = clamp(rot_harmonic, -1.0, 2.0) + clamp(pitch_drop_env, 0.0, 1.0) * punchEnv * 1.5;
+let psiL = rotMult * unwTheta;
+let psiR = psiL + 0.15 * smoothJoyY;
+
+let rotSigL = outRe * cos(psiL) - outIm * sin(psiL);
+let rotSigR = outRe * cos(psiR) - outIm * sin(psiR);
+
+// --- 4. Feedback FM Delay Stage Driven by Joystick Y (Approach 1c) ---
+fbBufL[fbWrite] = rotSigL + 0.35 * xL;
+fbBufR[fbWrite] = rotSigR + 0.35 * xR;
+
+let joyY_u = 0.5 * (smoothJoyY + 1.0);
+// Feedback FM index k: small k = sawtooth brass brightening; high k = torn metallic chaos
+let fbK = pow(joyY_u, 1.3) * 0.85;
+let baseDelSamps = clamp(sr / (f0 * 2.0), 4.0, 480.0);
+
+let modDelL = clamp(baseDelSamps * (1.0 + fbK * prevFmL + 0.5 * clamp(pitch_drop_env, 0.0, 1.0) * (1.0 - punchEnv)), 2.0, 1018.0);
+let modDelR = clamp(baseDelSamps * (1.0 + fbK * prevFmR + 0.5 * clamp(pitch_drop_env, 0.0, 1.0) * (1.0 - punchEnv)), 2.0, 1018.0);
+
+let rPosL = fbWrite - modDelL;
+while (rPosL < 0.0) { rPosL += 1024.0; }
+let iL0: Int = floor(rPosL);
+let fracL = rPosL - iL0;
+let fmOutL = cubicinterp(fracL, fbBufL[(iL0 - 1 + 1024) % 1024], fbBufL[iL0 % 1024], fbBufL[(iL0 + 1) % 1024], fbBufL[(iL0 + 2) % 1024]);
+
+let rPosR = fbWrite - modDelR;
+while (rPosR < 0.0) { rPosR += 1024.0; }
+let iR0: Int = floor(rPosR);
+let fracR = rPosR - iR0;
+let fmOutR = cubicinterp(fracR, fbBufR[(iR0 - 1 + 1024) % 1024], fbBufR[iR0 % 1024], fbBufR[(iR0 + 1) % 1024], fbBufR[(iR0 + 2) % 1024]);
+
+fbWrite = (fbWrite + 1) % 1024;
+prevFmL = tanh(fmOutL);
+prevFmR = tanh(fmOutR);
+
+// --- 5. 16-Stage Allpass Phase Disperser Swept by Joystick X & Punch Env ---
+let dispHz = clamp(220.0 * pow(12.0, smoothJoyX + 0.5 * punchEnv), 45.0, 5000.0);
+let apW0 = 2.0 * pi * dispHz / sr;
+let apAlpha = sin(apW0) / (2.0 * clamp(disperse_q, 1.0, 10.0));
+let apA0_inv = 1.0 / (1.0 + apAlpha);
+let apB0 = (1.0 - apAlpha) * apA0_inv;
+let apB1 = (-2.0 * cos(apW0)) * apA0_inv;
+
+let dispL = prevFmL;
+let dispR = prevFmR;
+for (let i: Int = 0; i < 16; i++) {
+	let yL = apB0 * dispL + apZ1L[i];
+	apZ1L[i] = apB1 * dispL - apB1 * yL + apZ2L[i];
+	apZ2L[i] = dispL - apB0 * yL;
+	dispL = yL;
+
+	let yR = apB0 * dispR + apZ1R[i];
+	apZ1R[i] = apB1 * dispR - apB1 * yR + apZ2R[i];
+	apZ2R[i] = dispR - apB0 * yR;
+	dispR = yR;
+}
+
+// --- 6. Post-Slam Clipper & Machine-Gun Chopper ---
+let slamGain = dbtoa(clamp(post_slam_db, 0.0, 24.0));
+out1 = tanh(dispL * slamGain) * chopGain;
+out2 = tanh(dispR * slamGain) * chopGain;

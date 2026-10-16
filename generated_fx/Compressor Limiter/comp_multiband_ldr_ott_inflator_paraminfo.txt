@@ -1,0 +1,43 @@
+================================================================================
+EFFECT: comp_multiband_ldr_ott_inflator
+SOURCE: Nercessian, McClellan & Lukin (DAFx-2022, "A Direct Microdynamics
+        Adjusting Processor with Matching Paradigm and Differentiable
+        Implementation", Section 3 Multiband Formulation, p. 4, Eqs. 7-12)
+TYPE:   Stereo 3-Band Relative-Level (LDR) Upward/Downward "OTT" Microdynamics
+        Inflator & Transient Sculptor
+================================================================================
+
+OVERVIEW
+--------
+Implements the multiband extension of Nercessian et al. (DAFx-2022, p. 4), where
+a phase-coherent 3-band crossover splits the stereo input into Low, Mid, and High
+sub-bands x_k[n], each equipped with its own frequency-scaled relative-level
+meter L_k[n] = a_short,k[n] / a_long,k[n] and manipulation exponent m_k. Setting
+m_k < 1.0 produces threshold-free "OTT"-style upward sustain inflation and peak
+clamping in that band; setting m_k > 1.0 produces band-specific transient snap.
+
+PARAMETERS (8 total)
+--------------------
+1. low_micro_m     [0.0 .. 2.5, default: 0.25]
+   Low-band microdynamics exponent m_1 (<1.0 = tight sub sustain/OTT; >1.0 = punchy kick).
+
+2. mid_micro_m     [0.0 .. 2.5, default: 0.35]
+   Mid-band microdynamics exponent m_2 (<1.0 = dense vocal/synth body; >1.0 = bark/snap).
+
+3. high_micro_m    [0.0 .. 2.5, default: 0.30]
+   High-band microdynamics exponent m_3 (<1.0 = shimmering air/sustain; >1.0 = crisp click).
+
+4. xover_low_hz    [60.0 .. 450.0 Hz, default: 180.0]
+   Low-to-Mid complementary crossover frequency in Hz.
+
+5. xover_high_hz   [1200.0 .. 7000.0 Hz, default: 2800.0]
+   Mid-to-High complementary crossover frequency in Hz.
+
+6. speed_scale     [0.1 .. 3.0, default: 1.0]
+   Global multiplier scaling the sub-band attack, release, and macro time constants.
+
+7. tilt_db         [-12.0 .. 12.0 dB, default: 1.5]
+   Post-compression spectral tilt balancing Low vs. High sub-band output levels.
+
+8. mix             [0.0 .. 1.0, default: 1.0]
+   Dry/wet parallel multiband inflation blend.

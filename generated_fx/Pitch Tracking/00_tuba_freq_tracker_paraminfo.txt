@@ -1,0 +1,39 @@
+================================================================================
+00_tuba_freq_tracker — Parameter Information
+================================================================================
+
+OVERVIEW
+A custom Tuba-Specialized Hybrid Pitch & Phasor Tracker that outperforms generic FFT-based YinFFT (fluid.pitch~) for live low-brass dubstep performance by uniting three complementary DSP architectures inside a single RNBO codebox~:
+1. 4x-Decimated Recursive Sliding YIN (CMNDF): Computes the Cumulative Mean Normalized Difference Function continuously in the time domain with parabolic sub-sample interpolation and a 3-point transient median filter, updating every 32 samples (0.66 ms) instead of waiting for a 2048/4096-sample FFT frame.
+2. Instantaneous Frequency Tracking (IFT): Isolates the tuba's fundamental via a dual-stage adaptive SVF bandpass filter tracked to the YIN anchor, computes the analytic signal s_a(t) = A(t)*e^(j*theta(t)) via a 4-stage quadrature Hilbert transform, and differentiates the unwrapped phase d(theta)/dt on EVERY sample (zero window latency).
+3. Phase-Locked Loop (PLL) Fusion: Uses YIN as an unbreakable octave/harmonic anchor while using IFT to track fast lip bends, vibrato, and glissandi within a +/- 18% window, holding the last valid pitch cleanly on note releases.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo (or Mono on in1) Tuba Audio Input
+- in3: Optional External Pitch Hint in Hz (if fluid.pitch~ is patched here, blends with the internal YIN anchor for redundant lock)
+- out1: Tracked Fundamental Pitch f0 in Hz (patch directly into in3 of effects 01–18!)
+- out2: Pitch Confidence / Periodicity [0.0 to 1.0]
+- out3: Phase-Locked Tuba Phasor [0.0 to 1.0) (phase-locked sawtooth ramp at f0)
+- out4: Pure Phase-Locked Fundamental Sine Wave [-1.0 to 1.0] (scaled by confidence)
+
+PARAMETERS (4)
+
+1. min_freq_hz
+   - Range: 24.0 to 120.0 Hz (Default: 28.0 Hz, covering down to Pedal Bb0 = 29.14 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the longest lag boundary of the YIN autocorrelation search window. Raising this to ~38 Hz when not playing pedal notes further reduces latency and CPU.
+
+2. max_freq_hz
+   - Range: 150.0 to 700.0 Hz (Default: 420.0 Hz, covering up to high G4/Ab4)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the shortest lag boundary of the YIN search window and upper clamp of the tracker, preventing high brass lip buzz or valve clicks from triggering false high-frequency jumps.
+
+3. IFT_speed
+   - Range: 0.0 to 1.0 (0.0 = Pure Median-Filtered YIN, 1.0 = Full Zero-Latency IFT Instantaneous Frequency)
+   - Taper: Linear crossfade coupled with tracking time-constant reduction (from 10 ms down to 1.5 ms).
+   - Function: Controls how aggressively the zero-latency Hilbert phase differentiator (IFT) overrides the YIN lag estimator during fast lip slurs, pitch bends, and vibrato.
+
+4. gate_thresh_db
+   - Range: -60.0 to -18.0 dB (Default: -42.0 dB)
+   - Taper: Logarithmic dB-to-linear RMS threshold (dbtoa).
+   - Function: Freezes the tracked pitch f0 at its last valid frequency whenever the tuba's RMS level drops below this threshold, completely eliminating pitch-drop glitches at the end of notes.

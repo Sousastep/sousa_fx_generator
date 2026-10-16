@@ -1,0 +1,54 @@
+================================================================================
+chorus_bbd_compander_juno — Parameter Information
+================================================================================
+
+OVERVIEW
+A standalone stereo analog Bucket-Brigade Device (BBD) Chorus uniting three DAFx virtual-analog papers:
+1. Antti Huovilainen (DAFx-05 Paper P_155, Sections 5.1 & 5.2, Eq. 25–31, Fig. 8–11): Models the fixed-bucket-count variable-clock delay law (where a linear triangle LFO warps into an asymmetric 1/f_clock hyperbola smoothed by the bucket transit time, Eq. 25) and the matched NE570 2:1 feedback compressor / 1:2 feedforward expander.
+2. Colin Raffel and Julius O. Smith (DAFx-10 Paper P42, Sections 2.2, 3.3 & 4.4): Models clock-tracking Sallen-Key anti-aliasing and reconstruction lowpass filters plus stage-accumulated MOSFET charge-transfer harmonic warmth.
+3. Martin Holters and Julian D. Parker (DAFx-18 Paper 12, Sections 2 & 4): Models the classic Roland Juno-60 / Dimension-D push-pull stereo BBD chorus architecture (Mode I, Mode II, and Dual I+II).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Unused / Thru (standalone chorus requires no external pitch tracker)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs primary BBD triangle LFO to host tempo when patched)
+- out1 / out2: Stereo Analog BBD Chorus Output
+
+PARAMETERS (7)
+
+1. lfo_rate_hz
+   - Range: 0.10 to 5.00 Hz (Primary BBD Triangle LFO Rate, Default: 0.55 Hz, matching Roland Juno-60 Mode I = 0.51 Hz / Mode II = 0.86 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the sweep speed of the BBD clock generator.
+
+2. clock_mod_depth
+   - Range: 0.0 to 1.0 (BBD Clock Frequency Modulation Depth, Default: 0.60)
+   - Taper: Linear clock modulation index (warped via 1 / (1 + m*LFO) per Huovilainen DAFx-05 Fig. 9).
+   - Function: Controls the excursion of the variable BBD clock, producing warm, asymmetrical pitch thickening.
+
+3. center_delay_ms
+   - Range: 1.50 to 15.00 ms (Nominal MN3007 512-Stage BBD Delay Time, Default: 3.60 ms, matching the Juno-60's 3.45 ms center delay)
+   - Taper: Direct delay time in milliseconds (determines nominal clock frequency f_clock = 512 / (2 * delay)).
+   - Function: Short delays (1.5–4.0 ms) deliver tight Roland Juno/Dimension-D stereo widening; longer delays (6–15 ms) produce lush 1970s Boss CE-1 ensemble doubling.
+
+4. juno_mode_morph
+   - Range: 0.0 to 1.0 (Default: 0.35)
+   - Taper: Continuous morph between:
+     * 0.0: Pure Push-Pull Anti-Phase Triangle LFO (Juno Mode I / Dimension-D spatial widening with zero mono pitch wobble)
+     * 1.0: Dual-Rate Incommensurate LFO Sum (Juno I+II multi-voice ensemble swirl)
+   - Function: Morphs the modulation law from single-LFO push-pull stereo to dual-LFO ensemble movement.
+
+5. ne570_compand
+   - Range: 0.0 to 1.0 (NE570 Compander Depth, Default: 0.55)
+   - Taper: Linear wet/dry blend of the 2:1 feedback compressor before the BBD and 1:2 feedforward expander after the BBD (DAFx-05 Eq. 26–27).
+   - Function: Reproduces the dynamic "breathing" and transient punch of analog BBD pedals equipped with Philips NE570/SA571 compander ICs.
+
+6. bbd_warmth_thd
+   - Range: 0.0 to 1.0 (BBD Sallen-Key Roll-Off & MOSFET Charge-Transfer THD, Default: 0.45)
+   - Taper: Linear warmth control.
+   - Function: Simultaneously darkens the clock-tracking anti-aliasing/reconstruction lowpass filters and increases asymmetrical bucket-stage harmonic saturation (DAFx-10 Sec 4.4).
+
+7. dry_wet_mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet Vibrato; Default: 0.50 = Classic 50/50 Stereo Chorus)
+   - Taper: Constant-power cosine/sine crossfade.
+   - Function: At 0.50, creates full stereo BBD chorusing; at 1.00, isolates the wet BBD path for true pitch vibrato.

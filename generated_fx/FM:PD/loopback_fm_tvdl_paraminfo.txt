@@ -1,0 +1,44 @@
+================================================================================
+loopback_fm_tvdl — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Loopback Frequency Modulation (LBFM) using a Time-Varying Delay Line (TVDL) from Tamara Smyth (DAFx-26 Paper 36, Sections 2.2, 2.4, 3.2 & 3.3, Eq. 10–12, 18–27, 55–58). Instead of a 1-sample feedback loop that suffers from sample-rate-dependent tuning drift, this effect uses Smyth's exact closed-form representation z0(n) = (b0 + e^(j*w0*nT)) / (1 + b0*e^(j*w0*nT)) where b0 = (sqrt(1 - B^2) - 1) / B, and warps the incoming stereo tuba through a cubic-interpolated delay line driven by the analytic phase 2*phi(n)*(fs/wc) plus an integer-period offset d0 = fs / fc (Eq. 58). Allows you to choose between concert-pitch-locked LBFM timbre distortion or Smyth's natural nonlinear pitch-glide warping w0 = wc * sqrt(1 - B^2).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba Carrier)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (drives rhythmic LBFM B-glide envelopes when b_glide_mod > 0)
+- out1 / out2: Stereo Loopback FM TVDL Output
+
+PARAMETERS (6)
+
+1. loopback_b
+   - Range: -0.92 to +0.92 (Loopback FM Coefficient B, Default: 0.65)
+   - Taper: Linear bipolar feedback index within the oscillation bound (-1 < B < 1).
+   - Function: Controls the self-modulation depth of the LBFM phase warping function (DAFx-26 Fig. 1). Positive and negative values tilt the waveform toward opposite sawtooth polarities with rich feedback-FM harmonics.
+
+2. harmonic_mult
+   - Range: 0.25 to 4.00 (LBFM Carrier Ratio f_c / f_0, Default: 1.00)
+   - Taper: Linear harmonic multiplier.
+   - Function: Sets the nominal LBFM carrier frequency fc relative to the tuba's tracked fundamental f0.
+
+3. pitch_lock
+   - Range: 0.0 to 1.0 (0.0 = Natural LBFM Pitch Shift w0 = wc*sqrt(1-B^2) with Eq. 56 Wrapped TVDL, 1.0 = Concert Pitch-Locked LBFM Timbre Warping)
+   - Taper: Continuous blend.
+   - Function: At 1.0, locks the LBFM oscillating phase to the exact tuba fundamental so changing loopback_b only warps timbre; at 0.0, engages Smyth's phase-continuous wrapped linear delay ramp (Eq. 55–56) so higher B values also pull the sounding pitch downward like a nonlinear gong or membrane.
+
+4. b_glide_mod
+   - Range: 0.0 to 1.0 (Rhythmic Beat-Envelope Modulation of B, Default: 0.35)
+   - Taper: Linear modulation depth driving an exponential beat decay exp(-3.5 * phi_beat).
+   - Function: Sweeps the loopback coefficient B on every quarter-note pulse of the 1-bar phasor on in4, producing dynamic LBFM spectral/pitch drops.
+
+5. stereo_b_spread
+   - Range: 0.0 to 1.0 (maps to +/- 0.14 Left/Right Loopback Coefficient Offset)
+   - Taper: Linear stereo offset.
+   - Function: Offsets B_L and B_R in opposite directions to create wide stereo phase-warping decorrelation.
+
+6. mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet Loopback FM TVDL)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba with the LBFM time-warped output.

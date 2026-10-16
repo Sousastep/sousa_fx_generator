@@ -1,0 +1,146 @@
+// ============================================================================
+// 07_adaptive_split_sideband.txt
+// Unix-Style Effect 7: Adaptive Split-Sideband (ASpSB) Synthesizer
+// Implements Lazzarini, Timoney & Lysaght (DAFx-08, Section 3, Eq. 5-20):
+// "The Split-Sideband Method" (ASpSB).
+// Uses three quadrature Hilbert transforms (on the carrier tuba, the cosine-mapped
+// even modulator cos(I*sin(wm*t)), and the sine-mapped odd modulator sin(I*sin(wm*t)))
+// to separate FM distortion into 4 independent sideband groups:
+// Upper-Even, Upper-Odd, Lower-Even, and Lower-Odd.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba Carrier)
+//   in2: Right Audio Input (Tuba Carrier)
+//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+// Outlets:
+//   out1: Left ASpSB Audio Output
+//   out2: Right ASpSB Audio Output
+
+@param({ min: 0.1, max: 4.0 }) cm_ratio = 1.0;
+@param({ min: 0.0, max: 6.0 }) mod_index = 2.2;
+@param({ min: -1.0, max: 1.0 }) low_high_tilt = 0.6;
+@param({ min: -1.0, max: 1.0 }) odd_even_tilt = 0.0;
+
+// 3 Quadrature 4-stage IIR Hilbert transform pairs:
+// 1) Carrier Tuba (ac, ad)
+@state cReX = new FixedSampleArray(4); @state cReY = new FixedSampleArray(4);
+@state cImX = new FixedSampleArray(4); @state cImY = new FixedSampleArray(4);
+@state cDelRe = 0.0;
+
+// 2) Even Modulator cos(I*sin(wm*t)) (aae, abe)
+@state eReX = new FixedSampleArray(4); @state eReY = new FixedSampleArray(4);
+@state eImX = new FixedSampleArray(4); @state eImY = new FixedSampleArray(4);
+@state eDelRe = 0.0;
+
+// 3) Odd Modulator sin(I*sin(wm*t)) (aao, abo)
+@state oReX = new FixedSampleArray(4); @state oReY = new FixedSampleArray(4);
+@state oImX = new FixedSampleArray(4); @state oImY = new FixedSampleArray(4);
+@state oDelRe = 0.0;
+
+// Modulator oscillator & fallback pitch tracker
+@state modPhasor = new phasor();
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+
+// --- 1. Pitch Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 180.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+smoothF0 += (rawF0 - smoothF0) * (1.0 - exp(-1.0 / (0.008 * sr)));
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Even & Odd Mapped Modulators (Paper Eq. 5 & 6) ---
+let fm = clamp(f0 / clamp(cm_ratio, 0.1, 4.0), 2.0, 2500.0);
+let I = pow(clamp(mod_index / 6.0, 0.0, 1.0), 1.25) * 6.0;
+let modSin = I * sin(2.0 * pi * modPhasor.next(fm));
+
+let a2_even = cos(modSin); // Eq. 5: J0(I) + 2*sum(J_{2n}(I)*cos(2n*wm*t))
+let a3_odd = sin(modSin);  // Eq. 6: 2*sum(J_{2n-1}(I)*sin((2n-1)*wm*t))
+
+// --- 3. Hilbert Transforms for Carrier, Even Mod, and Odd Mod ---
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+// Carrier Hilbert -> (ac, ad)
+let sC = mono;
+let yc0 = cRe0 * (sC - cReY[0]) + cReX[0]; cReX[0] = sC; cReY[0] = yc0; sC = yc0;
+let yc1 = cRe1 * (sC - cReY[1]) + cReX[1]; cReX[1] = sC; cReY[1] = yc1; sC = yc1;
+let yc2 = cRe2 * (sC - cReY[2]) + cReX[2]; cReX[2] = sC; cReY[2] = yc2; sC = yc2;
+let yc3 = cRe3 * (sC - cReY[3]) + cReX[3]; cReX[3] = sC; cReY[3] = yc3;
+let ac = cDelRe; cDelRe = yc3;
+
+let sCi = mono;
+let yci0 = cIm0 * (sCi - cImY[0]) + cImX[0]; cImX[0] = sCi; cImY[0] = yci0; sCi = yci0;
+let yci1 = cIm1 * (sCi - cImY[1]) + cImX[1]; cImX[1] = sCi; cImY[1] = yci1; sCi = yci1;
+let yci2 = cIm2 * (sCi - cImY[2]) + cImX[2]; cImX[2] = sCi; cImY[2] = yci2; sCi = yci2;
+let yci3 = cIm3 * (sCi - cImY[3]) + cImX[3]; cImX[3] = sCi; cImY[3] = yci3;
+let ad = yci3;
+
+// Even Modulator Hilbert -> (aae, abe)
+let sE = a2_even;
+let ye0 = cRe0 * (sE - eReY[0]) + eReX[0]; eReX[0] = sE; eReY[0] = ye0; sE = ye0;
+let ye1 = cRe1 * (sE - eReY[1]) + eReX[1]; eReX[1] = sE; eReY[1] = ye1; sE = ye1;
+let ye2 = cRe2 * (sE - eReY[2]) + eReX[2]; eReX[2] = sE; eReY[2] = ye2; sE = ye2;
+let ye3 = cRe3 * (sE - eReY[3]) + eReX[3]; eReX[3] = sE; eReY[3] = ye3;
+let aae = eDelRe; eDelRe = ye3;
+
+let sEi = a2_even;
+let yei0 = cIm0 * (sEi - eImY[0]) + eImX[0]; eImX[0] = sEi; eImY[0] = yei0; sEi = yei0;
+let yei1 = cIm1 * (sEi - eImY[1]) + eImX[1]; eImX[1] = sEi; eImY[1] = yei1; sEi = yei1;
+let yei2 = cIm2 * (sEi - eImY[2]) + eImX[2]; eImX[2] = sEi; eImY[2] = yei2; sEi = yei2;
+let yei3 = cIm3 * (sEi - eImY[3]) + eImX[3]; eImX[3] = sEi; eImY[3] = yei3;
+let abe = yei3;
+
+// Odd Modulator Hilbert -> (aao, abo)
+let sO = a3_odd;
+let yo0 = cRe0 * (sO - oReY[0]) + oReX[0]; oReX[0] = sO; oReY[0] = yo0; sO = yo0;
+let yo1 = cRe1 * (sO - oReY[1]) + oReX[1]; oReX[1] = sO; oReY[1] = yo1; sO = yo1;
+let yo2 = cRe2 * (sO - oReY[2]) + oReX[2]; oReX[2] = sO; oReY[2] = yo2; sO = yo2;
+let yo3 = cRe3 * (sO - oReY[3]) + oReX[3]; oReX[3] = sO; oReY[3] = yo3;
+let aao = oDelRe; oDelRe = yo3;
+
+let sOi = a3_odd;
+let yoi0 = cIm0 * (sOi - oImY[0]) + oImX[0]; oImX[0] = sOi; oImY[0] = yoi0; sOi = yoi0;
+let yoi1 = cIm1 * (sOi - oImY[1]) + oImX[1]; oImX[1] = sOi; oImY[1] = yoi1; sOi = yoi1;
+let yoi2 = cIm2 * (sOi - oImY[2]) + oImX[2]; oImX[2] = sOi; oImY[2] = yoi2; sOi = yoi2;
+let yoi3 = cIm3 * (sOi - oImY[3]) + oImX[3]; oImX[3] = sOi; oImY[3] = yoi3;
+let abo = yoi3;
+
+// --- 4. ASpSB Matrix Heterodyning (Paper Eq. 20 & Csound ASpSB Opcode) ---
+let aeu = aae * ac - abe * ad; // Upper Even sidebands
+let aou = aao * ac - abo * ad; // Upper Odd sidebands
+let ael = aae * ac + abe * ad; // Lower Even sidebands
+let aol = aao * ac + abo * ad; // Lower Odd sidebands
+
+// --- 5. Sideband Tilt Mixing & Stereo Spatialization (Paper Sec 4.3) ---
+let lh = clamp(low_high_tilt, -1.0, 1.0);
+let oe = clamp(odd_even_tilt, -1.0, 1.0);
+
+let gainUpper = clamp(1.0 + lh, 0.0, 1.4);
+let gainLower = clamp(1.0 - lh, 0.0, 1.4);
+let gainEven = clamp(1.0 + oe, 0.0, 1.4);
+let gainOdd = clamp(1.0 - oe, 0.0, 1.4);
+
+// Place Even & Odd sideband groups with subtle stereo spread for huge dubstep image
+let outL = gainUpper * (gainEven * aeu + 0.7 * gainOdd * aou) + gainLower * (gainOdd * aol + 0.7 * gainEven * ael);
+let outR = gainUpper * (gainOdd * aou + 0.7 * gainEven * aeu) + gainLower * (gainEven * ael + 0.7 * gainOdd * aol);
+
+out1 = outL * 0.7;
+out2 = outR * 0.7;

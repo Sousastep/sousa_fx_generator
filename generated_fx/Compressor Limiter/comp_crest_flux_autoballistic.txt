@@ -1,0 +1,133 @@
+// ============================================================================
+// comp_crest_flux_autoballistic.txt
+// Stereo Crest-Factor & Spectral-Flux Adaptive Auto-Ballistic FET/VCA Compressor
+// Based on Maddams, Finn & Reiss (DAFx-2012, "An Autonomous Method for
+// Multi-Track Dynamic Range Compression", Sec. 4.2, Fig. 2A/2B) and
+// Hilsamer & Herzog (DAFx-2014, Sec. 2-3, Fig. 1)
+// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// ============================================================================
+
+@param({ min: -40.0, max: 0.0 }) thresh_db = -20.0;
+@param({ min: 1.5, max: 30.0 }) ratio = 8.0;
+@param({ min: 0.0, max: 1.0 }) var_knee_mode = 0.65;
+@param({ min: 0.1, max: 50.0 }) base_attack_ms = 8.0;
+@param({ min: 20.0, max: 800.0 }) base_release_ms = 180.0;
+@param({ min: 0.0, max: 1.0 }) crest_flux_adapt = 0.75;
+@param({ min: 0.0, max: 1.0 }) fet_slam_sat = 0.40;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// Decoupled Peak and RMS detectors for instantaneous Crest Factor calculation
+@state peak_env = 0.0001;
+@state rms_sq_env = 0.0001;
+
+// 2-band split for real-time Spectral Flux onset detection (Maddams Sec. 4.2)
+@state flux_lp = 0.0;
+@state prev_lo_e = 0.0;
+@state prev_hi_e = 0.0;
+@state spec_flux_env = 0.0;
+
+// Smoothed gain-reduction state in dB
+@state gr_smooth_db = 0.0;
+
+// Helper: Soft-knee / Variable-knee static gain computer (Maddams Sec. 4.2.1 Fig. 2A)
+// In "Threshold Mode" (var_knee_mode -> 1), knee width equals |thresh_db| and ratio -> inf
+function adaptive_knee_gr_db(
+    x_db: number,
+    T: number,
+    R: number,
+    vk_mode: number
+): number {
+    let vk = clamp(vk_mode, 0.0, 1.0);
+    let eff_R = R + vk * (40.0 - R);
+    // Fixed 3 dB knee in Ratio mode vs |T| knee width in Threshold mode (DAFx-2012 Sec. 4.2.1)
+    let knee_w = (1.0 - vk) * 3.0 + vk * max(abs(T), 3.0);
+    let diff = x_db - T;
+    let slope = (1.0 / max(eff_R, 1.0)) - 1.0;
+    if (2.0 * diff < -knee_w) {
+        return 0.0;
+    } else if (2.0 * abs(diff) <= knee_w) {
+        let u = diff + 0.5 * knee_w;
+        return slope * (u * u) / max(2.0 * knee_w, 0.001);
+    } else {
+        return slope * diff;
+    }
+}
+
+let sr_safe = max(samplerate(), 8000.0);
+let dryL = in1;
+let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+
+// Stereo-linked instantaneous magnitude and squared energy
+let x_abs = max(abs(dryL), abs(dryR));
+let x_sq = 0.5 * (dryL * dryL + dryR * dryR);
+
+// Fast peak tracker (1 ms attack, 25 ms decay) & RMS tracker (45 ms window)
+let a_pk_att = 1.0 - exp(-1.0 / (0.001 * sr_safe));
+let a_pk_rel = 1.0 - exp(-1.0 / (0.025 * sr_safe));
+peak_env = ((x_abs > peak_env) ? a_pk_att : a_pk_rel) * x_abs + (1.0 - ((x_abs > peak_env) ? a_pk_att : a_pk_rel)) * peak_env;
+
+let a_rms = 1.0 - exp(-1.0 / (0.045 * sr_safe));
+rms_sq_env = a_rms * x_sq + (1.0 - a_rms) * rms_sq_env;
+let rms_val = sqrt(max(rms_sq_env, 1e-12));
+
+// Crest Factor in dB = 20*log10(peak / rms)
+let crest_db = clamp(20.0 * log10(max(peak_env, 1e-6) / max(rms_val, 1e-6)), 0.0, 24.0);
+let crest_norm = clamp((crest_db - 3.0) / 15.0, 0.0, 1.0);
+
+// Real-time 2-band Spectral Flux detector (positive energy derivative across Low/High bands)
+let mono = 0.5 * (dryL + dryR);
+let g_flx = 1.0 - exp(-2.0 * PI * 1400.0 / sr_safe);
+flux_lp = flux_lp + g_flx * (mono - flux_lp);
+let hi_sig = mono - flux_lp;
+
+let lo_e = abs(flux_lp);
+let hi_e = abs(hi_sig);
+let d_flux = max(0.0, lo_e - prev_lo_e) + 1.8 * max(0.0, hi_e - prev_hi_e);
+prev_lo_e = lo_e;
+prev_hi_e = hi_e;
+
+let a_flx_att = 1.0 - exp(-1.0 / (0.002 * sr_safe));
+let a_flx_rel = 1.0 - exp(-1.0 / (0.050 * sr_safe));
+spec_flux_env = ((d_flux > spec_flux_env) ? a_flx_att : a_flx_rel) * d_flux + (1.0 - ((d_flux > spec_flux_env) ? a_flx_att : a_flx_rel)) * spec_flux_env;
+let flux_norm = clamp(spec_flux_env * 12.0, 0.0, 1.0);
+
+// Combined transient activity index [0..1]
+let adapt = clamp(crest_flux_adapt, 0.0, 1.0);
+let activity = adapt * clamp(0.55 * crest_norm + 0.45 * flux_norm, 0.0, 1.0);
+
+// Modulate attack and release time constants inversely with Crest Factor & Spectral Flux
+// High crest / high spectral flux -> ultra-fast attack (down to 40 us FET speed) & fast recovery
+let t_att_ms = clamp(base_attack_ms, 0.1, 50.0) * (1.0 - 0.88 * activity);
+let t_rel_ms = clamp(base_release_ms, 20.0, 800.0) * (1.0 - 0.78 * activity);
+
+let alpha_att = 1.0 - exp(-1.0 / (max(t_att_ms * 0.001, 0.00004) * sr_safe));
+let alpha_rel = 1.0 - exp(-1.0 / (max(t_rel_ms * 0.001, 0.008) * sr_safe));
+
+let T = clamp(thresh_db, -40.0, 0.0);
+let R = clamp(ratio, 1.5, 30.0);
+let x_level_db = atodb(max(peak_env, 1e-6));
+
+let raw_gr_db = adaptive_knee_gr_db(x_level_db, T, R, var_knee_mode);
+let target_atten_db = -raw_gr_db;
+
+if (target_atten_db > gr_smooth_db) {
+    gr_smooth_db = gr_smooth_db + alpha_att * (target_atten_db - gr_smooth_db);
+} else {
+    gr_smooth_db = gr_smooth_db + alpha_rel * (target_atten_db - gr_smooth_db);
+}
+
+// Automatic loudness makeup + optional 1176-style FET "All-Buttons-In" harmonic slam
+let makeup_db = -0.52 * T * (1.0 - 1.0 / max(R, 1.5));
+let lin_gain = dbtoa(-gr_smooth_db + makeup_db);
+
+let uL = dryL * lin_gain;
+let uR = dryR * lin_gain;
+
+let sat = clamp(fet_slam_sat, 0.0, 1.0);
+let drv_fet = 1.0 + sat * (0.8 + 0.08 * gr_smooth_db);
+let wetL = (sat > 0.001) ? (tanh(uL * drv_fet) / tanh(drv_fet)) : uL;
+let wetR = (sat > 0.001) ? (tanh(uR * drv_fet) / tanh(drv_fet)) : uR;
+
+let mx = clamp(mix, 0.0, 1.0);
+out1 = (1.0 - mx) * dryL + mx * wetL;
+out2 = (1.0 - mx) * dryR + mx * wetR;

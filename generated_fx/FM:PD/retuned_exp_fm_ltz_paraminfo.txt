@@ -1,0 +1,44 @@
+================================================================================
+retuned_exp_fm_ltz — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Re-Tuned Exponential Frequency Modulation with Linear-Through-Zero (LTZ) Phase Integration from Timoney & Lazzarini (DAFx-11 Paper 60_e) and DAFx-20 Paper 61 (Sections 2.2 & 4.1–4.3, Eq. 14–23, Fig. 6–7). In modular analog synthesizers, Exponential FM (w(t) = w_c * 2^(alpha * m(t))) produces punchy, asymmetrical sideband spectra, but suffers from severe upward pitch drift proportional to the zeroth Modified Bessel function E = I0(alpha * ln(2)) (Eq. 19). By subtracting (E - 1)*w_c inside a Through-Zero phase integrator (where negative instantaneous frequencies reverse phase angle cleanly) AND applying the zero-mean exponential integral to a time-varying delay line on the live tuba, this effect delivers concert-tuned, zero-drift Exponential FM across 4.5 octaves of excursion.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba Carrier)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional External Audio-Rate Modulator [-1..1] (if unpatched, uses internal pitch-locked modulator)
+- out1 / out2: Stereo Re-Tuned Exponential FM Output
+
+PARAMETERS (6)
+
+1. exp_octaves
+   - Range: 0.0 to 4.5 Octaves of Exponential Frequency Deviation alpha (Default: 1.6)
+   - Taper: Linear in octaves (2^( +/- alpha ) instantaneous frequency swing).
+   - Function: Controls the exponential FM depth. Even at 4+ octaves of audio-rate swing, the fundamental pitch stays locked when retune_comp = 1.0.
+
+2. mod_ratio
+   - Range: 0.25 to 4.00 (Modulator-to-Carrier Ratio f_m / f_0, Default: 1.00)
+   - Taper: Linear ratio.
+   - Function: Sets the pitch-tracked modulator frequency relative to the tuba's fundamental f0.
+
+3. mod_wave_tri
+   - Range: 0.0 to 1.0 (0.0 = Sinusoidal Modulator with I0(alpha*ln2) Correction, 1.0 = Triangle Modulator with sinh(alpha*ln2)/(alpha*ln2) Correction)
+   - Taper: Linear crossfade between both waveform and exact analytic re-tuning integral (DAFx-20 Eq. 19 vs. Eq. 20).
+   - Function: Morphs the modulator waveform from smooth sine to sharp triangle while simultaneously interpolating the exact mathematical DC pitch-drift compensation.
+
+4. retune_comp
+   - Range: 0.0 to 1.0 (0.0 = Uncompensated "Naïve" Analog Pitch Drift, 1.0 = 100% Analytic Bessel/Sinh Zero-Drift Re-Tuning)
+   - Taper: Linear compensation amount.
+   - Function: Engages DAFx-20 Eq. 17/23 analytic DC offset subtraction. Pull toward 0.0 momentarily if you want classic uncompensated analog sci-fi pitch-bend swoops when increasing exp_octaves.
+
+5. delay_synth_blend
+   - Range: 0.0 to 1.0 (0.0 = Full Acoustic Tuba Delay-Line Exp-FM, 1.0 = Pure Through-Zero Oscillator Resynthesis)
+   - Taper: Linear crossfade.
+   - Function: Blends between the multi-harmonic acoustic tuba warped via a TVDL (0.0) and the pure Linear-Through-Zero (LTZ) sinusoidal carrier oscillator driven by the tuba's envelope and pitch (1.0).
+
+6. stereo_spread
+   - Range: 0.0 to 1.0 (maps to 0 to 90 degrees Quadrature Modulator Phase Offset on Right Channel)
+   - Taper: Linear phase spread.
+   - Function: Spreads the exponential sideband phase between Left and Right channels.

@@ -1,0 +1,163 @@
+// ============================================================================
+// retuned_exp_fm_ltz.txt
+// Unix-Style Stereo Effect: Zero-Drift Re-Tuned Exponential FM & Through-Zero PM
+// Implements Timoney & Lazzarini (DAFx-11, Paper 60_e) and DAFx-20 (Paper 61):
+// "Exponential Frequency Modulation Bandwidth Criterion for Virtual Analog Applications"
+// & "Linear-Through-Zero FM and Re-Tuning Exponential FM" (Sec 4.1-4.3, Eq. 14-23).
+// Analog Exponential FM w_exp(t) = w_c * 2^(alpha * m(t)) produces massive, punchy
+// asymmetric bass sidebands, but drifts sharp by the Modified Bessel factor
+// E = I_0(alpha * ln(2)) (for sine mod, Eq. 19) or sinh(alpha*ln(2))/(alpha*ln(2))
+// (for triangle mod, Eq. 20).
+// Subtracting (E - 1)*w_c in a Through-Zero phase integrator (Eq. 17 & 23) AND/OR
+// applying the exact integral to a TVDL delay line locks the fundamental to concert
+// pitch while preserving 100% of Exponential FM's analog grit!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba Carrier)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
+//   in4: Optional External Modulator [-1..1] (if unpatched, uses internal ratio oscillator)
+// Outlets:
+//   out1: Left Re-Tuned Exponential FM Output
+//   out2: Right Re-Tuned Exponential FM Output
+
+@param({ min: 0.0, max: 4.5 }) exp_octaves = 1.6;
+@param({ min: 0.25, max: 4.0 }) mod_ratio = 1.0;
+@param({ min: 0.0, max: 1.0 }) mod_wave_tri = 0.0;
+@param({ min: 0.0, max: 1.0 }) retune_comp = 1.0;
+@param({ min: 0.0, max: 1.0 }) delay_synth_blend = 0.35;
+@param({ min: 0.0, max: 1.0 }) stereo_spread = 0.25;
+
+// Delay lines for applying Re-Tuned Exp-FM directly to the full acoustic tuba spectrum
+@state delayBufL = new FixedSampleArray(4096);
+@state delayBufR = new FixedSampleArray(4096);
+@state writeIdx: Int = 0;
+
+// Through-Zero Carrier Phase Integrators & DC-drift trackers on integrated phase
+@state tzPhaseL = 0.0;
+@state tzPhaseR = 0.0;
+@state delPhaseL = 0.0;
+@state delPhaseR = 0.0;
+@state modPhasor = new phasor();
+
+// Fallback ZC pitch tracker & envelope follower
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothEnv = 0.0;
+@state smoothOct = 1.6;
+
+// Abramowitz & Stegun polynomial approximation of Modified Bessel I0(x) (DAFx-20 Eq. 19)
+function besselI0(x: number): number {
+	let ax = abs(x);
+	let res = 1.0;
+	if (ax < 3.75) {
+		let t = ax / 3.75;
+		let t2 = t * t;
+		res = 1.0 + t2 * (3.5156229 + t2 * (3.0899424 + t2 * (1.2067492 + t2 * (0.2659732 + t2 * (0.0360768 + t2 * 0.0045813)))));
+	} else {
+		let t = 3.75 / ax;
+		res = (exp(ax) / sqrt(ax)) * (0.39894228 + t * (0.01328592 + t * (0.00225319 + t * (-0.00157565 + t * (0.00916281 + t * -0.02057706)))));
+	}
+	return res;
+}
+
+function readDelay4k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
+	let d = clamp(delSamps, 2.0, 4090.0);
+	let readPos = wIdx - d;
+	while (readPos < 0.0) {
+		readPos += 4096.0;
+	}
+	let idx0: Int = floor(readPos);
+	let frac = readPos - idx0;
+	let i_m1: Int = (idx0 - 1 + 4096) & 4095;
+	let i_0: Int  = idx0 & 4095;
+	let i_1: Int  = (idx0 + 1) & 4095;
+	let i_2: Int  = (idx0 + 2) & 4095;
+	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let extMod = in4;
+
+// --- 1. Pitch & Envelope Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+smoothEnv += (abs(mono) - smoothEnv) * (1.0 - exp(-1.0 / (0.005 * sr)));
+smoothOct += (clamp(exp_octaves, 0.0, 4.5) - smoothOct) * slew;
+
+delayBufL[writeIdx] = xL;
+delayBufR[writeIdx] = xR;
+
+// --- 2. Modulator Signal & Analytic DC Pitch-Drift Factor E (DAFx-20 Eq. 19 & 20) ---
+let fm = clamp(f0 * clamp(mod_ratio, 0.25, 4.0), 6.0, sr * 0.24);
+let phM = modPhasor.next(fm);
+let phMR = wrap(phM + clamp(stereo_spread, 0.0, 1.0) * 0.25, 0.0, 1.0);
+
+let triBlend = clamp(mod_wave_tri, 0.0, 1.0);
+let sinM_L = sin(2.0 * pi * phM);
+let triM_L = 2.0 * triangle(phM, 0.5) - 1.0;
+let sinM_R = sin(2.0 * pi * phMR);
+let triM_R = 2.0 * triangle(phMR, 0.5) - 1.0;
+
+let hasExt = (abs(extMod) > 0.0001) ? 1.0 : 0.0;
+let mL = hasExt ? clamp(extMod, -1.0, 1.0) : linearinterp(triBlend, sinM_L, triM_L);
+let mR = hasExt ? clamp(extMod, -1.0, 1.0) : linearinterp(triBlend, sinM_R, triM_R);
+
+// Compute analytic pitch-drift factor E for sine (Eq. 19) and triangle (Eq. 20)
+let aLn2 = maximum(smoothOct * 0.69314718056, 0.0001);
+let eSine = besselI0(aLn2);
+let eTri = sinh(aLn2) / aLn2;
+let E = linearinterp(triBlend, eSine, eTri);
+
+// --- 3. Re-Tuned Linear-Through-Zero Exponential FM (DAFx-20 Eq. 17 & Fig. 7) ---
+// w_exp,dc(t) = w_c * (2^(alpha * m(t)) - comp * (E - 1))
+let comp = clamp(retune_comp, 0.0, 1.0);
+let instMultL = pow(2.0, smoothOct * mL) - comp * (E - 1.0);
+let instMultR = pow(2.0, smoothOct * mR) - comp * (E - 1.0);
+
+// Through-Zero phase integration (negative instantaneous frequencies reverse phase!)
+tzPhaseL = wrap(tzPhaseL + (f0 * instMultL) / sr, 0.0, 1.0);
+tzPhaseR = wrap(tzPhaseR + (f0 * instMultR) / sr, 0.0, 1.0);
+
+let ltzSynthL = sin(2.0 * pi * tzPhaseL) * clamp(smoothEnv * 2.2, 0.0, 1.5);
+let ltzSynthR = sin(2.0 * pi * tzPhaseR) * clamp(smoothEnv * 2.2, 0.0, 1.5);
+
+// --- 4. Adaptive Delay-Line Re-Tuned Exponential FM on Full Tuba ---
+// Integrate zero-mean deviation (instMult - 1) with leaky centering for TVDL excursion
+let devL = pow(2.0, smoothOct * mL) / E - 1.0;
+let devR = pow(2.0, smoothOct * mR) / E - 1.0;
+delPhaseL = delPhaseL * 0.999 + devL * (f0 / sr);
+delPhaseR = delPhaseR * 0.999 + devR * (f0 / sr);
+
+let baseDel = clamp(sr / f0, 16.0, 2048.0);
+let delL = clamp(baseDel + delPhaseL * (sr / (2.0 * pi * fm)) * 4.0, 4.0, 4090.0);
+let delR = clamp(baseDel + delPhaseR * (sr / (2.0 * pi * fm)) * 4.0, 4.0, 4090.0);
+
+let tvdlL = readDelay4k(delayBufL, writeIdx, delL);
+let tvdlR = readDelay4k(delayBufR, writeIdx, delR);
+
+writeIdx = (writeIdx + 1) & 4095;
+
+let blend = clamp(delay_synth_blend, 0.0, 1.0);
+out1 = linearinterp(blend, tvdlL, ltzSynthL);
+out2 = linearinterp(blend, tvdlR, ltzSynthR);

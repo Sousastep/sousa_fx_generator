@@ -1,0 +1,129 @@
+// ============================================================================
+// buchla259_parallel_wavefolder.txt
+// Unix-Style Stereo Effect: Virtual Analog Buchla 259 5-Cell Parallel Wavefolder
+// Implements Fabian Esqueda, Henri Pontynen, Vesa Valimaki & Julian D. Parker
+// (DAFx-17, Paper 82): "Virtual Analog Buchla 259 Wavefolder"
+// (Sections 2.1, 2.2, 3 & 3.1, Eq. 9-18, Table 1, Fig. 1-4, 9).
+// Unlike series Lockhart/sine wavefolders (`12_adaa_chebyshev_wavefolder`), the
+// Buchla 259 Complex Waveform Generator uses FIVE parallel op-amp deadband
+// folding cells V_1..V_5 with exact resistor-derived voltage thresholds
+// (+/-0.600 V, +/-1.800 V, +/-2.994 V, +/-4.080 V, +/-5.460 V) and inverted summing
+// weights (-12.0, +17.647, -27.777, +36.363, -21.428, +5.0*Vin, Eq. 13-18)
+// followed by the upper summing amplifier's active 1st-order lowpass timbre filter.
+// Includes First-Order Antiderivative Antialiasing (ADAA1) on the piecewise-linear
+// Buchla transfer function (equivalent to exact 2-point BLAMP corner rounding)!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba or 01_harmonic_isolator)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Mod Envelope [0..1] (modulates Buchla timbre folding drive)
+//   in4: Optional 1-Bar Phasor [0..1] (sweeps symmetry offset when sym_wobble > 0)
+// Outlets:
+//   out1: Left Buchla 259 Wavefolded Output
+//   out2: Right Buchla 259 Wavefolded Output
+
+@param({ min: 0.2, max: 10.0 }) timbre_drive_v = 4.2;
+@param({ min: -2.5, max: 2.5 }) symmetry_offset_v = 0.0;
+@param({ min: 300.0, max: 16000.0 }) buchla_lp_hz = 2800.0;
+@param({ min: 0.0, max: 1.0 }) env_timbre_mod = 0.35;
+@param({ min: 0.0, max: 1.0 }) sym_wobble = 0.25;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// ADAA1 state memory (previous input v[n-1] and antiderivative F1(v[n-1]))
+@state prevVL = 0.0; @state prevF1L = 0.0;
+@state prevVR = 0.0; @state prevF1R = 0.0;
+
+// Buchla 259 Output Summing Amplifier 1st-order lowpass filter (Paper Sec 3.1, Fig. 9)
+@state outLpL = new onepole();
+@state outLpR = new onepole();
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+@state barFallback = new phasor();
+@state prevBarIn = 0.0;
+@state smoothDrive = 4.2;
+@state smoothSym = 0.0;
+
+// Direct Buchla 259 5-Branch Parallel Folding Transfer Function V'_out(v) (Paper Eq. 13-18)
+function buchla259Direct(v: number): number {
+	let av = abs(v);
+	let s = (v >= 0.0) ? 1.0 : -1.0;
+
+	let v1 = (av > 0.6000) ? (0.8333 * v - 0.5000 * s) : 0.0;
+	let v2 = (av > 2.9940) ? (0.3768 * v - 1.1281 * s) : 0.0;
+	let v3 = (av > 5.4600) ? (0.2829 * v - 1.5446 * s) : 0.0;
+	let v4 = (av > 1.8000) ? (0.5743 * v - 1.0338 * s) : 0.0;
+	let v5 = (av > 4.0800) ? (0.2673 * v - 1.0907 * s) : 0.0;
+
+	// Paper Eq. 18 global summing stage (scaled by 0.22 so +/-5V peak maps to [-1, 1])
+	let vOut = -12.000 * v1 - 27.777 * v2 - 21.428 * v3 + 17.647 * v4 + 36.363 * v5 + 5.000 * v;
+	return vOut * 0.22;
+}
+
+// Exact Analytic Antiderivative F1(v) = integral(V'_out(v) dv) for ADAA1 / BLAMP Antialiasing!
+// For each deadband branch k: integral_{T_k}^{|v|} m_k*(u - T_k) du = 0.5 * m_k * (|v| - T_k)^2
+function buchla259Antideriv(v: number): number {
+	let av = abs(v);
+
+	let d1 = maximum(av - 0.6000, 0.0);
+	let d2 = maximum(av - 2.9940, 0.0);
+	let d3 = maximum(av - 5.4600, 0.0);
+	let d4 = maximum(av - 1.8000, 0.0);
+	let d5 = maximum(av - 4.0800, 0.0);
+
+	let f1 = 0.5 * 0.8333 * d1 * d1;
+	let f2 = 0.5 * 0.3768 * d2 * d2;
+	let f3 = 0.5 * 0.2829 * d3 * d3;
+	let f4 = 0.5 * 0.5743 * d4 * d4;
+	let f5 = 0.5 * 0.2673 * d5 * d5;
+
+	let F = -12.000 * f1 - 27.777 * f2 - 21.428 * f3 + 17.647 * f4 + 36.363 * f5 + 2.500 * v * v;
+	return F * 0.22;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let envIn = clamp(in3, 0.0, 1.5);
+let barIn = in4;
+
+let slew = 1.0 - exp(-1.0 / (0.005 * sr));
+smoothDrive += (clamp(timbre_drive_v, 0.2, 10.0) - smoothDrive) * slew;
+smoothSym += (clamp(symmetry_offset_v, -2.5, 2.5) - smoothSym) * slew;
+
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : barFallback.next(0.5);
+let symLfo = sin(2.0 * pi * barPh) * clamp(sym_wobble, 0.0, 1.0) * 1.4;
+
+let effDrive = clamp(smoothDrive + clamp(env_timbre_mod, 0.0, 1.0) * envIn * 5.0, 0.2, 11.0);
+let vInL = clamp(xL * effDrive + smoothSym + symLfo, -11.0, 11.0);
+let vInR = clamp(xR * effDrive - smoothSym - symLfo, -11.0, 11.0);
+
+// --- Evaluate ADAA1 Antialiased Buchla 259 Parallel Wavefolder ---
+let curF1L = buchla259Antideriv(vInL);
+let diffVL = vInL - prevVL;
+let foldL = (abs(diffVL) > 0.00001) ? ((curF1L - prevF1L) / diffVL) : buchla259Direct(0.5 * (vInL + prevVL));
+prevVL = vInL;
+prevF1L = curF1L;
+
+let curF1R = buchla259Antideriv(vInR);
+let diffVR = vInR - prevVR;
+let foldR = (abs(diffVR) > 0.00001) ? ((curF1R - prevF1R) / diffVR) : buchla259Direct(0.5 * (vInR + prevVR));
+prevVR = vInR;
+prevF1R = curF1R;
+
+// --- Buchla 259 Upper Summing Amplifier Active Lowpass Filter (Paper Sec 3.1) ---
+let lpCut = clamp(buchla_lp_hz, 300.0, 16000.0);
+let filtL = outLpL.next(foldL, lpCut);
+let filtR = outLpR.next(foldR, lpCut);
+
+// DC blocker
+let dcOutL = filtL - dcXL + 0.995 * dcYL;
+dcXL = filtL; dcYL = dcOutL;
+let dcOutR = filtR - dcXR + 0.995 * dcYR;
+dcXR = filtR; dcYR = dcOutR;
+
+let m = clamp(mix, 0.0, 1.0);
+out1 = linearinterp(m, xL, dcOutL);
+out2 = linearinterp(m, xR, dcOutR);

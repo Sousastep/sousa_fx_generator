@@ -1,0 +1,124 @@
+// ============================================================================
+// 08_suboctave_phase_ringmod.txt
+// Unix-Style Effect 8: Phase-Divided Sub-Octave Ring Modulator & Feedback AM
+// Implements Approach 3b & 5 from "Novel Distortion Approaches for Live Tuba"
+// and Kleimola et al. (2011) Feedback Amplitude Modulation (y[n] = x[n]*(1 + k*y[n-1])).
+// Extracts instantaneous phase theta(t), tracks phase wraps to construct a
+// zero-drift phase-divided sub-octave modulator cos(theta_unwrapped / 2) and
+// sub-fifth cos(theta_unwrapped / 3) that never beats against the tuba.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input
+//   in2: Right Audio Input
+//   in3: Optional Tracked Pitch in Hz (used to tune lowpass pre-conditioner if > 20 Hz)
+// Outlets:
+//   out1: Left Sub-Octave Ring-Mod / Feedback AM Output
+//   out2: Right Sub-Octave Ring-Mod / Feedback AM Output
+
+@param({ min: 0.0, max: 1.0 }) sub_harmonic = 0.0;
+@param({ min: 0.0, max: 1.0 }) rm_depth = 0.85;
+@param({ min: 0.0, max: 0.92 }) fb_am = 0.35;
+@param({ min: 0.0, max: 1.0 }) mix = 0.8;
+
+// Hilbert quadrature pair for instantaneous phase extraction
+@state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
+@state hDelRe = 0.0;
+
+// Phase wrap counter for exact phase division (theta / 2 and theta / 3)
+@state prevTheta = 0.0;
+@state wrapCount: Int = 0;
+
+// Feedback AM state (Kleimola et al. 2011)
+@state prevYL = 0.0;
+@state prevYR = 0.0;
+
+// Pre-filter for clean fundamental phase tracking + DC blockers
+@state lpTrack = new onepole();
+@state dcX1L = 0.0; @state dcY1L = 0.0;
+@state dcX1R = 0.0; @state dcY1R = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+
+// --- 1. Pre-Filter Tuba Fundamental for Clean Analytic Phase ---
+let trackCutoff = (pitchIn > 20.0 && pitchIn < 1000.0) ? (pitchIn * 1.35) : 140.0;
+let monoFund = lpTrack.next(0.5 * (xL + xR), clamp(trackCutoff, 35.0, 800.0));
+
+// --- 2. Analytic Phase Extraction ---
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+let sRe = monoFund;
+let yRe0 = cRe0 * (sRe - hReY[0]) + hReX[0]; hReX[0] = sRe; hReY[0] = yRe0; sRe = yRe0;
+let yRe1 = cRe1 * (sRe - hReY[1]) + hReX[1]; hReX[1] = sRe; hReY[1] = yRe1; sRe = yRe1;
+let yRe2 = cRe2 * (sRe - hReY[2]) + hReX[2]; hReX[2] = sRe; hReY[2] = yRe2; sRe = yRe2;
+let yRe3 = cRe3 * (sRe - hReY[3]) + hReX[3]; hReX[3] = sRe; hReY[3] = yRe3;
+let outRe = hDelRe; hDelRe = yRe3;
+
+let sIm = monoFund;
+let yIm0 = cIm0 * (sIm - hImY[0]) + hImX[0]; hImX[0] = sIm; hImY[0] = yIm0; sIm = yIm0;
+let yIm1 = cIm1 * (sIm - hImY[1]) + hImX[1]; hImX[1] = sIm; hImY[1] = yIm1; sIm = yIm1;
+let yIm2 = cIm2 * (sIm - hImY[2]) + hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm = yIm2;
+let yIm3 = cIm3 * (sIm - hImY[3]) + hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;
+let outIm = yIm3;
+
+let pol = cartopol(outRe, outIm);
+let instAmp = pol[0];
+let theta = pol[1]; // [-pi, pi]
+
+// --- 3. Phase Unwrapping Counter (Modulo 6 Cycles for LCM of /2 and /3) ---
+let dTheta = theta - prevTheta;
+if (dTheta < -pi) {
+	wrapCount = (wrapCount + 1) % 6;
+} else if (dTheta > pi) {
+	wrapCount = (wrapCount + 5) % 6;
+}
+prevTheta = theta;
+
+let unwrappedTheta = theta + 2.0 * pi * wrapCount;
+
+// Locked Sub-Octave (theta / 2), Sub-Twelfth (theta / 3), and Octave-Up (2 * theta)
+let subOctL = cos(0.5 * unwrappedTheta);
+let subOctR = cos(0.5 * unwrappedTheta + 0.25 * pi); // Stereo quadrature spread
+let subFifthL = cos(unwrappedTheta / 3.0);
+let subFifthR = cos(unwrappedTheta / 3.0 + 0.25 * pi);
+let octUp = cos(2.0 * theta);
+
+// Morph modulator across Sub-Octave (0.0) -> Sub-Twelfth (0.5) -> Sub+Octave Growl (1.0)
+let sh = clamp(sub_harmonic, 0.0, 1.0);
+let modWaveL = (sh < 0.5) ? linearinterp(sh * 2.0, subOctL, subFifthL) : linearinterp((sh - 0.5) * 2.0, subFifthL, 0.7 * subOctL + 0.5 * octUp);
+let modWaveR = (sh < 0.5) ? linearinterp(sh * 2.0, subOctR, subFifthR) : linearinterp((sh - 0.5) * 2.0, subFifthR, 0.7 * subOctR - 0.5 * octUp);
+
+// Silence gate so phase noise doesn't chatter when not playing
+let gate = clamp((instAmp - 0.0008) * 250.0, 0.0, 1.0);
+modWaveL *= gate;
+modWaveR *= gate;
+
+// --- 4. AM-to-RM Continuum + Feedback AM (Kleimola et al. 2011) ---
+// y = x * ( (1 - d) + d * modWave + k * y[n-1] )
+let d = pow(clamp(rm_depth, 0.0, 1.0), 1.2);
+let kFb = pow(clamp(fb_am / 0.92, 0.0, 1.0), 1.4) * 0.92;
+
+let amModL = (1.0 - d) + d * modWaveL;
+let amModR = (1.0 - d) + d * modWaveR;
+
+let rawYL = xL * (amModL + kFb * prevYL);
+let rawYR = xR * (amModR + kFb * prevYR);
+
+// Soft-saturate feedback loop to prevent runaway while keeping sawtooth bite
+prevYL = tanh(rawYL);
+prevYR = tanh(rawYR);
+
+// --- 5. DC Blocking Filter (Highpass at ~12 Hz) ---
+let dcR = 1.0 - (2.0 * pi * 12.0 / sr);
+let cleanL = prevYL - dcX1L + dcR * dcY1L;
+dcX1L = prevYL; dcY1L = cleanL;
+
+let cleanR = prevYR - dcX1R + dcR * dcY1R;
+dcX1R = prevYR; dcY1R = cleanR;
+
+out1 = linearinterp(clamp(mix, 0.0, 1.0), xL, cleanL);
+out2 = linearinterp(clamp(mix, 0.0, 1.0), xR, cleanR);

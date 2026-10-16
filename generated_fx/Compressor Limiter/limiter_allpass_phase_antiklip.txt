@@ -1,0 +1,148 @@
+// ============================================================================
+// limiter_allpass_phase_antiklip.txt
+// Stereo Dispersive All-Pass Peak Eraser & Coefficient-Bounded Anti-Clip Limiter
+// Based on Fontana, Bernardini, Pasin & D'Angelo (DAFx-2026, "A Clipping
+// Prevention Method for All-Pass Digital Filters with Time-Varying
+// Coefficients", Sections 1 & 2, Eqs. 1-15, Algorithms 1-2)
+// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// ============================================================================
+
+@param({ min: 0.0, max: 20.0 }) drive_db = 6.0;
+@param({ min: 0.10, max: 1.00 }) ceiling_mag = 0.92;
+@param({ min: 60.0, max: 2500.0 }) ap_freq_hz = 340.0;
+@param({ min: 0.0, max: 1.0 }) env_mod_depth = 0.70;
+@param({ min: 0.5, max: 50.0 }) mod_slew_ms = 6.0;
+@param({ min: 0.0, max: 1.0 }) stage2_spread = 0.55;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// Envelope detector states for dynamic phase dispersion
+@state env_L = 0.0;
+@state env_R = 0.0;
+
+// Stage 1 First-order all-pass states & previous coefficients (Eq. 1-7, Alg. 1)
+@state x1_prev_L = 0.0;
+@state y1_prev_L = 0.0;
+@state c1_prev_L = 0.0;
+
+@state x1_prev_R = 0.0;
+@state y1_prev_R = 0.0;
+@state c1_prev_R = 0.0;
+
+// Stage 2 First-order all-pass states & previous coefficients (cascaded section)
+@state x2_prev_L = 0.0;
+@state y2_prev_L = 0.0;
+@state c2_prev_L = 0.0;
+
+@state x2_prev_R = 0.0;
+@state y2_prev_R = 0.0;
+@state c2_prev_R = 0.0;
+
+// Helper: Fontana et al. (DAFx-2026 Algorithm 1, Eqs. 1-7)
+// First-order all-pass step with algebraic coefficient increment bounding
+// Guarantees |y[n]| <= M whenever |x[n]| <= M and |y[n-1]| <= M
+function allpass1_antiklip_step(
+    x_n: number,
+    x_prev: number,
+    y_prev: number,
+    c_target: number,
+    c_prev: number,
+    M: number
+): list {
+    // Static counterpart output w[n] (Eq. 2)
+    let d = x_n - y_prev;
+    let w_n = c_prev * d + x_prev;
+    let delta_c = c_target - c_prev;
+
+    if (abs(d) > 1e-7) {
+        if (d > 0.0) {
+            // Eq. 6 bounds for d > 0
+            let lo = (-M - w_n) / d;
+            let hi = (M - w_n) / d;
+            delta_c = clamp(delta_c, min(lo, hi), max(lo, hi));
+        } else {
+            // Eq. 7 bounds for d < 0
+            let lo = (M - w_n) / d;
+            let hi = (-M - w_n) / d;
+            delta_c = clamp(delta_c, min(lo, hi), max(lo, hi));
+        }
+    }
+
+    let c_n = clamp(c_prev + delta_c, -0.985, 0.985);
+    // Compute y[n] from Eq. 1 and enforce exact ceiling M against static overshoot
+    let y_n = clamp(c_n * d + x_prev, -M, M);
+    return [y_n, c_n];
+}
+
+let sr_safe = max(samplerate(), 8000.0);
+let dryL = in1;
+let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+
+let M = clamp(ceiling_mag, 0.10, 1.00);
+let drv = dbtoa(clamp(drive_db, 0.0, 20.0));
+
+// Pre-bound input into [-M, M] via smooth hyperbolic knee before dispersive all-pass
+// (Fontana Sec. 2 hypothesis: |x[n]| <= M entering the time-varying all-pass)
+let uL = dryL * drv;
+let uR = dryR * drv;
+let xL = M * tanh(uL / M);
+let xR = M * tanh(uR / M);
+
+// Fast transient envelope detection to sweep all-pass pole frequency across transients
+let tau_slew = clamp(mod_slew_ms, 0.5, 50.0) * 0.001;
+let a_att = 1.0 - exp(-1.0 / (0.0008 * sr_safe));
+let a_rel = 1.0 - exp(-1.0 / (tau_slew * sr_safe));
+
+let absL = abs(uL);
+let absR = abs(uR);
+env_L = ((absL > env_L) ? a_att : a_rel) * absL + (1.0 - ((absL > env_L) ? a_att : a_rel)) * env_L;
+env_R = ((absR > env_R) ? a_att : a_rel) * absR + (1.0 - ((absR > env_R) ? a_att : a_rel)) * env_R;
+
+// Map envelope to time-varying all-pass pole frequency (Parker / Schlecht / Fontana Sec. 1)
+let f_base = clamp(ap_freq_hz, 60.0, 2500.0);
+let depth = clamp(env_mod_depth, 0.0, 1.0);
+let f1_L = clamp(f_base * (1.0 + 4.5 * depth * env_L), 30.0, 0.44 * sr_safe);
+let f1_R = clamp(f_base * (1.0 + 4.5 * depth * env_R), 30.0, 0.44 * sr_safe);
+
+let t1_L = tan(PI * f1_L / sr_safe);
+let t1_R = tan(PI * f1_R / sr_safe);
+let c1_targ_L = (t1_L - 1.0) / (t1_L + 1.0);
+let c1_targ_R = (t1_R - 1.0) / (t1_R + 1.0);
+
+// Stage 2 spread frequency (disperses higher harmonics)
+let spr = clamp(stage2_spread, 0.0, 1.0);
+let f2_L = clamp(f1_L * (1.2 + 2.8 * spr), 40.0, 0.46 * sr_safe);
+let f2_R = clamp(f1_R * (1.2 + 2.8 * spr), 40.0, 0.46 * sr_safe);
+let t2_L = tan(PI * f2_L / sr_safe);
+let t2_R = tan(PI * f2_R / sr_safe);
+let c2_targ_L = (t2_L - 1.0) / (t2_L + 1.0);
+let c2_targ_R = (t2_R - 1.0) / (t2_R + 1.0);
+
+// Execute Algorithm 1 for Stage 1 (Left & Right)
+let res1_L = allpass1_antiklip_step(xL, x1_prev_L, y1_prev_L, c1_targ_L, c1_prev_L, M);
+let y1_L = res1_L[0];
+c1_prev_L = res1_L[1];
+x1_prev_L = xL;
+y1_prev_L = y1_L;
+
+let res1_R = allpass1_antiklip_step(xR, x1_prev_R, y1_prev_R, c1_targ_R, c1_prev_R, M);
+let y1_R = res1_R[0];
+c1_prev_R = res1_R[1];
+x1_prev_R = xR;
+y1_prev_R = y1_R;
+
+// Execute Algorithm 1 for Stage 2 (Left & Right)
+let res2_L = allpass1_antiklip_step(y1_L, x2_prev_L, y2_prev_L, c2_targ_L, c2_prev_L, M);
+let y2_L = res2_L[0];
+c2_prev_L = res2_L[1];
+x2_prev_L = y1_L;
+y2_prev_L = y2_L;
+
+let res2_R = allpass1_antiklip_step(y1_R, x2_prev_R, y2_prev_R, c2_targ_R, c2_prev_R, M);
+let y2_R = res2_R[0];
+c2_prev_R = res2_R[1];
+x2_prev_R = y1_R;
+y2_prev_R = y2_R;
+
+let mx = clamp(mix, 0.0, 1.0);
+out1 = (1.0 - mx) * dryL + mx * y2_L;
+out2 = (1.0 - mx) * dryR + mx * y2_R;

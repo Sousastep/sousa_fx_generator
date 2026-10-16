@@ -1,0 +1,33 @@
+================================================================================
+09_pitch_tracked_comb_resonator — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo cubic-interpolated waveguide comb filter whose delay lines lock to a harmonic or sub-harmonic ratio of the tuba's fundamental pitch. In modern riddim and tearout dubstep, short resonant comb filters transform raw distorted bass into hollow, metallic, robotic "pipe" and "flange" timbres. Because the comb delay tracks the tuba's fundamental, the metallic resonance stays perfectly in tune across the entire horn register rather than clashing dissonance on note changes.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Left / Right)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
+- out1 / out2: Stereo Comb-Resonated Audio Output
+
+PARAMETERS (4)
+
+1. tune_ratio
+   - Range: 0.5 to 16.0 (Comb Resonant Frequency Ratio relative to f0)
+   - Taper: Continuous linear ratio (0.5 = sub-octave pipe length; 1.0 = fundamental waveguide; 2.0–8.0 = upper harmonic metallic riddim resonances).
+   - Function: Sets the comb delay time T = sr / (f0 * tune_ratio) with 12 ms exponential glide smoothing for liquid waveguide pitch bends.
+
+2. feedback
+   - Range: -0.98 to +0.98 (Bipolar Comb Feedback Gain)
+   - Taper: Reverse-power S-curve (1 - (1 - |x|)^1.4) giving high resolution near the self-oscillation extremes.
+   - Function: Positive values (+0.0 to +0.98) reinforce all integer harmonics of the comb frequency (open pipe); negative values (-0.0 to -0.98) invert the loop phase, reinforcing odd harmonics only at half the frequency (stopped pipe / hollow clarinet-metal timbre). Includes internal tanh saturation to prevent runaway clipping.
+
+3. damp_bright
+   - Range: 0.0 to 1.0 (maps to feedback lowpass cutoff from 400 Hz to 18,000 Hz)
+   - Taper: Exponential frequency taper (400 * 45^x Hz).
+   - Function: Controls the one-pole lowpass damping filter inside the comb feedback loop. Low values yield warm, woody acoustic resonator tails; high values unleash icy, razor-sharp metallic riddim ring.
+
+4. stereo_detune
+   - Range: 0.0 to 1.0 (0.0 to +/- 7.0 semitones L/R comb offset)
+   - Taper: Power curve (x^1.8) so the first 50% of the knob provides fine micro-cent stereo chorusing (0 to +/- 200 cents) while the top half opens into wide power-chord comb intervals.
+   - Function: Detunes the Left and Right comb delay lines symmetrically in opposite directions.

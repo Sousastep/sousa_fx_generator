@@ -1,0 +1,37 @@
+================================================================================
+00c_tuba_4harmonic_IFT_analyzer — Parameter Information
+================================================================================
+
+OVERVIEW
+A 4-Harmonic Instantaneous Frequency & Amplitude (IFT) Analyzer for the live tuba. Simultaneously locks four dual-stage high-Q SVF bandpass filters onto the first four partials of the tuba (f1 = f0, f2 = 2*f0, f3 = 3*f0, f4 = 4*f0), passes each isolated partial through its own 4-stage quadrature IIR Hilbert transform, and differentiates the unwrapped phase d(theta_k)/dt on every sample.
+Captures both the exact per-harmonic amplitude envelope A1..A4 (the tuba's dynamic spectral roll-off / brassiness) and the exact per-harmonic instantaneous frequency f1..f4 (revealing nonlinear bore wave-steepening, ghost-note inharmonicity, and micro-detuning during attacks). Also outputs the real-time Harmonic Spectral Centroid [1.0 to 4.0] on out9 so your embouchure brightness (soft vs. brassy cuivré) can directly drive dubstep filter cutoffs or FM indices!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo (or Mono on in1) Tuba Audio Input
+- in3: Tracked Fundamental Pitch f0 in Hz (from out1 of 00_tuba_freq_tracker or fluid.pitch~; automatically falls back to an internal zero-crossing tracker if <= 0)
+- in4: Optional Freeze Gate [0 or 1] (from out3 of 00b_tuba_transient_valve_detector; freezes all 4 frequencies and the spectral centroid during valve transitions)
+- out1..out4: Instantaneous Frequencies f1, f2, f3, f4 in Hz
+- out5..out8: Instantaneous Amplitudes A1, A2, A3, A4
+- out9: Real-Time Brass Spectral Centroid Ratio [1.0 to 4.0] (weighted mean harmonic number: 1.0 = pure fundamental, 2.5+ = bright fortissimo brass)
+
+PARAMETERS (4)
+
+1. filter_selectivity
+   - Range: 0.20 to 1.00 (Default: 0.78, maps to dual-stage SVF Q from 0.66 to 0.95)
+   - Taper: Slightly concave power curve (x^0.8).
+   - Function: Controls the bandwidth of the 4 harmonic isolation filters before the Hilbert IFT stages. Higher values provide tighter harmonic separation so adjacent partials cannot intermodulate; lower values allow wider frequency excursion during rapid glissandi.
+
+2. smooth_ms
+   - Range: 0.5 to 50.0 ms (Default: 4.5 ms)
+   - Taper: Direct one-pole smoothing time constant in milliseconds.
+   - Function: Sets the smoothing time constant applied to the 4 differentiated instantaneous frequencies (out1..out4), the 4 Hilbert amplitude envelopes (out5..out8), and the spectral centroid (out9).
+
+3. inharm_range
+   - Range: 0.0 to 1.0 (Default: 0.15, maps to +/- 2% up to +/- 27% allowed deviation around k * f0)
+   - Taper: Linear window width.
+   - Function: Sets the maximum fractional frequency deviation around each nominal harmonic k * f0 that the IFT differentiator will track before relaxing back to the harmonic anchor. Allows you to capture real tuba bore inharmonicity and ghost-note pull without tracking noise when an upper harmonic drops out on soft pedal notes.
+
+4. norm_amplitudes
+   - Range: 0.0 to 1.0 (0.0 = Absolute Hilbert Envelopes A_k, 1.0 = Sum-Normalized Relative Harmonic Weights A_k / sum(A))
+   - Taper: Linear crossfade.
+   - Function: At 0.0, out5..out8 output the true dynamic volume of each partial. At 1.0, out5..out8 always sum to 1.0 regardless of how softly or loudly you play, giving you pure timbre/formant weights for spectral-envelope transfer (Lazzarini & Timoney ModFM vocoder, Approach 6).

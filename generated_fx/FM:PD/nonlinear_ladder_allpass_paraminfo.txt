@@ -1,0 +1,44 @@
+================================================================================
+nonlinear_ladder_allpass — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Passive Energy-Conserving Nonlinear Allpass Ladder Filtering inside a Pitch-Tracked Waveguide Loop from Julius O. Smith and Romain Michon (DAFx-11 Paper 38_e, Sections 2, 3 & 4.1–4.4, Fig. 2–5). Standard time-varying allpass filters can create artificial energy spikes and explode in feedback loops when modulated rapidly. By formulating each allpass stage as a Normalized Ladder Filter (NLF) with orthogonal rotation coefficients c(n) = cos(theta(n)) and s(n) = sin(theta(n)) driven directly by the instantaneous audio signal theta(n) = base_angle + g * x(n), signal power is strictly conserved at every sample (c^2 + s^2 = 1). This produces lossless nonlinear spectral brightening and evolving gong/cymbal/sitar-like modal energy transfer across the tuba's overtones.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Optional Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0 to tune the waveguide resonator loop)
+- in4: Optional External Sidechain Modulator (adds to the signal-dependent angle modulation theta(n))
+- out1 / out2: Stereo Nonlinear Allpass Ladder Output
+
+PARAMETERS (6)
+
+1. nl_drive_g
+   - Range: 0.0 to 3.14159 rad (Signal-Dependent Angle Modulation Index g, Default: 1.15)
+   - Taper: Linear in radians (0 = linear time-invariant allpass; pi = full 180-degree instantaneous reflection angle swing).
+   - Function: Controls the lossless nonlinear spectral expansion (DAFx-11 Section 4.1, Fig. 5).Louder brass notes dynamically scatter more energy into shimmering upper partials without changing total signal power.
+
+2. base_angle
+   - Range: -1.40 to +1.40 rad (Static Allpass Pole/Zero Angle Offset theta_0, Default: -0.35)
+   - Taper: Linear angle in radians.
+   - Function: Sets the baseline dispersion center frequency of the Normalized Ladder Allpass cells at low signal amplitudes.
+
+3. ladder_order
+   - Range: 1.0 to 12.0 Cascaded NLF Allpass Stages (Default: 8.0)
+   - Taper: Continuous fractional order interpolation.
+   - Function: Sets the number of cascaded nonlinear allpass stages (DAFx-11 Section 3). Higher orders increase modal coupling density and metallic dispersion.
+
+4. loop_feedback
+   - Range: -0.92 to +0.92 (Pitch-Tracked Waveguide Loop Feedback, Default: 0.65)
+   - Taper: Linear bipolar feedback (positive = integer harmonic tube modes; negative = odd-harmonic half-wavelength modes).
+   - Function: Embeds the passive nonlinear allpass cascade inside a waveguide tube resonator tuned to 2*f0 (DAFx-11 Section 4.4, "Nonlinear Tubes and Strings"), allowing harmonics to continuously exchange energy over the sustain of a note.
+
+5. damp_bright
+   - Range: 0.0 to 1.0 (maps exponentially to Loop Damping Lowpass Cutoff from 400 Hz to 12,000 Hz, Default: 0.75)
+   - Taper: Exponential frequency taper.
+   - Function: Separately controls high-frequency energy dissipation in the waveguide loop while the nonlinear allpass remains lossless.
+
+6. stereo_asym
+   - Range: 0.0 to 1.0 (Stereo Angle & Waveguide Length Asymmetry, Default: 0.25)
+   - Taper: Linear stereo spread.
+   - Function: Inverts the nonlinear angle modulation polarity and offsets the base angle and waveguide delay slightly on the Right channel for wide stereo metallic shimmer.

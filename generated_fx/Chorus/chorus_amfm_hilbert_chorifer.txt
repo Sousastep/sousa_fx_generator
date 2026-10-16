@@ -1,0 +1,131 @@
+// ============================================================================
+// chorus_amfm_hilbert_chorifer.txt
+// Standalone Stereo Chorus Effect: Analytic AM/FM "ChorIFer" & Harmonic-Interval
+// "TransColorIFer" Choir Ensemble (Zero Delay-Line Comb Filtering!)
+// Implements Antonio Jose Homsi Goulart, Victor Lazzarini & Joseph Timoney
+// (DAFx-15, Paper 30): "AM/FM DAFx" (Sections 2, 3.1, 3.2 & 3.4, Eq. 3-10,
+// Listings 1-2, Fig. 2, 3, 6).
+// Unlike delay-line choruses (which smear sharp tuba tongue transients across
+// 10-30 ms and introduce comb-filtering notches), the ChorIFer decomposes the
+// input signal into its exact Instantaneous Amplitude a(t) = |z(t)| and
+// Instantaneous Frequency f(t) = (d/dt) arg(z(t)) / (2*pi) via a 4-stage
+// Hilbert transform (Listing 1), synthesizes 4 independent detuned & FM-shimmered
+// phase trajectories theta_v(t) = integral(2*pi * r_v(t) * f(tau) dtau), and
+// multiplies the summed oscillator choir by the UN-SMEARED instantaneous
+// amplitude envelope a(t) (Listing 2, Eq. 8 & 10)!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Envelope / Detune Boost [0..1]
+//   in4: Optional 1-Bar Phasor [0..1]
+// Outlets:
+//   out1: Left AM/FM ChorIFer & TransColorIFer Output
+//   out2: Right AM/FM ChorIFer & TransColorIFer Output
+
+@param({ min: 0.0, max: 3.5 }) chorifer_detune_pct = 0.85;
+@param({ min: 0.15, max: 6.0 }) shimmer_rate_hz = 1.4;
+@param({ min: 0.0, max: 1.0 }) octifer_sub_up_blend = 0.30;
+@param({ min: 0.0, max: 1.0 }) transcolor_fifth = 0.15;
+@param({ min: 80.0, max: 3000.0 }) if_smoother_hz = 450.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.55;
+
+// 4-Stage Quadrature IIR Hilbert Transform Network for AM/FM Decomposition (Sec 2)
+@state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
+@state hDelRe = 0.0;
+@state prevTheta = 0.0;
+
+// Instantaneous Frequency (IF) & Instantaneous Amplitude (IA) smoothers (Sec 1 & 2)
+@state ifLp = new onepole();
+@state iaLp = new onepole();
+
+// 4 Resynthesis Phase Integrators for the ChorIFer & TransColorIFer Choir (Listing 2, Eq. 8 & 10)
+@state synPh1L = 0.0; @state synPh2R = 0.0;
+@state synPhSub = 0.0; @state synPhFifth = 0.0;
+
+// Quadrature LFOs for ChorIFer IF modulation
+@state lfo1 = new phasor();
+@state lfo2 = new phasor();
+@state prevBarIn = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let envBoost = clamp(in3, 0.0, 1.0);
+let barIn = in4;
+
+// --- 1. Hilbert Analytic Signal Decomposition z(t) = a(t) * e^(j*theta(t)) (Listing 1) ---
+let mono = 0.5 * (xL + xR);
+let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+let re = mono;
+let t = cR0 * (re + hReY[0]) - hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
+t = cR1 * (re + hReY[1]) - hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
+t = cR2 * (re + hReY[2]) - hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
+t = cR3 * (re + hReY[3]) - hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
+let sigRe = hDelRe;
+hDelRe = re;
+
+let im = mono;
+t = cI0 * (im + hImY[0]) - hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
+t = cI1 * (im + hImY[1]) - hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
+t = cI2 * (im + hImY[2]) - hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
+t = cI3 * (im + hImY[3]) - hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
+let sigIm = im;
+
+// Instantaneous Amplitude a(t) = sqrt(re^2 + im^2) (Eq. 5)
+let rawIA = sqrt(sigRe * sigRe + sigIm * sigIm);
+let ia = iaLp.next(rawIA, 2500.0);
+
+// Unwrapped Phase Differentiation Udiff(aph) * sr / (2*pi) (Listing 1)
+let theta = atan2(sigIm, sigRe);
+let dTheta = theta - prevTheta;
+prevTheta = theta;
+if (dTheta >= pi) {
+	dTheta -= 2.0 * pi;
+} else if (dTheta < -pi) {
+	dTheta += 2.0 * pi;
+}
+
+let rawIF = clamp((dTheta * sr) / (2.0 * pi), 15.0, 4000.0);
+let smoothIF = ifLp.next(rawIF, clamp(if_smoother_hz, 80.0, 3000.0));
+
+// --- 2. ChorIFer Detuned & Modulated IF Voices (Sec 3.4, Fig. 6) ---
+// Sec 3.4: Clean chorusing up to ~1% of IF; dramatic FM sideband animation up to 3.5% of IF!
+let detPct = clamp(chorifer_detune_pct + envBoost * 1.0, 0.0, 3.5) * 0.01;
+let rate = clamp(shimmer_rate_hz, 0.15, 6.0);
+
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let p1 = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : lfo1.next(rate);
+let p2 = lfo2.next(rate * 1.27);
+
+let modL = 1.0 + detPct * (0.45 + 0.55 * sin(2.0 * pi * p1));
+let modR = 1.0 - detPct * (0.45 + 0.55 * cos(2.0 * pi * p2));
+
+synPh1L = wrap(synPh1L + (smoothIF * modL) / sr, 0.0, 1.0);
+synPh2R = wrap(synPh2R + (smoothIF * modR) / sr, 0.0, 1.0);
+
+// --- 3. OctIFer (0.5x / 2.0x, Sec 3.1) & TransColorIFer (3:2 Fifth, Sec 3.2, Eq. 10) ---
+synPhSub   = wrap(synPhSub   + (smoothIF * 0.5) / sr, 0.0, 1.0);
+synPhFifth = wrap(synPhFifth + (smoothIF * 1.5 * (1.0 + 0.3 * detPct * sin(2.0 * pi * p2))) / sr, 0.0, 1.0);
+
+let octAmt = clamp(octifer_sub_up_blend, 0.0, 1.0);
+let fifthAmt = clamp(transcolor_fifth, 0.0, 1.0);
+
+// Multiply resynthesized FM carriers by the exact un-delayed Instantaneous Amplitude a(t)! (Eq. 8 & 10)
+// Notice: synPhSub * 4.0 gives the 2x Up-OctIFer (slide-guitar harmonic sheen, Fig. 3),
+// while synPhSub gives the 0.5x Down-OctIFer (clean sub-bass boost, Fig. 2)!
+let octWaveL = 0.65 * cos(2.0 * pi * synPhSub) + 0.35 * cos(2.0 * pi * wrap(synPhSub * 4.0, 0.0, 1.0));
+let octWaveR = 0.65 * sin(2.0 * pi * synPhSub) + 0.35 * sin(2.0 * pi * wrap(synPhSub * 4.0, 0.0, 1.0));
+
+let wetL = ia * (cos(2.0 * pi * synPh1L) + 0.35 * cos(2.0 * pi * synPh2R) + octAmt * octWaveL + fifthAmt * cos(2.0 * pi * synPhFifth));
+let wetR = ia * (cos(2.0 * pi * synPh2R) + 0.35 * cos(2.0 * pi * synPh1L) + octAmt * octWaveR + fifthAmt * sin(2.0 * pi * synPhFifth));
+
+let norm = 1.0 / (1.35 + 0.7 * (octAmt + fifthAmt));
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+
+out1 = cos(mix * 0.5 * pi) * xL + sin(mix * 0.5 * pi) * wetL * norm * 1.35;
+out2 = cos(mix * 0.5 * pi) * xR + sin(mix * 0.5 * pi) * wetR * norm * 1.35;

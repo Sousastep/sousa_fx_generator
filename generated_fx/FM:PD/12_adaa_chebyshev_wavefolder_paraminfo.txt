@@ -1,0 +1,32 @@
+================================================================================
+12_adaa_chebyshev_wavefolder — Parameter Information
+================================================================================
+
+OVERVIEW
+Combines First-Order Antiderivative Antialiased (ADAA1) Wavefolding (Bilbao, Esqueda, Parker, & Välimäki, IEEE SPL 2017) with Chebyshev Polynomial Harmonic Synthesis (Arfib 1979 / Airwindows Pafnuty2) and low-octave preservation (Focus / UnBox). Evaluating the analytical antiderivative F1(x) = -cos(pi*x)/pi + 0.5*ln(cosh(x)) over each sample interval suppresses foldback aliasing without brute-force oversampling, while the Chebyshev T2–T5 stage injects deterministic 2nd–5th harmonics that never alias on tuba fundamentals.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (works great on both raw tuba and 01_harmonic_isolator)
+- out1 / out2: Stereo Antialiased Wavefolded / Chebyshev Output
+
+PARAMETERS (4)
+
+1. drive_db
+   - Range: 0.0 to 30.0 dB
+   - Taper: Logarithmic dB-to-linear amplitude (dbtoa(drive_db), 1.0x to 31.6x gain).
+   - Function: Drives the tuba waveform through multiple sinusoidal wavefolds or saturates the Chebyshev harmonic polynomials.
+
+2. fold_cheby
+   - Range: 0.0 to 1.0 (0.0 = ADAA1 West-Coast Wavefolder, 1.0 = Chebyshev T2–T5 Harmonic Generator)
+   - Taper: Linear crossfade.
+   - Function: Morphs between metallic, formant-sweeping West-Coast wavefolding (0.0) and controlled, zero-aliasing Chebyshev polynomial overtone synthesis (1.0).
+
+3. asym_bias
+   - Range: -0.60 to +0.60 (DC Offset / Single-Ended Triode Asymmetry)
+   - Taper: Linear bipolar offset (applied in opposite polarity on Left and Right channels for stereo harmonic spread, followed by a 15 Hz DC blocker).
+   - Function: Shifts the operating point of the folder/Chebyshev curve to inject warm even-order harmonics (2nd, 4th) that fatten the tuba's odd-dominant natural spectrum.
+
+4. sub_preserve
+   - Range: 0.0 to 1.0 (0% to 100% Clean Sub-95 Hz Fundamental Reinjection)
+   - Taper: Power curve (x^1.2).
+   - Function: Splits off the clean sub-95 Hz fundamental via a one-pole lowpass before distortion and sums it back post-clipper so extreme high-drive folding never loses sub-bass weight.

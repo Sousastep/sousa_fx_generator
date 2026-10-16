@@ -1,0 +1,33 @@
+================================================================================
+07_adaptive_split_sideband — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Adaptive Split-Sideband Synthesis (ASpSB) from Lazzarini, Timoney, and Lysaght (DAFx-08, Section 3, Eq. 5–20). By passing the carrier tuba, a cosine-mapped modulator cos(I*sin(wm*t)), and a sine-mapped modulator sin(I*sin(wm*t)) through three independent 4-stage quadrature Hilbert networks, the FM sidebands are split into four orthogonal components: Upper-Even (aeu), Upper-Odd (aou), Lower-Even (ael), and Lower-Odd (aol). Allows independent sculptural control over upper vs. lower and odd vs. even sidebands with stereo spatialization across the sideband groups.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba Carrier)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
+- out1 / out2: Stereo Split-Sideband Output
+
+PARAMETERS (4)
+
+1. cm_ratio
+   - Range: 0.10 to 4.00 (Carrier-to-Modulator Ratio c:m, where f_m = f_0 / cm_ratio)
+   - Taper: Linear ratio. Note from DAFx-08 Fig. 14: setting c:m near 10:1 (cm_ratio ~ 4.0, or low modulator frequency) with Upper-Only sidebands adds tight, beating clusters above each brass harmonic for the paper's signature brass "growl"; setting c:m = 1.5 with Lower-Only sidebands (Fig. 15) morphs the tuba into deep sub-harmonics.
+   - Function: Controls the spacing of the sidebands relative to the tracked fundamental.
+
+2. mod_index
+   - Range: 0.0 to 6.0 (Modulation Index I)
+   - Taper: Power curve (x^1.25) for responsive harmonic bloom.
+   - Function: Sets the Bessel amplitude scaling J_2n(I) and J_{2n-1}(I) of the even and odd sideband series.
+
+3. low_high_tilt
+   - Range: -1.0 to +1.0 (-1.0 = Lower Sidebands Only, 0.0 = Balanced, +1.0 = Upper Sidebands Only)
+   - Taper: Linear bipolar tilt. Positive settings eliminate sub-fundamental foldover mud while aggressively brightening the upper brass spectrum; negative settings generate sub-harmonic growls.
+   - Function: Crossfades between the lower sideband pair (ael, aol) and upper sideband pair (aeu, aou).
+
+4. odd_even_tilt
+   - Range: -1.0 to +1.0 (-1.0 = Odd Sidebands Only, 0.0 = Balanced, +1.0 = Even Sidebands Only)
+   - Taper: Linear bipolar tilt.
+   - Function: Morphs between hollow, square-like odd sidebands (w_c +/- (2n-1)*w_m) and warm, octave-rich even sidebands (w_c +/- 2n*w_m).

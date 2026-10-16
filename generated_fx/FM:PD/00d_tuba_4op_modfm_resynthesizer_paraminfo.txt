@@ -1,0 +1,62 @@
+================================================================================
+00d_tuba_4op_modfm_resynthesizer — Parameter Information
+================================================================================
+
+OVERVIEW
+A 4-Operator Adaptive ModFM & Phaseshaper Vocoder Resynthesizer designed to be patched directly 1-to-1 from the 9 outlets of `00c_tuba_4harmonic_sift_analyzer.txt` (plus an optional 1-bar phasor on `in10`).
+Implements the ModFM Synthesis Vocoder concept from Lazzarini & Timoney (ICMC 2011 / DAFx-08) combined with SMC 2010 PolyBLEP Hard-Sync Phaseshaping:
+- Each of the 4 tracked tuba harmonics (f1..f4, A1..A4) drives its own ModFM operator s_k(t) = A_k(t) * carrier_k(phi_k) * exp(k_op * (cos(2*pi*phi_mod) - 1)), generating strictly monotonic Modified Bessel sidebands around each partial that never cancel or clip.
+- The tuba's real-time Spectral Centroid (`in9`) automatically couples your acoustic brass brightness (soft dark tone vs. brassy fortissimo) to the ModFM index and sync formant ratio.
+- Measures the real-time inharmonic deviation of partials 2, 3, and 4 from integer multiples of f1 and lets you scale it from pure harmonic lock (0.0) up to 4x exaggerated ghost-note metallic clangor.
+
+INLETS & OUTLETS
+- in1..in4: Harmonics 1..4 Instantaneous Frequencies f1, f2, f3, f4 in Hz (from out1..out4 of 00c)
+- in5..in8: Harmonics 1..4 Instantaneous Amplitudes A1, A2, A3, A4 (from out5..out8 of 00c)
+- in9: Real-Time Brass Spectral Centroid Ratio [1.0 to 4.0] (from out9 of 00c)
+- in10: Optional 1-Bar Audio-Rate Phasor [0.0 to 1.0] (syncs rhythmic ModFM/Sync wobble; falls back to internal 0.5 Hz LFO if unpatched)
+- out1 / out2: Stereo 4-Operator ModFM Resynthesizer Output
+
+PARAMETERS (8)
+
+1. joy_x_sync_formant (Joystick X-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Exponential sync ratio (1.8 * 2.6^x, spanning 1.0x pure sinusoidal ModFM at -1.0 to 10.0x screaming PolyBLEP hard-sync formant at +1.0) coupled with a sinusoidal-to-sawtooth carrier morph.
+   - Function: Sweeps the internal hard-sync formant ratio of all 4 harmonic operators simultaneously.
+
+2. joy_y_modfm_index (Joystick Y-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Power curve (x^1.35) scaling the ModFM exponential bandwidth index k_op from 0.3 to 12.0 while progressively boosting operators 2, 3, and 4.
+   - Function: Expands each of the 4 tuba partials from a narrow harmonic into a wide, growling Modified-Bessel formant cluster.
+
+3. inharm_stretch
+   - Range: 0.0 to 4.0 (Default: 1.0)
+   - Taper: Linear multiplier on each partial's measured deviation (f_k - k * f_1):
+     * 0.0: Forces all 4 operators into strict integer harmonic lock (1x, 2x, 3x, 4x f1)
+     * 1.0: Preserves the exact natural bore micro-inharmonicity of your tuba
+     * 1.0 to 4.0: Exaggerates ghost-note pull and wave-steepening deviations into metallic dubstep bell/tearout sidebands
+   - Function: Scales the physical inharmonicity measured by the 4-harmonic SIFT analyzer.
+
+4. cross_op_fm
+   - Range: 0.0 to 1.0 (Default: 0.35)
+   - Taper: Power curve (x^1.3) scaling inter-operator phase modulation depth from 0.0 to 0.45 radians.
+   - Function: Routes the output of Operator k-1 to phase-modulate Operator k (with Operator 4 feeding back into Operator 1), turning the 4 additive ModFM operators into a circular 4-op FM synthesis matrix.
+
+5. sub_octave_mix
+   - Range: 0.0 to 1.0 (Default: 0.65)
+   - Taper: Linear level scaling weighted dynamically by Fundamental Amplitude A1 (in5).
+   - Function: Injects a phase-locked 0.5 * f1 sub-octave oscillator (enriched with its 3rd harmonic) that tracks the exact volume envelope of your fundamental partial.
+
+6. rhythm_subdiv
+   - Range: 1 to 16 cycles per bar (Quantized in 16 integer steps)
+   - Taper: Stepped integer multiplier of the 1-bar phasor on in10.
+   - Function: Sets the rhythmic subdivision rate of the synced ModFM & Hard-Sync wobble envelope.
+
+7. rhythm_wobble
+   - Range: 0.0 to 1.0 (0% Continuous Breath Control to 100% Tempo-Synced Wobble Whip)
+   - Taper: Linear depth modulating an asymmetric fast-attack triangle envelope (duty = 0.22, power = 1.5).
+   - Function: Pulsates both the ModFM formant bandwidth and the Hard-Sync ratio in lockstep with the 1-bar phasor.
+
+8. stereo_pan_spread
+   - Range: 0.0 to 1.0 (Default: 0.60)
+   - Taper: Constant-power cosine/sine stereo law plus opposite-polarity L/R cross-FM phase offset.
+   - Function: Keeps Operator 1 (fundamental) and the Sub-Octave anchored dead-center in mono while fanning Operators 2, 3, and 4 progressively wider across the Left and Right channels.

@@ -1,0 +1,215 @@
+// ============================================================================
+// 00c_tuba_4harmonic_IFT_analyzer.txt
+// Simultaneous 4-Harmonic IFT (Instantaneous Frequency & Amplitude)
+// Analyzer & Additive/ModFM Spectral Envelope Extractor for Live Tuba
+// ============================================================================
+// Tracks the first 4 harmonics (f1 = f0, f2 = 2*f0, f3 = 3*f0, f4 = 4*f0) of
+// the live tuba simultaneously at audio rate:
+//   1. Locks 4 dual-stage high-Q SVF bandpass filters onto 1x, 2x, 3x, and 4x
+//      the tracked fundamental f0 (from 00_tuba_freq_tracker on in3, or
+//      its own internal zero-crossing tracker if in3 <= 0).
+//   2. Passes all 4 isolated harmonics through 4 independent 4-stage quadrature
+//      IIR Hilbert Transform networks to extract each partial's complex analytic
+//      signal s_k(t) = A_k(t) * e^(j * theta_k(t)).
+//   3. Differentiates each harmonic's unwrapped phase d(theta_k)/dt EVERY SAMPLE
+//      to measure its exact Instantaneous Frequency f_k(t) (capturing
+//      nonlinear brass wave-steepening, bore inharmonicity, and ghost-note pull)
+//      and instantaneous amplitude A_k(t).
+//   4. Outputs 9 audio-rate signals:
+//      - out1..out4: Instantaneous Frequencies f1, f2, f3, f4 in Hz
+//      - out5..out8: Instantaneous Amplitudes A1, A2, A3, A4 (or normalized weights)
+//      - out9: Spectral Centroid / Brass Brightness Ratio [1.0 .. 4.0]
+//              (weighted average harmonic number, ideal for driving FM index or
+//               wobble filter cutoff directly from your embouchure brightness!)
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (Tuba; mono in1 supported automatically)
+//   in3: Tracked Fundamental f0 in Hz (from 00_tuba_freq_tracker or fluid.pitch~)
+//   in4: Optional Freeze Gate [0 or 1] (from out3 of 00b_tuba_transient_valve_detector)
+// Outlets:
+//   out1: Harmonic 1 Instantaneous Frequency f1 (Hz)
+//   out2: Harmonic 2 Instantaneous Frequency f2 (Hz)
+//   out3: Harmonic 3 Instantaneous Frequency f3 (Hz)
+//   out4: Harmonic 4 Instantaneous Frequency f4 (Hz)
+//   out5: Harmonic 1 Instantaneous Amplitude A1
+//   out6: Harmonic 2 Instantaneous Amplitude A2
+//   out7: Harmonic 3 Instantaneous Amplitude A3
+//   out8: Harmonic 4 Instantaneous Amplitude A4
+//   out9: Real-Time Brass Spectral Centroid Ratio [1.0 .. 4.0]
+
+@param({ min: 0.2, max: 1.0 }) filter_selectivity = 0.78;
+@param({ min: 0.5, max: 50.0 }) smooth_ms = 4.5;
+@param({ min: 0.0, max: 1.0 }) inharm_range = 0.15;
+@param({ min: 0.0, max: 1.0 }) norm_amplitudes = 0.0;
+
+// 4 Dual-Stage SVF Bandpass Filters (2 stages per harmonic k = 0..3)
+@state svf1_0 = new svf(); @state svf2_0 = new svf();
+@state svf1_1 = new svf(); @state svf2_1 = new svf();
+@state svf1_2 = new svf(); @state svf2_2 = new svf();
+@state svf1_3 = new svf(); @state svf2_3 = new svf();
+
+// 4 Quadrature 4-Stage IIR Hilbert Transform State Arrays (indexed [harmonic 0..3][stage 0..3])
+@state hReX = new FixedSampleArray(4, 4);
+@state hReY = new FixedSampleArray(4, 4);
+@state hImX = new FixedSampleArray(4, 4);
+@state hImY = new FixedSampleArray(4, 4);
+@state hDelRe = new FixedSampleArray(4);
+
+// Per-harmonic phase history and smoothed instantaneous frequency & amplitude states
+@state prevTheta = new FixedSampleArray(4);
+@state instHz = new FixedSampleArray([58.27, 116.54, 174.81, 233.08]);
+@state instAmp = new FixedSampleArray(4);
+@state smoothCentroid = 1.5;
+
+// Fallback internal zero-crossing fundamental tracker if in3 is unpatched
+@state lpTrack = new onepole();
+@state prevTrackSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state condF0 = 58.27;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let freezeIn = in4;
+
+let mono = (abs(xR) > 0.0000001) ? (0.5 * (xL + xR)) : xL;
+
+// ============================================================================
+// 1. FUNDAMENTAL ANCHOR CONDITIONING & FREEZE GATE
+// ============================================================================
+let monoLow = lpTrack.next(mono, 180.0);
+zcCount += 1.0;
+if (prevTrackSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevTrackSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+// Only update anchor pitch when freeze gate (in4) is low (< 0.5)
+if (freezeIn < 0.5) {
+	let f0Slew = 1.0 - exp(-1.0 / (0.004 * sr));
+	condF0 += (rawF0 - condF0) * f0Slew;
+}
+let f0 = clamp(condF0, 24.0, 700.0);
+
+// ============================================================================
+// 2. 4-HARMONIC DUAL-STAGE SVF ISOLATION
+// ============================================================================
+// Map filter_selectivity [0.2..1.0] to SVF Q in [0.65..0.95]
+let qSvf = clamp(0.55 + 0.40 * pow(clamp(filter_selectivity, 0.2, 1.0), 0.8), 0.55, 0.95);
+
+let fNom0 = clamp(f0 * 1.0, 24.0, sr * 0.44);
+let fNom1 = clamp(f0 * 2.0, 48.0, sr * 0.44);
+let fNom2 = clamp(f0 * 3.0, 72.0, sr * 0.44);
+let fNom3 = clamp(f0 * 4.0, 96.0, sr * 0.44);
+
+let hSig = new FixedSampleArray(4);
+hSig[0] = svf2_0.next(svf1_0.next(mono, fNom0, qSvf)[2], fNom0, qSvf)[2] * 2.2;
+hSig[1] = svf2_1.next(svf1_1.next(mono, fNom1, qSvf)[2], fNom1, qSvf)[2] * 2.2;
+hSig[2] = svf2_2.next(svf1_2.next(mono, fNom2, qSvf)[2], fNom2, qSvf)[2] * 2.2;
+hSig[3] = svf2_3.next(svf1_3.next(mono, fNom3, qSvf)[2], fNom3, qSvf)[2] * 2.2;
+
+let fNomArr = new FixedSampleArray(4);
+fNomArr[0] = fNom0;
+fNomArr[1] = fNom1;
+fNomArr[2] = fNom2;
+fNomArr[3] = fNom3;
+
+// ============================================================================
+// 3. 4x QUADRATURE HILBERT TRANSFORMS & INSTANTANEOUS PHASE DIFFERENTIATION
+// ============================================================================
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+let tauSamps = maximum(mstosamps(clamp(smooth_ms, 0.5, 50.0)), 1.0);
+let slewCoeff = 1.0 - exp(-1.0 / tauSamps);
+let maxDev = clamp(inharm_range, 0.0, 1.0) * 0.25 + 0.02; // +/- 2% to +/- 27% deviation window
+
+for (let k: Int = 0; k < 4; k++) {
+	let sIn = hSig[k];
+
+	// Real branch (0 deg)
+	let sRe = sIn;
+	let yr0 = cRe0 * (sRe - hReY[k][0]) + hReX[k][0]; hReX[k][0] = sRe; hReY[k][0] = yr0; sRe = yr0;
+	let yr1 = cRe1 * (sRe - hReY[k][1]) + hReX[k][1]; hReX[k][1] = sRe; hReY[k][1] = yr1; sRe = yr1;
+	let yr2 = cRe2 * (sRe - hReY[k][2]) + hReX[k][2]; hReX[k][2] = sRe; hReY[k][2] = yr2; sRe = yr2;
+	let yr3 = cRe3 * (sRe - hReY[k][3]) + hReX[k][3]; hReX[k][3] = sRe; hReY[k][3] = yr3;
+	let outRe = hDelRe[k];
+	hDelRe[k] = yr3;
+
+	// Imaginary branch (90 deg)
+	let sIm = sIn;
+	let yi0 = cIm0 * (sIm - hImY[k][0]) + hImX[k][0]; hImX[k][0] = sIm; hImY[k][0] = yi0; sIm = yi0;
+	let yi1 = cIm1 * (sIm - hImY[k][1]) + hImX[k][1]; hImX[k][1] = sIm; hImY[k][1] = yi1; sIm = yi1;
+	let yi2 = cIm2 * (sIm - hImY[k][2]) + hImX[k][2]; hImX[k][2] = sIm; hImY[k][2] = yi2; sIm = yi2;
+	let yi3 = cIm3 * (sIm - hImY[k][3]) + hImX[k][3]; hImX[k][3] = sIm; hImY[k][3] = yi3;
+	let outIm = yi3;
+
+	// Polar conversion -> instantaneous envelope A_k(t) and phase theta_k(t)
+	let pol = cartopol(outRe, outIm);
+	let ampK = pol[0];
+	let thetaK = pol[1];
+
+	// Unwrap single-sample phase advance dTheta in [-pi, pi]
+	let dTheta = thetaK - prevTheta[k];
+	if (dTheta < -pi) { dTheta += 2.0 * pi; }
+	else if (dTheta > pi) { dTheta -= 2.0 * pi; }
+	prevTheta[k] = thetaK;
+
+	// Instantaneous frequency f_k(t) = (dTheta / (2*pi)) * sr
+	let rawFk = (dTheta / (2.0 * pi)) * sr;
+	let nomFk = fNomArr[k];
+
+	// Update amplitude envelope A_k(t)
+	instAmp[k] = instAmp[k] + (ampK - instAmp[k]) * slewCoeff;
+
+	// Update instantaneous frequency f_k(t) when not frozen and partial energy is above noise floor
+	if (freezeIn < 0.5) {
+		let relErr = abs(rawFk - nomFk) / maximum(nomFk, 20.0);
+		if (relErr <= maxDev && ampK > 0.00015) {
+			instHz[k] = instHz[k] + (rawFk - instHz[k]) * slewCoeff;
+		} else {
+			// Gently relax toward harmonic multiple k*f0 when partial is silent
+			instHz[k] = instHz[k] + (nomFk - instHz[k]) * (slewCoeff * 0.25);
+		}
+	}
+}
+
+// ============================================================================
+// 4. AMPLITUDE NORMALIZATION & REAL-TIME BRASS SPECTRAL CENTROID (out9)
+// ============================================================================
+let a1 = instAmp[0];
+let a2 = instAmp[1];
+let a3 = instAmp[2];
+let a4 = instAmp[3];
+let sumAmp = a1 + a2 + a3 + a4 + 0.0001;
+
+// Spectral centroid in harmonic units [1.0 .. 4.0]:
+// 1.0 = pure fundamental sine (soft dynamics), > 2.2 = bright brassy wave-steepened fortissimo
+let rawCentroid = (1.0 * a1 + 2.0 * a2 + 3.0 * a3 + 4.0 * a4) / sumAmp;
+if ( sumAmp > 0.001 && freezeIn < 0.5 ) {
+	smoothCentroid += (clamp(rawCentroid, 1.0, 4.0) - smoothCentroid) * slewCoeff;
+}
+
+// Blend between raw partial amplitudes and sum-normalized relative weights (for ModFM vocoding)
+let normMix = clamp(norm_amplitudes, 0.0, 1.0);
+let outA1 = linearinterp(normMix, a1, a1 / sumAmp);
+let outA2 = linearinterp(normMix, a2, a2 / sumAmp);
+let outA3 = linearinterp(normMix, a3, a3 / sumAmp);
+let outA4 = linearinterp(normMix, a4, a4 / sumAmp);
+
+out1 = instHz[0];
+out2 = instHz[1];
+out3 = instHz[2];
+out4 = instHz[3];
+out5 = outA1;
+out6 = outA2;
+out7 = outA3;
+out8 = outA4;
+out9 = smoothCentroid;

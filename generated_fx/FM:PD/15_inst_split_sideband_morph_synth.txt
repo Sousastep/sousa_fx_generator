@@ -1,0 +1,193 @@
+// ============================================================================
+// 15_inst_split_sideband_morph_synth.txt
+// Advanced Instrument 3: Split-Sideband (ASpSB) & Bode Quadrant Morph Synth
+// Full performance instrument built on Lazzarini, Timoney & Lysaght (DAFx-08, Sec 3):
+//   - Extracts the tuba's harmonic carrier (with adjustable fundamental isolation)
+//   - Computes the 4 orthogonal ASpSB sideband groups:
+//       1) Upper-Even (aeu)   2) Upper-Odd (aou)
+//       3) Lower-Even (ael)   4) Lower-Odd (aol)
+//   - Maps Joystick X (Odd <-> Even) and Joystick Y (Lower <-> Upper + Mod Index)
+//     to perform live 2D vector morphing across the 4 sideband quadrants!
+//   - Adds a 1-bar phasor-synced rhythmic gate/index pulse and stereo Bode detune.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (Tuba)
+//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+//   in4: 1-Bar Audio-Rate Phasor [0..1] (syncs rhythmic sideband pulse)
+// Outlets:
+//   out1: Left ASpSB Vector Morph Output
+//   out2: Right ASpSB Vector Morph Output
+
+@param({ min: -1.0, max: 1.0 }) joy_x_odd_even = 0.0;
+@param({ min: -1.0, max: 1.0 }) joy_y_low_high = 0.3;
+@param({ min: 0.1, max: 4.0 }) cm_ratio = 1.5;
+@param({ min: 0.0, max: 6.0 }) base_index = 2.5;
+@param({ min: 1.0, max: 16.0, steps: 16 }) pulse_rate = 4.0;
+@param({ min: 0.0, max: 1.0 }) pulse_depth = 0.5;
+@param({ min: 0.0, max: 25.0 }) stereo_bode_hz = 2.5;
+@param({ min: 0.0, max: 1.0 }) carrier_focus = 0.4;
+
+// Pre-filter SVF for optional carrier harmonic isolation
+@state svfCar = new svf();
+
+// 3 Quadrature 4-stage IIR Hilbert transform pairs (Carrier, Even Mod, Odd Mod)
+@state cReX = new FixedSampleArray(4); @state cReY = new FixedSampleArray(4);
+@state cImX = new FixedSampleArray(4); @state cImY = new FixedSampleArray(4);
+@state cDelRe = 0.0;
+
+@state eReX = new FixedSampleArray(4); @state eReY = new FixedSampleArray(4);
+@state eImX = new FixedSampleArray(4); @state eImY = new FixedSampleArray(4);
+@state eDelRe = 0.0;
+
+@state oReX = new FixedSampleArray(4); @state oReY = new FixedSampleArray(4);
+@state oImX = new FixedSampleArray(4); @state oImY = new FixedSampleArray(4);
+@state oDelRe = 0.0;
+
+@state modPhasor = new phasor();
+@state bodePhasor = new phasor();
+@state fallbackBar = new phasor();
+@state prevBarIn = 0.0;
+
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+@state smoothJoyX = 0.0;
+@state smoothJoyY = 0.3;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch & Joystick Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 180.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothJoyX += (clamp(joy_x_odd_even, -1.0, 1.0) - smoothJoyX) * slew;
+smoothJoyY += (clamp(joy_y_low_high, -1.0, 1.0) - smoothJoyY) * slew;
+
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Carrier Focus (Blend full brass spectrum with isolated fundamental) ---
+let foc = clamp(carrier_focus, 0.0, 1.0);
+let bpCar = svfCar.next(mono, f0, clamp(0.5 + 0.42 * foc, 0.5, 0.94))[2] * 2.0;
+let carSig = linearinterp(foc, mono, bpCar);
+
+// --- 3. 1-Bar Rhythmic Modulation of Index I ---
+let barActive = (abs(barIn - prevBarIn) > 0.0000001 || (barIn > 0.0001 && barIn < 0.9999));
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn, 0.0, 1.0) : fallbackBar.next(0.5);
+
+let pRate = floor(clamp(pulse_rate, 1.0, 16.0));
+let pulsePh = wrap(barPh * pRate, 0.0, 1.0);
+let pulseEnv = hann(pulsePh);
+
+// Modulation Index combines base_index, rhythmic pulse, and Joystick Y boost
+let joyY_boost = 1.0 + 0.65 * smoothJoyY;
+let pDepth = clamp(pulse_depth, 0.0, 1.0);
+let dynIndex = clamp(base_index * joyY_boost * ((1.0 - pDepth) + pDepth * pulseEnv * 1.5), 0.0, 8.0);
+
+let fm = clamp(f0 / clamp(cm_ratio, 0.1, 4.0), 2.0, 2500.0);
+let modSin = dynIndex * sin(2.0 * pi * modPhasor.next(fm));
+
+let a2_even = cos(modSin);
+let a3_odd = sin(modSin);
+
+// --- 4. Three Quadrature Hilbert Networks ---
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+// Carrier (ac, ad)
+let sC = carSig;
+let yc0 = cRe0 * (sC - cReY[0]) + cReX[0]; cReX[0] = sC; cReY[0] = yc0; sC = yc0;
+let yc1 = cRe1 * (sC - cReY[1]) + cReX[1]; cReX[1] = sC; cReY[1] = yc1; sC = yc1;
+let yc2 = cRe2 * (sC - cReY[2]) + cReX[2]; cReX[2] = sC; cReY[2] = yc2; sC = yc2;
+let yc3 = cRe3 * (sC - cReY[3]) + cReX[3]; cReX[3] = sC; cReY[3] = yc3;
+let ac = cDelRe; cDelRe = yc3;
+
+let sCi = carSig;
+let yci0 = cIm0 * (sCi - cImY[0]) + cImX[0]; cImX[0] = sCi; cImY[0] = yci0; sCi = yci0;
+let yci1 = cIm1 * (sCi - cImY[1]) + cImX[1]; cImX[1] = sCi; cImY[1] = yci1; sCi = yci1;
+let yci2 = cIm2 * (sCi - cImY[2]) + cImX[2]; cImX[2] = sCi; cImY[2] = yci2; sCi = yci2;
+let yci3 = cIm3 * (sCi - cImY[3]) + cImX[3]; cImX[3] = sCi; cImY[3] = yci3;
+let ad = yci3;
+
+// Even Modulator (aae, abe)
+let sE = a2_even;
+let ye0 = cRe0 * (sE - eReY[0]) + eReX[0]; eReX[0] = sE; eReY[0] = ye0; sE = ye0;
+let ye1 = cRe1 * (sE - eReY[1]) + eReX[1]; eReX[1] = sE; eReY[1] = ye1; sE = ye1;
+let ye2 = cRe2 * (sE - eReY[2]) + eReX[2]; eReX[2] = sE; eReY[2] = ye2; sE = ye2;
+let ye3 = cRe3 * (sE - eReY[3]) + eReX[3]; eReX[3] = sE; eReY[3] = ye3;
+let aae = eDelRe; eDelRe = ye3;
+
+let sEi = a2_even;
+let yei0 = cIm0 * (sEi - eImY[0]) + eImX[0]; eImX[0] = sEi; eImY[0] = yei0; sEi = yei0;
+let yei1 = cIm1 * (sEi - eImY[1]) + eImX[1]; eImX[1] = sEi; eImY[1] = yei1; sEi = yei1;
+let yei2 = cIm2 * (sEi - eImY[2]) + eImX[2]; eImX[2] = sEi; eImY[2] = yei2; sEi = yei2;
+let yei3 = cIm3 * (sEi - eImY[3]) + eImX[3]; eImX[3] = sEi; eImY[3] = yei3;
+let abe = yei3;
+
+// Odd Modulator (aao, abo)
+let sO = a3_odd;
+let yo0 = cRe0 * (sO - oReY[0]) + oReX[0]; oReX[0] = sO; oReY[0] = yo0; sO = yo0;
+let yo1 = cRe1 * (sO - oReY[1]) + oReX[1]; oReX[1] = sO; oReY[1] = yo1; sO = yo1;
+let yo2 = cRe2 * (sO - oReY[2]) + oReX[2]; oReX[2] = sO; oReY[2] = yo2; sO = yo2;
+let yo3 = cRe3 * (sO - oReY[3]) + oReX[3]; oReX[3] = sO; oReY[3] = yo3;
+let aao = oDelRe; oDelRe = yo3;
+
+let sOi = a3_odd;
+let yoi0 = cIm0 * (sOi - oImY[0]) + oImX[0]; oImX[0] = sOi; oImY[0] = yoi0; sOi = yoi0;
+let yoi1 = cIm1 * (sOi - oImY[1]) + oImX[1]; oImX[1] = sOi; oImY[1] = yoi1; sOi = yoi1;
+let yoi2 = cIm2 * (sOi - oImY[2]) + oImX[2]; oImX[2] = sOi; oImY[2] = yoi2; sOi = yoi2;
+let yoi3 = cIm3 * (sOi - oImY[3]) + oImX[3]; oImX[3] = sOi; oImY[3] = yoi3;
+let abo = yoi3;
+
+// --- 5. Stereo Bode Micro-Detune on Carrier Quadrature Pair ---
+let bHz = pow(clamp(stereo_bode_hz / 25.0, 0.0, 1.0), 1.6) * 25.0;
+let bPh = bodePhasor.next(bHz);
+let cosB = cos(2.0 * pi * bPh);
+let sinB = sin(2.0 * pi * bPh);
+
+// Rotate Left carrier up by +bHz, Right carrier down by -bHz
+let acL = ac * cosB - ad * sinB;
+let adL = ad * cosB + ac * sinB;
+let acR = ac * cosB + ad * sinB;
+let adR = ad * cosB - ac * sinB;
+
+// Compute 4 ASpSB Quadrants for Left and Right
+let aeuL = aae * acL - abe * adL;
+let aouL = aao * acL - abo * adL;
+let aelL = aae * acL + abe * adL;
+let aolL = aao * acL + abo * adL;
+
+let aeuR = aae * acR - abe * adR;
+let aouR = aao * acR - abo * adR;
+let aelR = aae * acR + abe * adR;
+let aolR = aao * acR + abo * adR;
+
+// --- 6. 2D Vector Joystick Mixing Across the 4 Quadrants ---
+let wEven = 0.5 * (smoothJoyX + 1.0);
+let wOdd = 1.0 - wEven;
+let wUp = 0.5 * (smoothJoyY + 1.0);
+let wLow = 1.0 - wUp;
+
+let mixL = wUp * (wEven * aeuL + wOdd * aouL) + wLow * (wEven * aelL + wOdd * aolL);
+let mixR = wUp * (wEven * aeuR + wOdd * aouR) + wLow * (wEven * aelR + wOdd * aolR);
+
+out1 = tanh(mixL * 1.4);
+out2 = tanh(mixR * 1.4);

@@ -1,0 +1,49 @@
+================================================================================
+wave_pulse_phase_modulator — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Wave Pulse Phase Modulation (WPPM) from Matthew Smart (DAFx-25 Paper 48, Sections 2.2, 3.1, 3.2 & 4, Eq. 5–10, Fig. 4–5). Hybridizes Casio CZ Phase Distortion (PD) and Yamaha DX Phase Modulation (PM) by splitting each cycle of the tuba's analytic phase phi[n] at breakpoint d into two normalized sub-segments [0, 1]. Each segment drives its own half-sine-windowed PM wave pulse g1(t) and g2(t) with independent modulation ratios (R1, R2) and bipolar indices (I1, I2), plus complementary duration-window antialiasing (Eq. 10). Sweeping pulse_split_d compresses one wave pulse upward in formant pitch while stretching the other downward, creating squelchy TB-303 acid resonant sweeps and dual-formant dubstep bass growls without non-integer PM pitch drift.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (prefer sine-ified tuba from 01_harmonic_isolator or raw tuba)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps pulse_split_d when d_sweep > 0; internal 1 Hz fallback if unpatched)
+- out1 / out2: Stereo WPPM Hybrid PD-PM Output
+
+PARAMETERS (7)
+
+1. pulse_split_d
+   - Range: 0.04 to 0.96 (Segment Duration Breakpoint d, Default: 0.35)
+   - Taper: Linear duration ratio. Because Pulse 1's effective frequency is f0 * R1 / d and Pulse 2's effective frequency is f0 * R2 / (1 - d), sweeping d simultaneously pitch-shifts both internal formants in opposite directions while morphing between Preset 1 (d -> 1) and Preset 2 (d -> 0).
+   - Function: Sets the time split between the first and second wave pulses within each period of the tuba.
+
+2. ratio_r1
+   - Range: 0.50 to 8.00 (First Pulse Modulation Frequency Ratio R1, Default: 1.00)
+   - Taper: Continuous linear ratio. Thanks to the half-sine window w(t) = sin(pi*t) (Eq. 5), even fractional non-integer values (e.g., 1.35 or 2.7) remain 100% phase-synchronous and harmonic with zero boundary clicks!
+   - Function: Controls the number of PM oscillation cycles inside the first phase segment [0, d).
+
+3. index_i1
+   - Range: -2.00 to +2.00 (First Pulse Phase Modulation Index I1, Default: +0.85)
+   - Taper: Linear bipolar phase index.
+   - Function: Controls the depth and polarity of phase modulation in the first half-period of the waveform.
+
+4. ratio_r2
+   - Range: 0.50 to 8.00 (Second Pulse Modulation Frequency Ratio R2, Default: 2.00)
+   - Taper: Continuous linear ratio (windowed for click-free non-integer sweeps).
+   - Function: Controls the number of PM oscillation cycles inside the second phase segment [d, 1).
+
+5. index_i2
+   - Range: -2.00 to +2.00 (Second Pulse Phase Modulation Index I2, Default: -0.75)
+   - Taper: Linear bipolar phase index (setting I1 and I2 to opposite signs, as in DAFx-25 Fig. 5c, creates strong >2 kHz vocal formant peaks).
+   - Function: Controls the depth and polarity of phase modulation in the second half-period of the waveform.
+
+6. d_sweep
+   - Range: 0.0 to 1.0 (0% to +/-36% Rhythmic Breakpoint Sweep Depth)
+   - Taper: Linear modulation depth with counter-phase stereo spread.
+   - Function: Modulates pulse_split_d at quarter-note subdivisions of the 1-bar phasor on in4.
+
+7. env_follow
+   - Range: 0.0 to 1.0 (0.0 = Gate-Normalized Synth Sustain, 1.0 = Natural Tuba Hilbert Amplitude Envelope)
+   - Taper: Linear crossfade.
+   - Function: Controls how closely the WPPM output tracks the tuba's dynamic breath envelope.

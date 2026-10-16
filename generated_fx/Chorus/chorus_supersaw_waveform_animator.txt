@@ -1,0 +1,152 @@
+// ============================================================================
+// chorus_supersaw_waveform_animator.txt
+// Standalone Stereo Chorus Effect: 7-Voice Unison "Supersaw" Waveform Animator
+// Implements Joseph Timoney, Victor Lazzarini, Jari Kleimola & Vesa Valimaki
+// (DAFx-14): "Examining the Oscillator Waveform Animation Effect"
+// (Sections 2, 3, 4 & 5, Eq. 1, 17-27, Fig. 1-7).
+// Unites BOTH unison waveform animation engines derived in the paper:
+//   1. Section 5 (Fig. 6-7, Eq. 24-27): 7-Voice Delay-Line Pitch-Shifter Ensemble
+//      for arbitrary live audio inputs! Uses 4 dual-windowed raised-cosine
+//      crossfaded ramp delay lines at symmetric transposition ratios
+//      (s, s^3, 1/s, 1/s^3 where s = 1 + df0/f0) plus 2 quadrature LFO chorus taps
+//      and the center dry voice so harmonic cluster bandwidth grows proportionally
+//      with harmonic number k (Eq. 1 & Fig. 7)!
+//   2. Section 3 & 4 (Fig. 1-5, Eq. 17-23): Hutchins Multi-Channel Triangle-LFO
+//      Comparator PWM Waveform Animator, peaking at duty-cycle width 0.70 (Fig. 5).
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Tracked Pitch f0 in Hz or Detune Spread Modulator [0..1]
+//   in4: Optional 1-Bar Phasor [0..1]
+// Outlets:
+//   out1: Left 7-Voice Unison Supersaw Animated Chorus Output
+//   out2: Right 7-Voice Unison Supersaw Animated Chorus Output
+
+@param({ min: 1.0, max: 45.0 }) unison_detune_cents = 14.0;
+@param({ min: 12.0, max: 45.0 }) grain_window_ms = 24.0;
+@param({ min: 0.0, max: 1.0 }) hutchins_pwm_anim = 0.25;
+@param({ min: 0.1, max: 2.0 }) pwm_lfo_rate_hz = 0.65;
+@param({ min: 0.0, max: 1.0 }) stereo_voice_spread = 0.85;
+@param({ min: 0.0, max: 1.0 }) center_to_side_mix = 0.65;
+
+// Circular delay buffers for the 4 dual-grain pitch-shifter voices + 2 LFO voices (4096 samples)
+@state animBufL = new FixedSampleArray(4096);
+@state animBufR = new FixedSampleArray(4096);
+@state writeIdx: Int = 0;
+
+// Ramp phases gamma_1..gamma_4 for transpositions s, s^3, 1/s, 1/s^3 (DAFx-14 Eq. 24-27, Fig. 6)
+@state rampPh = new FixedSampleArray(4);
+
+// 3 Independent slow triangle LFOs (< 2 Hz) for Hutchins Comparator Animator (Sec 3, Fig. 1)
+@state triPh1 = new phasor();
+@state triPh2 = new phasor();
+@state triPh3 = new phasor();
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+function readDelay4k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
+	let d = clamp(delSamps, 2.0, 4090.0);
+	let readPos = wIdx - d;
+	while (readPos < 0.0) {
+		readPos += 4096.0;
+	}
+	let idx0: Int = floor(readPos);
+	let frac = readPos - idx0;
+	let i_m1: Int = (idx0 - 1 + 4096) & 4095;
+	let i_0: Int  = idx0 & 4095;
+	let i_1: Int  = (idx0 + 1) & 4095;
+	let i_2: Int  = (idx0 + 2) & 4095;
+	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
+}
+
+// Evaluate dual-head raised-cosine windowed pitch shifter (DAFx-14 Sec 5, Eq. 24-27)
+function evalDualGrainShifter(buf: FixedSampleArray, wIdx: Int, gamma: number, tauSamps: number): number {
+	let g1 = wrap(gamma, 0.0, 1.0);
+	let g2 = wrap(gamma + 0.5, 0.0, 1.0);
+	// Raised-cosine window w(x) = 0.5 - 0.5 * cos(2*pi*x) = 0 at endpoints 0 and 1
+	let w1 = 0.5 * (1.0 - cos(2.0 * pi * g1));
+	let w2 = 1.0 - w1;
+	let d1 = 4.0 + g1 * tauSamps;
+	let d2 = 4.0 + g2 * tauSamps;
+	return w1 * readDelay4k(buf, wIdx, d1) + w2 * readDelay4k(buf, wIdx, d2);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+
+animBufL[writeIdx] = xL;
+animBufR[writeIdx] = xR;
+
+// --- 1. 7-Voice Delay-Line Pitch-Shifter Unison Bank (DAFx-14 Sec 5, Fig. 6-7) ---
+// Transposition factor s = 2^(cents / 1200) -> four shifters at s, s^3, 1/s, 1/s^3
+let cents = clamp(unison_detune_cents, 1.0, 45.0) * 0.3333; // per-step spacing so s^3 = full detune
+let sRatio = pow(2.0, cents / 1200.0);
+let s3Ratio = sRatio * sRatio * sRatio;
+let invSRatio = 1.0 / sRatio;
+let invS3Ratio = 1.0 / s3Ratio;
+
+let tauSamps = clamp(mstosamps(clamp(grain_window_ms, 12.0, 45.0)), 256.0, 3800.0);
+
+// Eq. 25: delay growth rate dD/dt = 1 - s, normalized by window length tauSamps
+let inc0 = (1.0 - sRatio) / tauSamps;
+let inc1 = (1.0 - s3Ratio) / tauSamps;
+let inc2 = (1.0 - invSRatio) / tauSamps;
+let inc3 = (1.0 - invS3Ratio) / tauSamps;
+
+rampPh[0] = wrap(rampPh[0] + inc0, 0.0, 1.0);
+rampPh[1] = wrap(rampPh[1] + inc1, 0.0, 1.0);
+rampPh[2] = wrap(rampPh[2] + inc2, 0.0, 1.0);
+rampPh[3] = wrap(rampPh[3] + inc3, 0.0, 1.0);
+
+// Voices +1 (s) and -3 (1/s^3) biased Left; Voices -1 (1/s) and +3 (s^3) biased Right
+let vUp1L = evalDualGrainShifter(animBufL, writeIdx, rampPh[0], tauSamps);
+let vUp3R = evalDualGrainShifter(animBufR, writeIdx, rampPh[1], tauSamps);
+let vDn1R = evalDualGrainShifter(animBufR, writeIdx, rampPh[2], tauSamps);
+let vDn3L = evalDualGrainShifter(animBufL, writeIdx, rampPh[3], tauSamps);
+
+// --- 2. Hutchins Multi-Channel Comparator PWM Animator + LFO Voices 5 & 6 (Sec 3 & 4) ---
+// Fig. 5: Optimal first-sideband magnitude occurs at duty-cycle width 0.70 (LFO amp = 0.70 * A)
+let lfoRate = clamp(pwm_lfo_rate_hz, 0.1, 2.0);
+let t1 = 2.0 * triangle(triPh1.next(lfoRate * 0.73), 0.5) - 1.0;
+let t2 = 2.0 * triangle(triPh2.next(lfoRate * 1.00), 0.5) - 1.0;
+let t3 = 2.0 * triangle(triPh3.next(lfoRate * 1.37), 0.5) - 1.0;
+
+// Voices 5 & 6: Smoothly modulated delay-line unison voices
+let vLfo5L = readDelay4k(animBufL, writeIdx, 180.0 + 140.0 * t1);
+let vLfo6R = readDelay4k(animBufR, writeIdx, 210.0 + 140.0 * t2);
+
+writeIdx = (writeIdx + 1) & 4095;
+
+// Hutchins Soft-Comparator PWM Animator (Fig. 1-3, Eq. 2-17):
+// Subtract slow triangle LFO (scaled by 0.70 optimal duty-cycle width, Fig. 5) from signal
+// and subtract smooth comparator step when (x - LFO) crosses threshold
+let pwmAmt = clamp(hutchins_pwm_anim, 0.0, 1.0);
+let diff1L = xL - 0.70 * t1;
+let diff2L = xL - 0.70 * t3;
+let comp1L = 0.5 * (1.0 + tanh(12.0 * diff1L)) - 0.5;
+let comp2L = 0.5 * (1.0 + tanh(12.0 * diff2L)) - 0.5;
+let hutchL = xL - pwmAmt * 0.45 * (comp1L + comp2L);
+
+let diff1R = xR - 0.70 * t2;
+let diff2R = xR + 0.70 * t3;
+let comp1R = 0.5 * (1.0 + tanh(12.0 * diff1R)) - 0.5;
+let comp2R = 0.5 * (1.0 + tanh(12.0 * diff2R)) - 0.5;
+let hutchR = xR - pwmAmt * 0.45 * (comp1R + comp2R);
+
+let animCleanL = hutchL - dcXL + 0.995 * dcYL;
+dcXL = hutchL; dcYL = animCleanL;
+let animCleanR = hutchR - dcXR + 0.995 * dcYR;
+dcXR = hutchR; dcYR = animCleanR;
+
+// --- 3. 7-Voice Stereo Panning & Center/Side Unison Mix (JP-8000 Supersaw Style) ---
+let stSpread = clamp(stereo_voice_spread, 0.0, 1.0);
+let cross = 1.0 - 0.75 * stSpread;
+
+let sideClusterL = (vUp1L + vDn3L + 0.85 * vLfo5L + cross * (vDn1R + vUp3R + 0.85 * vLfo6R)) * 0.35;
+let sideClusterR = (vDn1R + vUp3R + 0.85 * vLfo6R + cross * (vUp1L + vDn3L + 0.85 * vLfo5L)) * 0.35;
+
+let sideMix = clamp(center_to_side_mix, 0.0, 1.0);
+out1 = linearinterp(sideMix * 0.75, animCleanL, animCleanL * 0.65 + sideClusterL);
+out2 = linearinterp(sideMix * 0.75, animCleanR, animCleanR * 0.65 + sideClusterR);

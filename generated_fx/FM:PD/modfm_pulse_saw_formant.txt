@@ -1,0 +1,166 @@
+// ============================================================================
+// modfm_pulse_saw_formant.txt
+// Unix-Style Stereo Effect: Modified FM (ModFM) Bandlimited Pulse, Saw & Formant Engine
+// Implements Timoney, Lazzarini & Lysaght (DAFx-08, Paper 05):
+// "A Modified FM Synthesis Approach to Bandlimited Signal Generation"
+// (Sections 2, 3 & 4, Eq. 1-4, Fig. 1-6) combined with Phase-Synchronous ModFM
+// Formant Crossfading (Lazzarini & Timoney JAES 2010 / DAFx-11 Ref. 11 & 18).
+// Modulates the tuba's carrier (or resynthesizes from its analytic phase) using
+// strictly real exponential cosine modulation:
+//   y_pulse(t) = exp(k * (cos(w_0 * t) - 1)) * cos(w_c * t)   (Eq. 1)
+// Because the sidebands are governed by scaled Modified Bessel functions
+// exp(-k) * I_n(k) (Eq. 2, Fig. 4), harmonic magnitudes decay monotonically
+// without classic FM Bessel zero-crossings and never exceed 0 dB for any k >= 0!
+// Includes leaky integration + DC blocking to transform the ModFM pulse train
+// into a bandlimited ModFM Sawtooth (Sec 3, Eq. 3-4, Fig. 5-6).
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
+//   in4: Optional 1-Bar Phasor [0..1] (sweeps ModFM bandwidth index k when k_wobble > 0)
+// Outlets:
+//   out1: Left ModFM Pulse / Saw / Formant Output
+//   out2: Right ModFM Pulse / Saw / Formant Output
+
+@param({ min: 0.1, max: 60.0 }) modfm_index_k = 12.0;
+@param({ min: 1.0, max: 12.0 }) formant_harmonic = 1.0;
+@param({ min: 0.0, max: 1.0 }) pulse_to_saw = 0.5;
+@param({ min: 0.0, max: 1.0 }) tuba_carrier_mix = 0.4;
+@param({ min: 0.0, max: 1.0 }) k_wobble = 0.35;
+@param({ min: 0.0, max: 1.0 }) stereo_width = 0.25;
+
+// 4-stage Quadrature IIR Hilbert network for phase-locked tuba phasor & envelope
+@state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
+@state hDelRe = 0.0;
+
+// Leaky Integrator + DC Blocker states for ModFM Sawtooth (Paper Sec 3, Fig. 5, Eq. 3)
+@state runningMeanL = 0.0; @state runningMeanR = 0.0;
+@state integStateL = 0.0;  @state integStateR = 0.0;
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+// Fallback trackers & smoothing
+@state barFallback = new phasor();
+@state prevBarIn = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothEnv = 0.0;
+@state smoothK = 12.0;
+@state smoothHarm = 1.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Extract Phase-Locked Fundamental Phasor phi & Hilbert Envelope ---
+let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+let re = mono;
+let t = cR0 * (re + hReY[0]) - hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
+t = cR1 * (re + hReY[1]) - hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
+t = cR2 * (re + hReY[2]) - hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
+t = cR3 * (re + hReY[3]) - hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
+let sigRe = hDelRe;
+hDelRe = re;
+
+let im = mono;
+t = cI0 * (im + hImY[0]) - hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
+t = cI1 * (im + hImY[1]) - hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
+t = cI2 * (im + hImY[2]) - hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
+t = cI3 * (im + hImY[3]) - hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
+let sigIm = im;
+
+let instAmp = sqrt(sigRe * sigRe + sigIm * sigIm);
+smoothEnv += (instAmp - smoothEnv) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let phi = wrap((atan2(sigIm, sigRe) + pi) / (2.0 * pi), 0.0, 1.0);
+
+// --- 3. ModFM Index k Calculation & Anti-Aliasing Ceiling (Paper Fig. 7) ---
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn * 4.0, 0.0, 1.0) : barFallback.next(1.0);
+let wobMod = 0.5 * (1.0 - cos(2.0 * pi * barPh));
+
+// Exponential taper on ModFM index k (0.1 to 60.0)
+let kTarget = 0.1 * pow(600.0, clamp(modfm_index_k / 60.0, 0.0, 1.0));
+smoothK += (kTarget - smoothK) * slew;
+smoothHarm += (clamp(formant_harmonic, 1.0, 12.0) - smoothHarm) * slew;
+
+// Automatic pitch-dependent k clamp so upper harmonics never alias past Nyquist (Paper Fig. 7)
+let maxSafeK = clamp((sr * 0.38) / maximum(f0 * smoothHarm, 25.0), 1.0, 80.0);
+let wobMultiplier = 1.0 + clamp(k_wobble, 0.0, 1.0) * 3.0 * wobMod;
+let width = clamp(stereo_width, 0.0, 1.0);
+
+let kL = clamp(smoothK * wobMultiplier * (1.0 - 0.25 * width), 0.05, maxSafeK);
+let kR = clamp(smoothK * wobMultiplier * (1.0 + 0.25 * width), 0.05, maxSafeK);
+
+// --- 4. ModFM Bandlimited Pulse Train Generation (Paper Sec 2, Eq. 1) ---
+// y_pulse(t) = exp(k * (cos(w0*t) - 1)) * carrier(t)
+let modExpL = exp(kL * (cos(2.0 * pi * phi) - 1.0));
+let modExpR = exp(kR * (cos(2.0 * pi * wrap(phi + 0.08 * width, 0.0, 1.0)) - 1.0));
+
+// Dual-harmonic crossfaded formant carrier for click-free formant sweeps
+let hInt = floor(smoothHarm);
+let hFrac = smoothHarm - hInt;
+let synthCarL = (1.0 - hFrac) * cos(2.0 * pi * hInt * phi) + hFrac * cos(2.0 * pi * (hInt + 1.0) * phi);
+let synthCarR = (1.0 - hFrac) * cos(2.0 * pi * hInt * (phi + 0.02 * width)) + hFrac * cos(2.0 * pi * (hInt + 1.0) * (phi + 0.02 * width));
+
+let envGain = clamp(smoothEnv * 1.8, 0.0, 1.5);
+let carMix = clamp(tuba_carrier_mix, 0.0, 1.0);
+let pulseL = modExpL * linearinterp(carMix, synthCarL * envGain, xL * 1.5);
+let pulseR = modExpR * linearinterp(carMix, synthCarR * envGain, xR * 1.5);
+
+// --- 5. Bandlimited Sawtooth Integration Stage (Paper Sec 3, Eq. 3-4, Fig. 5-6) ---
+// 1) Subtract running mean of pulse train so integrator stays centered around 0
+let meanCoeff = 1.0 - exp(-2.0 * pi * (f0 * 0.5) / sr);
+runningMeanL += (pulseL - runningMeanL) * meanCoeff;
+runningMeanR += (pulseR - runningMeanR) * meanCoeff;
+
+let zeroMeanPulseL = pulseL - runningMeanL;
+let zeroMeanPulseR = pulseR - runningMeanR;
+
+// 2) Integrate H(z) = 1 / (1 - leak*z^-1) scaled by fundamental period f0/sr
+//    and normalize by sqrt(k) to maintain constant loudness across k = 0.1..60
+let normSawL = (f0 / sr) * 2.8 * sqrt(1.0 + kL * 0.65);
+let normSawR = (f0 / sr) * 2.8 * sqrt(1.0 + kR * 0.65);
+integStateL = 0.996 * integStateL + zeroMeanPulseL * normSawL;
+integStateR = 0.996 * integStateR + zeroMeanPulseR * normSawR;
+
+// 3) High-pass DC Blocker after integration (Paper Fig. 5)
+let sawL = integStateL - dcXL + 0.995 * dcYL;
+dcXL = integStateL; dcYL = sawL;
+
+let sawR = integStateR - dcXR + 0.995 * dcYR;
+dcXR = integStateR; dcYR = sawR;
+
+// Compensate narrow pulse duty-cycle energy drop at high k
+let pulseGainL = pow(1.0 + kL * 0.18, 0.35);
+let pulseGainR = pow(1.0 + kR * 0.18, 0.35);
+
+let sawBlend = clamp(pulse_to_saw, 0.0, 1.0);
+out1 = linearinterp(sawBlend, pulseL * pulseGainL, sawL);
+out2 = linearinterp(sawBlend, pulseR * pulseGainR, sawR);

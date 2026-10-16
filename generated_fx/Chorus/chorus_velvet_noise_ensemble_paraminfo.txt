@@ -1,0 +1,52 @@
+================================================================================
+chorus_velvet_noise_ensemble — Parameter Information
+================================================================================
+
+OVERVIEW
+A standalone stereo Velvet-Noise Ensemble Chorus & Spatial Decorrelator implementing Benoit Alary, Archontis Politis, and Vesa Välimäki's "Velvet-Noise Decorrelator" (DAFx-17 Paper 96, Sections 2.1, 2.2 & 3.1–3.3, Eq. 1–12, Fig. 1–4). Standard multi-tap choruses suffer from regular comb-filter coloration and transient smearing. This effect convolves Left and Right channels with two mutually orthogonal 16-impulse `{-1, 0, +1}` Velvet-Noise Sequences (VNS) across a 5–35 ms window using:
+1. Logarithmic Impulse Distribution (Section 3.3, Eq. 11–12, Fig. 4): Concentrates the velvet impulses near the start of the sequence so loud early impulses widen the tuba immediately without smearing tongue transients.
+2. 4-Segment Staircase Decay Envelope (Section 3.2, Eq. 10, Fig. 3): Applies 4 progressive attenuation weights `s0..s3` to prevent late-tap echo flutter while normalizing total RMS power.
+3. Quadrature Tap Micro-Modulation (`tap_shimmer_depth`): Gently modulates the 16 sparse velvet tap positions with multi-phase quadrature LFOs, transforming the static velvet-noise decorrelator into a dense, comb-free 16-voice stereo ensemble!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Optional Transient Envelope [0..1] (automatically shortens `sequence_length_ms` on hard attacks to keep staccato articulation razor-sharp)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs shimmer LFO when patched)
+- out1 / out2: Stereo Velvet-Noise Ensemble Chorus Output
+
+PARAMETERS (7)
+
+1. sequence_length_ms
+   - Range: 5.0 to 35.0 ms (Total Velvet-Noise Filter Span `Ls`, Default: 22.0 ms, matching DAFx-17 Section 1 & 4.1 recommendation of 20–30 ms)
+   - Taper: Direct sequence length in milliseconds.
+   - Function: Controls the spatial extent of the velvet-noise ensemble without crossing into discrete reverberation (>35 ms).
+
+2. log_tap_concentration
+   - Range: 0.0 to 1.0 (0.0 = Uniform Grid Spacing Eq. 4, 1.0 = Logarithmic Grid Spacing Eq. 11–12; Default: 0.65)
+   - Taper: Linear blend between uniform and logarithmic impulse spacing (DAFx-17 Fig. 3 vs. Fig. 4).
+   - Function: Packs a higher density of impulses into the first 2–8 ms of the sequence to preserve crisp brass transients.
+
+3. segment_decay_db
+   - Range: 3.0 to 24.0 dB (Total Attenuation `L_dB` Across the 4 Staircase Segments, Default: 12.0 dB)
+   - Taper: Logarithmic dB decay across segments `s0, s1, s2, s3` with automatic RMS power normalization (DAFx-17 Section 3.1 & 3.2, Eq. 7 & 10).
+   - Function: Controls how quickly later velvet taps decay relative to early taps.
+
+4. tap_shimmer_depth
+   - Range: 0.0 to 1.0 (maps to 0.0 to +/- 1.25 ms Per-Tap Quadrature Delay Modulation, Default: 0.45)
+   - Taper: Linear modulation excursion.
+   - Function: At 0.0, operates as a pure time-invariant DAFx-17 Velvet-Noise Decorrelator (zero pitch change, huge headphone/speaker externalization); above 0.0, animates all 16 taps into a lush, swirling 16-voice ensemble chorus.
+
+5. shimmer_rate_hz
+   - Range: 0.10 to 4.00 Hz (Velvet Tap Shimmer LFO Rate, Default: 0.75 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the modulation speed of the 16 velvet taps.
+
+6. stereo_decorrelation
+   - Range: 0.0 to 1.0 (Left/Right Velvet Impulse Position & Polarity Orthogonality, Default: 1.00)
+   - Taper: Linear crossfade between identical Left/Right sequences (0.0, mono center) and mutually orthogonal Left/Right sequences (1.0, minimum IACC).
+   - Function: Controls the apparent sound source width (ASW) between Left and Right speakers.
+
+7. dry_wet_mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet Velvet Ensemble; Default: 0.55)
+   - Taper: Constant-power cosine/sine crossfade.
+   - Function: Balances the center dry tuba with the 16-tap velvet-noise stereo field.

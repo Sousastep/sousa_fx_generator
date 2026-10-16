@@ -1,0 +1,237 @@
+// ============================================================================
+// 00d_tuba_4op_modfm_resynthesizer.txt
+// 4-Operator Adaptive ModFM & Phaseshaper Vocoder Resynthesizer
+// Driven directly by the 9 outlets of 00c_tuba_4harmonic_sift_analyzer.txt
+// ============================================================================
+// Implements:
+//   1. Lazzarini & Timoney (ICMC 2011 / DAFx-08) "ModFM Synthesis Vocoder":
+//      Each of the 4 tracked tuba harmonics (f1..f4, A1..A4) drives an
+//      independent ModFM / Phaseshaper operator:
+//        s_k(t) = A_k(t) * cos(2*pi*g_k(phi_k)) * exp(k_mod * (cos(2*pi*phi_mod) - 1))
+//      Because exp(k*(cos(w_m*t) - 1)) generates strictly monotonic Modified
+//      Bessel sidebands I_n(k)*e^(-k) that never exceed 0 dB at any index k,
+//      each harmonic blossoms into a alias-controlled formant cluster without
+//      Bessel phase cancellations or volume overload!
+//   2. Cross-Harmonic Phase Modulation & Inharmonicity Exaggeration:
+//      Measures the real-time deviation of f2, f3, f4 from integer multiples
+//      (2*f1, 3*f1, 4*f1) and scales it by `inharm_stretch` (0x = pure harmonic
+//      lock, 1x = natural tuba bore inharmonicity, up to 4x = metallic ghost-note
+//      bell/tearout clangor).
+//   3. Centroid-Driven Dubstep Morphing (via in9 from 00c):
+//      The player's live embouchure brightness (Spectral Centroid in [1..4])
+//      and optional 1-bar phasor (in10) dynamically sweep the ModFM index k,
+//      SMC 2010 PolyBLEP Hard-Sync ratio, and Sub-Octave foundation.
+// ============================================================================
+// Inlets (patch 1-to-1 from outlets out1..out9 of 00c_tuba_4harmonic_sift_analyzer):
+//   in1: f1 — Harmonic 1 Instantaneous Frequency (Hz)
+//   in2: f2 — Harmonic 2 Instantaneous Frequency (Hz)
+//   in3: f3 — Harmonic 3 Instantaneous Frequency (Hz)
+//   in4: f4 — Harmonic 4 Instantaneous Frequency (Hz)
+//   in5: A1 — Harmonic 1 Instantaneous Amplitude
+//   in6: A2 — Harmonic 2 Instantaneous Amplitude
+//   in7: A3 — Harmonic 3 Instantaneous Amplitude
+//   in8: A4 — Harmonic 4 Instantaneous Amplitude
+//   in9: Real-Time Brass Spectral Centroid Ratio [1.0 .. 4.0]
+//   in10: Optional 1-Bar Audio-Rate Phasor [0.0 .. 1.0] (for rhythmic wobble sync)
+// Outlets:
+//   out1: Left Stereo 4-Op ModFM Resynthesizer Output
+//   out2: Right Stereo 4-Op ModFM Resynthesizer Output
+
+@param({ min: -1.0, max: 1.0 }) joy_x_sync_formant = 0.0;
+@param({ min: -1.0, max: 1.0 }) joy_y_modfm_index = 0.2;
+@param({ min: 0.0, max: 4.0 }) inharm_stretch = 1.0;
+@param({ min: 0.0, max: 1.0 }) cross_op_fm = 0.35;
+@param({ min: 0.0, max: 1.0 }) sub_octave_mix = 0.65;
+@param({ min: 1.0, max: 16.0, steps: 16 }) rhythm_subdiv = 4.0;
+@param({ min: 0.0, max: 1.0 }) rhythm_wobble = 0.45;
+@param({ min: 0.0, max: 1.0 }) stereo_pan_spread = 0.6;
+
+// 4 Carrier Phasors + 4 Modulator Phasors + 1 Sub-Octave Phasor
+@state carPh = new FixedSampleArray(4);
+@state modPh = new FixedSampleArray(4);
+@state opOutPrev = new FixedSampleArray(4);
+@state subPh = 0.0;
+
+// 6-Stage Stereo Allpass Disperser on the summed 4-Op bus for liquid dubstep punch
+@state apZ1L = new FixedSampleArray(6);
+@state apZ2L = new FixedSampleArray(6);
+@state apZ1R = new FixedSampleArray(6);
+@state apZ2R = new FixedSampleArray(6);
+
+@state fallbackBar = new phasor();
+@state prevBarIn = 0.0;
+@state smoothJoyX = 0.0;
+@state smoothJoyY = 0.2;
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+function polyblep(t: number, dt: number): number {
+	let corr = 0.0;
+	let sDt = clamp(dt, 0.0001, 0.45);
+	if (t < sDt) {
+		let u = t / sDt;
+		corr = u + u - u * u - 1.0;
+	} else if (t > 1.0 - sDt) {
+		let u = (t - 1.0) / sDt;
+		corr = u * u + u + u + 1.0;
+	}
+	return corr;
+}
+
+let sr = maximum(samplerate(), 1.0);
+
+// Read 9 SIFT Analyzer inputs + optional 10th 1-bar phasor
+let f1_in = (in1 > 20.0) ? in1 : 58.27;
+let f2_in = (in2 > 40.0) ? in2 : (f1_in * 2.0);
+let f3_in = (in3 > 60.0) ? in3 : (f1_in * 3.0);
+let f4_in = (in4 > 80.0) ? in4 : (f1_in * 4.0);
+
+let a1_in = maximum(in5, 0.0);
+let a2_in = maximum(in6, 0.0);
+let a3_in = maximum(in7, 0.0);
+let a4_in = maximum(in8, 0.0);
+
+let centroid = clamp((in9 >= 1.0) ? in9 : 1.5, 1.0, 4.0);
+let barIn = in10;
+
+// Smooth Joystick X/Y controls
+let slew = 1.0 - exp(-1.0 / (0.005 * sr));
+smoothJoyX += (clamp(joy_x_sync_formant, -1.0, 1.0) - smoothJoyX) * slew;
+smoothJoyY += (clamp(joy_y_modfm_index, -1.0, 1.0) - smoothJoyY) * slew;
+
+// ============================================================================
+// 1. 1-BAR RHYTHMIC WOBBLE ENVELOPE & EMBOUCHURE CENTROID COUPLING
+// ============================================================================
+let barActive = (abs(barIn - prevBarIn) > 0.0000001 || (barIn > 0.0001 && barIn < 0.9999));
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn, 0.0, 1.0) : fallbackBar.next(0.5);
+
+let rSub = floor(clamp(rhythm_subdiv, 1.0, 16.0));
+let wobPh = wrap(barPh * rSub, 0.0, 1.0);
+let wobLfo = pow(triangle(wobPh, 0.22), 1.5);
+let wobMod = linearinterp(clamp(rhythm_wobble, 0.0, 1.0), 1.0, wobLfo);
+
+// Normalize centroid [1..4] -> [0..1] so playing brighter/louder expands synthesis
+let brassBright = clamp((centroid - 1.0) / 2.2, 0.0, 1.0);
+
+// ============================================================================
+// 2. INHARMONICITY STRETCH (EXAGGERATING BORE / GHOST-NOTE DEVIATIONS)
+// ============================================================================
+let stretch = clamp(inharm_stretch, 0.0, 4.0);
+let fOp = new FixedSampleArray(4);
+fOp[0] = clamp(f1_in, 22.0, sr * 0.42);
+fOp[1] = clamp(2.0 * f1_in + (f2_in - 2.0 * f1_in) * stretch, 40.0, sr * 0.42);
+fOp[2] = clamp(3.0 * f1_in + (f3_in - 3.0 * f1_in) * stretch, 60.0, sr * 0.42);
+fOp[3] = clamp(4.0 * f1_in + (f4_in - 4.0 * f1_in) * stretch, 80.0, sr * 0.42);
+
+let aOp = new FixedSampleArray(4);
+aOp[0] = a1_in;
+aOp[1] = a2_in;
+aOp[2] = a3_in;
+aOp[3] = a4_in;
+
+// ============================================================================
+// 3. 4-OPERATOR ADAPTIVE MODFM + POLYBLEP PHASESHAPING ENGINE
+// ============================================================================
+// Sync ratio a1 controlled by Joystick X + embouchure centroid + rhythmic wobble
+let syncRatio = clamp(1.8 * pow(2.6, smoothJoyX) * (1.0 + 0.6 * brassBright * wobMod), 1.0, 10.0);
+
+// ModFM Index k controlled by Joystick Y + embouchure brightness + rhythmic wobble
+let joyY_u = 0.5 * (smoothJoyY + 1.0);
+let baseK = (0.3 + 7.5 * pow(joyY_u, 1.35)) * (0.45 + 0.85 * brassBright) * wobMod;
+let xFmAmt = pow(clamp(cross_op_fm, 0.0, 1.0), 1.3) * 0.45;
+let panSpread = clamp(stereo_pan_spread, 0.0, 1.0);
+
+let sumL = 0.0;
+let sumR = 0.0;
+
+for (let k: Int = 0; k < 4; k++) {
+	let fk = fOp[k];
+	let dtCar = clamp(fk / sr, 0.00001, 0.45);
+	carPh[k] = wrap(carPh[k] + dtCar, 0.0, 1.0);
+
+	// Modulator runs at f1 (fundamental) so sidebands around every harmonic lock to f0!
+	let dtMod = clamp(fOp[0] / sr, 0.00001, 0.45);
+	modPh[k] = wrap(modPh[k] + dtMod, 0.0, 1.0);
+
+	// Cross-operator phase modulation: Operator k is phase-modulated by Operator k-1
+	// (Op 0 is self/feedback modulated by Op 3 for closed-loop growl)
+	let prevIdx: Int = (k + 3) % 4;
+	let crossPhase = xFmAmt * opOutPrev[prevIdx];
+
+	// SMC 2010 Hard-Sync Phaseshaper on each operator's carrier phase
+	let opSyncMult = 1.0 + (syncRatio - 1.0) * (1.0 - 0.15 * k);
+	let rawSyncPhL = wrap(opSyncMult * wrap(carPh[k] + crossPhase, 0.0, 1.0), 0.0, 1.0);
+	let rawSyncPhR = wrap(opSyncMult * wrap(carPh[k] - crossPhase + 0.03 * k * panSpread, 0.0, 1.0), 0.0, 1.0);
+
+	let syncDt = clamp(dtCar * opSyncMult, 0.0001, 0.45);
+	let syncSawL = (2.0 * rawSyncPhL - 1.0) - polyblep(rawSyncPhL, syncDt);
+	let syncSawR = (2.0 * rawSyncPhR - 1.0) - polyblep(rawSyncPhR, syncDt);
+
+	// Blend sinusoidal carrier cos(2*pi*g(phi)) with PolyBLEP hard-sync saw as Joy X rises
+	let sawBlend = clamp(0.5 * (smoothJoyX + 1.0), 0.0, 0.75);
+	let carWaveL = linearinterp(sawBlend, cos(2.0 * pi * rawSyncPhL), syncSawL);
+	let carWaveR = linearinterp(sawBlend, cos(2.0 * pi * rawSyncPhR), syncSawR);
+
+	// Lazzarini & Timoney ModFM Window: exp(k_op * (cos(2*pi*modPh) - 1))
+	// Guaranteed <= 1.0 for all k_op >= 0, producing pure Modified Bessel In(k) formants
+	let kOp = clamp(baseK * (1.0 + 0.25 * k), 0.0, 12.0);
+	let modWinL = exp(kOp * (cos(2.0 * pi * modPh[k]) - 1.0));
+	let modWinR = exp(kOp * (cos(2.0 * pi * (modPh[k] + 0.05 * panSpread)) - 1.0));
+
+	let sigOpL = carWaveL * modWinL;
+	let sigOpR = carWaveR * modWinR;
+	opOutPrev[k] = 0.5 * (sigOpL + sigOpR);
+
+	// Alternate stereo panning across harmonics 1..4 (Op 1 centered, Op 2..4 spread L/R)
+	let panDir = (k == 0) ? 0.0 : ((k % 2 == 1) ? -1.0 : 1.0);
+	let panPos = 0.5 + 0.38 * panSpread * panDir * (k / 3.0);
+	let gainL = cos(panPos * 0.5 * pi);
+	let gainR = sin(panPos * 0.5 * pi);
+
+	// Boost upper harmonics slightly when joy_y is pushed up so high partials scream
+	let harmBoost = 1.0 + 0.45 * k * joyY_u;
+	sumL += sigOpL * aOp[k] * gainL * harmBoost;
+	sumR += sigOpR * aOp[k] * gainR * harmBoost;
+}
+
+// ============================================================================
+// 4. PHASE-LOCKED SUB-OCTAVE FOUNDATION (Driven by f1 & A1)
+// ============================================================================
+subPh = wrap(subPh + clamp((0.5 * fOp[0]) / sr, 0.00001, 0.45), 0.0, 1.0);
+// Sub-octave with subtle 2nd/3rd Chebyshev warmth weighted by Fundamental Amplitude A1
+let subWave = (sin(2.0 * pi * subPh) + 0.25 * sin(6.0 * pi * subPh)) * aOp[0] * clamp(sub_octave_mix, 0.0, 1.0) * 1.6;
+
+let busL = sumL * 2.2 + subWave;
+let busR = sumR * 2.2 + subWave;
+
+// ============================================================================
+// 5. 6-STAGE ALLPASS PHASE DISPERSER (Tuned to Centroid * f1) & DC BLOCK
+// ============================================================================
+let dispHz = clamp(fOp[0] * centroid * 1.5, 55.0, 3500.0);
+let apW0 = 2.0 * pi * dispHz / sr;
+let apAlpha = sin(apW0) / (2.0 * 2.8);
+let apA0_inv = 1.0 / (1.0 + apAlpha);
+let apB0 = (1.0 - apAlpha) * apA0_inv;
+let apB1 = (-2.0 * cos(apW0)) * apA0_inv;
+
+let dispL = busL;
+let dispR = busR;
+for (let i: Int = 0; i < 6; i++) {
+	let yL = apB0 * dispL + apZ1L[i];
+	apZ1L[i] = apB1 * dispL - apB1 * yL + apZ2L[i];
+	apZ2L[i] = dispL - apB0 * yL;
+	dispL = yL;
+
+	let yR = apB0 * dispR + apZ1R[i];
+	apZ1R[i] = apB1 * dispR - apB1 * yR + apZ2R[i];
+	apZ2R[i] = dispR - apB0 * yR;
+	dispR = yR;
+}
+
+let dcCoeff = 1.0 - (2.0 * pi * 14.0 / sr);
+let cleanL = dispL - dcXL + dcCoeff * dcYL; dcXL = dispL; dcYL = cleanL;
+let cleanR = dispR - dcXR + dcCoeff * dcYR; dcXR = dispR; dcYR = cleanR;
+
+out1 = tanh(cleanL * 1.3);
+out2 = tanh(cleanR * 1.3);

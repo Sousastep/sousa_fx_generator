@@ -1,0 +1,164 @@
+// ============================================================================
+// vector_phaseshaper_lissajous.txt
+// Unix-Style Stereo Effect: 2D Vector Phaseshaping (VPS) & Lissajous Formant Engine
+// Implements Kleimola, Lazzarini, Timoney & Valimaki (DAFx-11, Paper 55_e):
+// "Vector Phaseshaping Synthesis" (Sec 3, 3.1, 3.2, 4.3, 5.2, Eq. 5-12, 20).
+// Extracts the analytic phase phi(t) in [0, 1) from the stereo tuba (or uses
+// 00_tuba_freq_tracker's phasor), warps it through a 2D breakpoint vector p = (d, v)
+// with incomplete-period alias suppression (Eq. 11-12), and modulates (d, v) along
+// LFO or audio-rate Lissajous trajectories (Eq. 20) to synthesize vocal formants
+// centered at f_f = (2*v - 1) * f0.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba or 01_harmonic_isolator)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
+//   in4: Optional 1-Bar Phasor [0..1] (drives Lissajous LFO when liss_rate <= 1.0)
+// Outlets:
+//   out1: Left Vector-Phaseshaped Formant Output
+//   out2: Right Vector-Phaseshaped Formant Output
+
+@param({ min: 0.05, max: 0.95 }) vec_d = 0.5;
+@param({ min: 0.5, max: 6.0 }) vec_v_formant = 2.2;
+@param({ min: 0.0, max: 1.0 }) liss_depth = 0.35;
+@param({ min: 1.0, max: 4.0, steps: 4 }) liss_ratio = 2.0;
+@param({ min: 0.0, max: 1.0 }) audio_rate_mod = 0.0;
+@param({ min: 0.0, max: 1.0 }) alias_suppress = 0.85;
+@param({ min: 0.0, max: 1.0 }) env_follow = 0.85;
+
+// 4-stage Quadrature IIR Hilbert network for analytic phase & envelope extraction
+@state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
+@state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
+@state hDelRe = 0.0;
+
+// Lissajous modulators & fallback trackers
+@state audioPhasor = new phasor();
+@state barFallback = new phasor();
+@state prevBarIn = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothEnv = 0.0;
+@state smoothD = 0.5;
+@state smoothV = 2.2;
+
+// VPS 2D piecewise phase distortion + DAFx-11 Sec 3.2 Alias Suppression (Eq. 6, 11, 12)
+function evalVPS(xIn: number, dIn: number, vIn: number, suppressAmt: number): number {
+	let x = wrap(xIn, 0.0, 1.0);
+	let d = clamp(dIn, 0.04, 0.96);
+	let v = maximum(vIn, 0.25);
+
+	// Eq. 6: 2D Vector Phaseshaping function phi_vps(x)
+	let p = (x < d) ? ((v * x) / d) : ((1.0 - v) * ((x - d) / (1.0 - d)) + v);
+	let rawCos = -cos(2.0 * pi * p);
+
+	// Eq. 11 & 12: Incomplete period alias suppression when p > floor(v)
+	let vFloor = floor(v);
+	let b = v - vFloor;
+	let sa = rawCos;
+
+	if (p > vFloor && b > 0.001 && b < 0.999) {
+		let pMod = p - floor(p);
+		let c = cos(2.0 * pi * b);
+		if (b <= 0.5) {
+			let phiA = clamp(pMod / (2.0 * b), 0.0, 1.0);
+			let sA = -cos(2.0 * pi * phiA);
+			sa = 0.5 * ((1.0 - c) * sA - 1.0 - c);
+		} else {
+			let phiA = clamp(pMod / b, 0.0, 1.0);
+			if (phiA > 0.5) {
+				let sA = -cos(2.0 * pi * phiA);
+				sa = 0.5 * ((1.0 + c) * sA + 1.0 - c);
+			}
+		}
+	}
+	return linearinterp(clamp(suppressAmt, 0.0, 1.0), rawCos, sa);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Analytic Phase & Amplitude Extraction via 4-Stage Hilbert Network ---
+let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+let re = mono;
+let t = cR0 * (re + hReY[0]) - hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
+t = cR1 * (re + hReY[1]) - hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
+t = cR2 * (re + hReY[2]) - hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
+t = cR3 * (re + hReY[3]) - hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
+let sigRe = hDelRe;
+hDelRe = re;
+
+let im = mono;
+t = cI0 * (im + hImY[0]) - hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
+t = cI1 * (im + hImY[1]) - hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
+t = cI2 * (im + hImY[2]) - hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
+t = cI3 * (im + hImY[3]) - hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
+let sigIm = im;
+
+let instAmp = sqrt(sigRe * sigRe + sigIm * sigIm);
+let envCoeff = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothEnv += (instAmp - smoothEnv) * envCoeff;
+
+// Analytic phase mapped to [0, 1)
+let phi = wrap((atan2(sigIm, sigRe) + pi) / (2.0 * pi), 0.0, 1.0);
+
+// --- 3. 2D Lissajous Vector Modulation (Paper Sec 4.3 & 5.2, Eq. 20) ---
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let lfoPh = barActive ? wrap(barIn * 4.0, 0.0, 1.0) : barFallback.next(1.5);
+let audPh = audioPhasor.next(f0);
+
+// Blend between bar-synced LFO Lissajous and pitch-synchronous audio-rate Lissajous (Sec 5.2)
+let arBlend = clamp(audio_rate_mod, 0.0, 1.0);
+let ratioN = floor(clamp(liss_ratio, 1.0, 4.0) + 0.5);
+
+let lissDL = linearinterp(arBlend, cos(2.0 * pi * lfoPh + 0.5 * pi), cos(2.0 * pi * audPh + 0.5 * pi));
+let lissVL = linearinterp(arBlend, cos(2.0 * pi * ratioN * lfoPh), cos(2.0 * pi * ratioN * audPh));
+
+// Right channel has quadrature stereo offset on the Lissajous figure
+let lissDR = linearinterp(arBlend, sin(2.0 * pi * lfoPh + 0.5 * pi), sin(2.0 * pi * audPh + 0.5 * pi));
+let lissVR = linearinterp(arBlend, sin(2.0 * pi * ratioN * lfoPh), sin(2.0 * pi * ratioN * audPh));
+
+smoothD += (clamp(vec_d, 0.05, 0.95) - smoothD) * slew;
+smoothV += (clamp(vec_v_formant, 0.5, 6.0) - smoothV) * slew;
+
+let depth = pow(clamp(liss_depth, 0.0, 1.0), 1.25);
+let dModL = clamp(smoothD + depth * 0.38 * lissDL, 0.04, 0.96);
+let dModR = clamp(smoothD + depth * 0.38 * lissDR, 0.04, 0.96);
+let vModL = clamp(smoothV + depth * 1.8 * lissVL, 0.35, 7.5);
+let vModR = clamp(smoothV + depth * 1.8 * lissVR, 0.35, 7.5);
+
+// --- 4. Evaluate Stereo VPS with Dual-Formant Crossfading & Alias Suppression ---
+let yL = evalVPS(phi, dModL, vModL, alias_suppress);
+let yR = evalVPS(wrap(phi + 0.015, 0.0, 1.0), dModR, vModR, alias_suppress);
+
+// Apply natural tuba envelope or gated unit synthesis level
+let gate = clamp((smoothEnv - 0.002) * 200.0, 0.0, 1.0);
+let ampScale = linearinterp(clamp(env_follow, 0.0, 1.0), gate * 0.7, clamp(smoothEnv * 1.6, 0.0, 1.5));
+
+out1 = yL * ampScale;
+out2 = yR * ampScale;

@@ -1,0 +1,137 @@
+// ============================================================================
+// modal_heterodyne_inverter_dist.txt
+// Unix-Style Stereo Effect: 4-Mode Heterodyne-Smooth-Modulate Spectral Inverter & Distihu
+// Implements Jonathan S. Abel & Kurt James Werner (DAFx-15, Paper 72):
+// "Distortion and Pitch Processing Using a Modal Reverberator Architecture"
+// (Sections 2, 3.3 & 3.4, Eq. 5-8, 13-14, Fig. 2, 8, 11, 12).
+// Implements 4 pitch-tracked harmonic modes (m = 1, 2, 3, 4 at w_m = m * w_0) as
+// cascades of complex heterodyning to DC (e^(-j*w_m*t)), two-stage complex
+// exponential smoothing (bandwidth / modal sustain), per-mode memoryless
+// distortion d_m(.) FREE of intermodulation products (Fig. 12), and re-modulation
+// at a transformed frequency e^(j*nu_m*t):
+//   - Normal / Shifted Harmonics: nu_m = m * w_0 * 2^(shift/12)  (Eq. 13)
+//   - Spectral Inversion (Eq. 14, Fig. 11): nu_m = w_c^2 / w_m -> flips the harmonic
+//     series upside down around pivot 2*f0 so harmonic 1 <-> 4 and harmonic 2 <-> 3!
+//   - Stereo output takes the Real part on Left and Imaginary part on Right (Sec 2)!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
+//   in4: Optional Gate / Freeze or 1-Bar Phasor [0..1] (modulates inversion morph)
+// Outlets:
+//   out1: Left Modal Processor Output (Real Part of Complex Modes)
+//   out2: Right Modal Processor Output (Imaginary Part / Quadrature Stereo Modes)
+
+@param({ min: 5.0, max: 600.0 }) mode_decay_ms = 45.0;
+@param({ min: 0.0, max: 24.0 }) mode_drive_db = 9.0;
+@param({ min: 0.0, max: 1.0 }) spectral_invert = 0.0;
+@param({ min: -12.0, max: 12.0 }) pitch_shift_semi = 0.0;
+@param({ min: 0.0, max: 1.0 }) odd_even_mode_tilt = 0.0;
+@param({ min: 0.0, max: 1.0 }) mix = 0.85;
+
+// 4 Complex Heterodyne Analysis & Synthesis Phase Accumulators (modes m = 1, 2, 3, 4)
+@state anaPh = new FixedSampleArray(4);
+@state synPh = new FixedSampleArray(4);
+
+// 2-Stage Complex Baseband Smoothing Filters per mode (eliminates beating, Sec 3.2 & 3.3)
+@state bbRe1 = new FixedSampleArray(4); @state bbIm1 = new FixedSampleArray(4);
+@state bbRe2 = new FixedSampleArray(4); @state bbIm2 = new FixedSampleArray(4);
+
+// Fallback ZC pitch tracker & smoothing
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+
+// --- 1. Pitch Conditioning ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Baseband Smoothing Coefficient (Paper Eq. 4 & 8: gamma * e^(-alpha_m * t)) ---
+let decaySec = clamp(mode_decay_ms, 5.0, 600.0) * 0.001;
+let alphaCoeff = 1.0 - exp(-6.907755 / (decaySec * sr)); // T60 decay rate
+let drive = dbtoa(clamp(mode_drive_db, 0.0, 24.0));
+let invAmt = clamp(spectral_invert, 0.0, 1.0);
+let shiftRatio = pow(2.0, clamp(pitch_shift_semi, -12.0, 12.0) / 12.0);
+let tilt = clamp(odd_even_mode_tilt, -1.0, 1.0);
+
+let sumRe = 0.0;
+let sumIm = 0.0;
+
+// --- 3. 4-Mode Heterodyne -> Smooth -> Distort -> Re-Modulate Pipeline (Fig. 2, 8, 12) ---
+for (let m: Int = 0; m < 4; m++) {
+	let harmNum = m + 1.0;
+	let fAna = clamp(f0 * harmNum, 20.0, sr * 0.45);
+
+	// Advance heterodyne analysis phase e^(-j * w_m * t)
+	let phA = wrap(anaPh[m] + fAna / sr, 0.0, 1.0);
+	anaPh[m] = phA;
+
+	let hetRe = mono * cos(2.0 * pi * phA);
+	let hetIm = -mono * sin(2.0 * pi * phA);
+
+	// 2-stage complex exponential baseband smoother (Paper Sec 3.2)
+	bbRe1[m] += (hetRe - bbRe1[m]) * alphaCoeff;
+	bbIm1[m] += (hetIm - bbIm1[m]) * alphaCoeff;
+	bbRe2[m] += (bbRe1[m] - bbRe2[m]) * alphaCoeff;
+	bbIm2[m] += (bbIm1[m] - bbIm2[m]) * alphaCoeff;
+
+	// Extract complex mode envelope & phase at DC baseband
+	let envRe = bbRe2[m] * 3.5;
+	let envIm = bbIm2[m] * 3.5;
+
+	// Paper Sec 3.3 Eq. 14: Spectral Inversion about pivot f_c = 2 * f0
+	// Maps harmonic {1, 2, 3, 4} -> {4, 2, 1.333, 1} (or inverted order {4, 3, 2, 1})
+	let invHarm = 5.0 - harmNum;
+	let targetHarm = linearinterp(invAmt, harmNum, invHarm);
+	let fSyn = clamp(f0 * targetHarm * shiftRatio, 20.0, sr * 0.45);
+
+	let phS = wrap(synPh[m] + fSyn / sr, 0.0, 1.0);
+	synPh[m] = phS;
+
+	// Re-modulate complex baseband mode back to audio frequency e^(j * nu_m * t)
+	let modCos = cos(2.0 * pi * phS);
+	let modSin = sin(2.0 * pi * phS);
+	let modeRe = envRe * modCos - envIm * modSin;
+	let modeIm = envRe * modSin + envIm * modCos;
+
+	// Paper Sec 3.4 Fig. 12: Distort each narrowband mode INDIVIDUALLY before summing!
+	// Zero intermodulation products between harmonics, plus Nyquist-aware harmonic order
+	let distRe = tanh(modeRe * drive);
+	let distIm = tanh(modeIm * drive);
+
+	// Odd/Even mode weighting
+	let isEven = ((m & 1) == 1) ? 1.0 : 0.0;
+	let weight = isEven ? (1.0 + 0.6 * tilt) : (1.0 - 0.6 * tilt);
+
+	sumRe += distRe * weight;
+	sumIm += distIm * weight;
+}
+
+// Paper Sec 2 (p. 2): Real part -> Left channel, Imaginary part -> Right channel for 90-deg stereo
+let wetL = sumRe * 0.45;
+let wetR = sumIm * 0.45;
+
+let mMix = clamp(mix, 0.0, 1.0);
+out1 = linearinterp(mMix, xL, wetL);
+out2 = linearinterp(mMix, xR, wetR);

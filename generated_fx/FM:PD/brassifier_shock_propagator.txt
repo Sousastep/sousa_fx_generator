@@ -1,0 +1,142 @@
+// ============================================================================
+// brassifier_shock_propagator.txt
+// Unix-Style Stereo Effect: Nonlinear Acoustic Wave Steepening & "Brassifier"
+// Implements Charles M. Cooper & Jonathan S. Abel (DAFx-10, Paper P77):
+// "Digital Simulation of 'Brassiness' and Amplitude-Dependent Propagation Speed
+// in Wind Instruments" (Sections 2.1, 3.2, 5.1 & 5.2, Eq. 2, 5, 12, Fig. 6-9).
+// In a brass bore at >140 dB SPL, local sound speed v(x,t) = c0 + beta * p(x,t)/P0
+// increases with pressure, causing peaks to travel faster than troughs and
+// steepening soft waves into sawtooth shock fronts ("cuivré" brassiness).
+// Implements both architectures from Section 5.2:
+//   1. Pre-emphasis bore conditioning filter c(z) + complementary bell high-shelf q(z).
+//   2. Sidechain lowpass bore pressure extraction driving a cubic-interpolated
+//      amplitude-dependent delay line D(n) = d0 - beta * p_bore(n) scaled by 1/f0.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Tracked Pitch f0 in Hz (scales bore delay excursion proportionally)
+//   in4: Optional External Sidechain Driver (if patched, modulates propagation speed)
+// Outlets:
+//   out1: Left Brassified / Shock-Steepened Output
+//   out2: Right Brassified / Shock-Steepened Output
+
+@param({ min: 0.0, max: 1.0 }) shock_drive_beta = 0.65;
+@param({ min: 0.5, max: 12.0 }) bore_length_m = 4.5;
+@param({ min: 80.0, max: 1200.0 }) sidechain_lp_hz = 280.0;
+@param({ min: 0.0, max: 1.0 }) bell_eq_comp = 0.7;
+@param({ min: 0.0, max: 1.0 }) bi_waveguide_fb = 0.25;
+@param({ min: 0.0, max: 1.0 }) stereo_bore_diff = 0.2;
+
+// Circular delay buffers for lumped amplitude-dependent bore propagation (2048 samples)
+@state boreBufL = new FixedSampleArray(2048);
+@state boreBufR = new FixedSampleArray(2048);
+@state writeIdx: Int = 0;
+
+// Sidechain bore pressure lowpass filter c(z) (Paper Fig. 8)
+@state scLp1L = new onepole(); @state scLp2L = new onepole();
+@state scLp1R = new onepole(); @state scLp2R = new onepole();
+
+// Pre-conditioning c(z) and complementary bell equalization q(z) = c^-1(z) (Paper Fig. 7)
+@state preLpL = new onepole(); @state preLpR = new onepole();
+@state postLpL = new onepole(); @state postLpR = new onepole();
+
+// Bidirectional backward-wave reflection state (Paper Sec 4.1 & 4.2, Fig. 5)
+@state backWaveL = 0.0;
+@state backWaveR = 0.0;
+
+// Fallback ZC pitch tracker
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+
+function readDelay2k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
+	let d = clamp(delSamps, 2.0, 2042.0);
+	let readPos = wIdx - d;
+	while (readPos < 0.0) {
+		readPos += 2048.0;
+	}
+	let idx0: Int = floor(readPos);
+	let frac = readPos - idx0;
+	let i_m1: Int = (idx0 - 1 + 2048) & 2047;
+	let i_0: Int  = idx0 & 2047;
+	let i_1: Int  = (idx0 + 1) & 2047;
+	let i_2: Int  = (idx0 + 2) & 2047;
+	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let extSc = in4;
+
+// --- 1. Pitch Conditioning ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+smoothF0 += (rawF0 - smoothF0) * (1.0 - exp(-1.0 / (0.006 * sr)));
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Pre-Conditioning Filter c(z) (Paper Fig. 7: emphasize low bore frequencies) ---
+let eqAmt = clamp(bell_eq_comp, 0.0, 1.0);
+let lowPreL = preLpL.next(xL, 450.0);
+let lowPreR = preLpR.next(xR, 450.0);
+let condL = xL + eqAmt * 0.6 * lowPreL;
+let condR = xR + eqAmt * 0.6 * lowPreR;
+
+// Include bidirectional reflected wave sum (Paper Sec 4.1, Fig. 5: total bore pressure)
+let biFb = clamp(bi_waveguide_fb, 0.0, 1.0) * 0.55;
+let boreInL = tanh(condL + biFb * backWaveL);
+let boreInR = tanh(condR + biFb * backWaveR);
+
+boreBufL[writeIdx] = boreInL;
+boreBufR[writeIdx] = boreInR;
+
+// --- 3. Sidechain Bore Pressure Extractor (Paper Fig. 8) ---
+let scCut = clamp(sidechain_lp_hz, 80.0, 1200.0);
+let pBoreL = scLp2L.next(scLp1L.next(boreInL + extSc, scCut), scCut);
+let pBoreR = scLp2R.next(scLp1R.next(boreInR + extSc, scCut), scCut);
+
+// --- 4. Amplitude-Dependent Propagation Delay (Paper Eq. 5 & 12, Fig. 6) ---
+// Nominal acoustic propagation delay d0 = (bore_length_m / 343 m/s) * sr
+let lenM = clamp(bore_length_m, 0.5, 12.0);
+let diff = clamp(stereo_bore_diff, 0.0, 1.0) * 0.18;
+let d0L = clamp((lenM * (1.0 - diff) / 343.0) * sr, 12.0, 1600.0);
+let d0R = clamp((lenM * (1.0 + diff) / 343.0) * sr, 12.0, 1600.0);
+
+// Scale max time-advance beta so peaks travel faster than troughs up to ~1/3 period of f0
+let betaDrive = pow(clamp(shock_drive_beta, 0.0, 1.0), 1.25);
+let maxExcursion = clamp((sr / f0) * 0.35 * (lenM / 5.5), 1.0, d0L * 0.85);
+
+// Positive pressure reduces delay (peaks arrive sooner -> steep rising shock edge!)
+let delL = d0L - betaDrive * maxExcursion * clamp(pBoreL * 1.8, -0.95, 0.95);
+let delR = d0R - betaDrive * maxExcursion * clamp(pBoreR * 1.8, -0.95, 0.95);
+
+let propL = readDelay2k(boreBufL, writeIdx, delL);
+let propR = readDelay2k(boreBufR, writeIdx, delR);
+
+// Store low-frequency bell reflection for bidirectional waveguide feedback (Paper Sec 4.2)
+let bellLowL = postLpL.next(propL, 550.0);
+let bellLowR = postLpR.next(propR, 550.0);
+backWaveL = -bellLowL;
+backWaveR = -bellLowR;
+
+writeIdx = (writeIdx + 1) & 2047;
+
+// --- 5. Complementary Bell Equalization Filter q(z) (Paper Fig. 7: high-frequency transmission) ---
+let outL = propL + eqAmt * 0.75 * (propL - bellLowL);
+let outR = propR + eqAmt * 0.75 * (propR - bellLowR);
+
+out1 = outL;
+out2 = outR;

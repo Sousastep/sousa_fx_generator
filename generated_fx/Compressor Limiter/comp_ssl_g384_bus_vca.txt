@@ -1,0 +1,118 @@
+// ============================================================================
+// comp_ssl_g384_bus_vca.txt
+// Stereo SSL Logic FX G384 / 4000 G-Bus VCA Glue Compressor
+// Based on Thompson & Heilemann (DAFx-2026, "Evaluating Dynamic Range
+// Compressor Models Using Control-Voltage Measurements", Sec. 3, 4.1)
+// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// ============================================================================
+
+@param({ min: -36.0, max: 0.0 }) thresh_db = -18.0;
+@param({ min: 2.0, max: 10.0 }) ratio_mode = 4.0;
+@param({ min: 0.1, max: 30.0 }) attack_ms = 10.0;
+@param({ min: 0.05, max: 1.5 }) release_s = 0.30;
+@param({ min: 0.0, max: 1.0 }) auto_release = 0.65;
+@param({ min: 20.0, max: 350.0 }) sc_hpf_hz = 85.0;
+@param({ min: 0.0, max: 1.0 }) vca_harmonics = 0.35;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// Sidechain high-pass filter state (prevents sub-bass kick from over-pumping mix)
+@state sc_lp_L = 0.0;
+@state sc_lp_R = 0.0;
+
+// Two-pole SSL AUTO release + attack ballistics states (Thompson & Heilemann Sec. 3)
+@state cv_fast_db = 0.0;
+@state cv_slow_db = 0.0;
+@state cv_att_db = 0.0;
+
+// Helper: Ratio-dependent knee static gain computer (SSL G384 DBX 2151 sidechain VCA)
+// At 2:1 knee is wide & gentle; at 4:1 moderate; at 10:1 tight hard knee
+function ssl_static_gr_db(x_db: number, T: number, R: number): number {
+    let r_clamped = clamp(R, 1.5, 20.0);
+    // Knee width narrows as ratio increases from 2:1 to 10:1 (DAFx-2026 Sec. 3)
+    let knee_w = clamp(14.0 - 1.25 * (r_clamped - 2.0), 1.5, 14.0);
+    let diff = x_db - T;
+    let slope = (1.0 / r_clamped) - 1.0;
+    if (2.0 * diff < -knee_w) {
+        return 0.0;
+    } else if (2.0 * abs(diff) <= knee_w) {
+        let u = diff + 0.5 * knee_w;
+        return slope * (u * u) / max(2.0 * knee_w, 0.001);
+    } else {
+        return slope * diff;
+    }
+}
+
+// Helper: THAT 202 VCA subtle odd/even interstage saturation
+function that202_vca_sat(x: number, cv_atten_db: number, drive: number): number {
+    let d = clamp(drive, 0.0, 1.0);
+    if (d <= 0.0001) {
+        return x;
+    }
+    let mod = 1.0 + 0.04 * cv_atten_db;
+    let k2 = 0.045 * d * mod;
+    let k3 = 0.120 * d * mod;
+    let y = x + k2 * x * abs(x) - k3 * (x * x * x) / (1.0 + 0.4 * x * x);
+    return y;
+}
+
+let sr_safe = max(samplerate(), 8000.0);
+let dryL = in1;
+let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+
+// 1st-order sidechain high-pass filter (20 Hz to 350 Hz)
+let fc_sc = clamp(sc_hpf_hz, 20.0, 350.0);
+let g_sc = 1.0 - exp(-2.0 * PI * fc_sc / sr_safe);
+sc_lp_L = sc_lp_L + g_sc * (dryL - sc_lp_L);
+sc_lp_R = sc_lp_R + g_sc * (dryR - sc_lp_R);
+let scL = dryL - sc_lp_L;
+let scR = dryR - sc_lp_R;
+
+// Peak-sensing shared stereo sidechain VCA (Thompson & Heilemann DAFx-2026 Sec. 3)
+let sc_peak = max(abs(scL), abs(scR));
+let x_db = atodb(max(sc_peak, 1e-6));
+
+let T = clamp(thresh_db, -36.0, 0.0);
+let R = clamp(ratio_mode, 2.0, 10.0);
+let raw_gr_db = ssl_static_gr_db(x_db, T, R);
+let target_atten_db = -raw_gr_db; // positive attenuation in dB
+
+// Attack & dual-pole AUTO release ballistics
+let tau_att = clamp(attack_ms, 0.1, 30.0) * 0.001;
+let tau_rel_manual = clamp(release_s, 0.05, 1.5);
+let alpha_att = 1.0 - exp(-1.0 / (tau_att * sr_safe));
+let alpha_rel_man = 1.0 - exp(-1.0 / (tau_rel_manual * sr_safe));
+
+// Two-pole SSL AUTO release network: fast transient recovery pole (75 ms)
+// coupled to slow program-sustained recovery pole (1.25 s)
+let alpha_rel_fast = 1.0 - exp(-1.0 / (0.075 * sr_safe));
+let alpha_rel_slow = 1.0 - exp(-1.0 / (1.250 * sr_safe));
+let alpha_charge_slow = 1.0 - exp(-1.0 / (0.180 * sr_safe));
+
+if (target_atten_db > cv_fast_db) {
+    cv_fast_db = cv_fast_db + alpha_att * (target_atten_db - cv_fast_db);
+} else {
+    let a_r = (1.0 - auto_release) * alpha_rel_man + auto_release * alpha_rel_fast;
+    cv_fast_db = cv_fast_db + a_r * (target_atten_db - cv_fast_db);
+}
+
+if (target_atten_db > cv_slow_db) {
+    cv_slow_db = cv_slow_db + alpha_charge_slow * (target_atten_db - cv_slow_db);
+} else {
+    cv_slow_db = cv_slow_db + alpha_rel_slow * (target_atten_db - cv_slow_db);
+}
+
+// In AUTO mode, the effective release voltage is the max/blend of fast and slow RC poles
+let auto_blend = clamp(auto_release, 0.0, 1.0);
+let dual_pole_db = max(cv_fast_db, 0.68 * cv_slow_db);
+cv_att_db = (1.0 - auto_blend) * cv_fast_db + auto_blend * dual_pole_db;
+
+// Automatic makeup gain proportional to threshold and ratio so bus level stays hot
+let auto_makeup_db = -0.48 * T * (1.0 - 1.0 / R);
+let total_gain = dbtoa(-cv_att_db + auto_makeup_db);
+
+let vcaL = that202_vca_sat(dryL * total_gain, cv_att_db, vca_harmonics);
+let vcaR = that202_vca_sat(dryR * total_gain, cv_att_db, vca_harmonics);
+
+let m = clamp(mix, 0.0, 1.0);
+out1 = (1.0 - m) * dryL + m * vcaL;
+out2 = (1.0 - m) * dryR + m * vcaR;

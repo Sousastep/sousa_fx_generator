@@ -1,0 +1,99 @@
+// ============================================================================
+// comp_ldr_microdynamics_shaper.txt
+// Stereo Level-Independent Relative-Level (LDR) Microdynamics Compressor/Expander
+// Based on Nercessian, McClellan & Lukin (DAFx-2022, "A Direct Microdynamics
+// Adjusting Processor with Matching Paradigm and Differentiable Implementation",
+// Section 3, Eqs. 7-12, Figs. 2-3)
+// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// ============================================================================
+
+@param({ min: 0.0, max: 3.5 }) micro_amount = 0.35;
+@param({ min: 0.2, max: 80.0 }) attack_ms = 5.0;
+@param({ min: 5.0, max: 500.0 }) release_ms = 85.0;
+@param({ min: 2.0, max: 40.0 }) macro_scale = 12.0;
+@param({ min: 15.0, max: 42.0 }) max_boost_db = 24.0;
+@param({ min: 0.0, max: 1.0 }) stereo_link = 0.75;
+@param({ min: -12.0, max: 12.0 }) trim_db = 0.0;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// Short-term and long-term energy envelopes (p = 2, Eqs. 8 & 10)
+@state a_short_L = 0.0001;
+@state a_long_L = 0.0001;
+@state a_short_R = 0.0001;
+@state a_long_R = 0.0001;
+
+// Helper: Compute relative-level gain L[n]^((m-1)/p) with noise-floor guard (Eqs. 7, 12)
+function ldr_gain(a_sh: number, a_lg: number, m_val: number, max_db: number): number {
+    let eps = 1e-9;
+    let rel_L = (a_sh + eps) / (a_lg + eps);
+    // Gate upward gain when signal is below -68 dBFS silence floor so noise isn't amplified
+    let gate = clamp((a_lg - 1e-7) / 1e-5, 0.0, 1.0);
+    let m_eff = 1.0 + gate * (m_val - 1.0);
+    // Since p = 2, g[n] = L[n]^((m - 1) / 2)
+    let log_L_db = 10.0 * log10(max(rel_L, 1e-9));
+    let gain_db = clamp(0.5 * (m_eff - 1.0) * log_L_db, -max_db, max_db);
+    return dbtoa(gain_db);
+}
+
+let sr_safe = max(samplerate(), 8000.0);
+let dryL = in1;
+let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+
+// Ballistic parameters (Eqs. 8-10)
+let tau_up = clamp(attack_ms, 0.2, 80.0) * 0.001;
+let tau_dn = clamp(release_ms, 5.0, 500.0) * 0.001;
+let s_scale = clamp(macro_scale, 2.0, 40.0);
+let tau_long = s_scale * max(tau_up, tau_dn);
+
+let alpha_up = 1.0 - exp(-1.0 / (tau_up * sr_safe));
+let alpha_dn = 1.0 - exp(-1.0 / (tau_dn * sr_safe));
+let alpha_long = 1.0 - exp(-1.0 / (tau_long * sr_safe));
+
+// Instantaneous squared energy |x[n]|^2 (p = 2)
+let eL = dryL * dryL;
+let eR = dryR * dryR;
+
+// Short-term asymmetric envelope (Eq. 8 & 9)
+let a_sh_L_coeff = (eL > a_short_L) ? alpha_up : alpha_dn;
+a_short_L = a_sh_L_coeff * eL + (1.0 - a_sh_L_coeff) * a_short_L;
+
+let a_sh_R_coeff = (eR > a_short_R) ? alpha_up : alpha_dn;
+a_short_R = a_sh_R_coeff * eR + (1.0 - a_sh_R_coeff) * a_short_R;
+
+// Long-term macrodynamic normalizing envelope (Eq. 10)
+a_long_L = alpha_long * eL + (1.0 - alpha_long) * a_long_L;
+a_long_R = alpha_long * eR + (1.0 - alpha_long) * a_long_R;
+
+// Stereo linking of short- and long-term envelopes
+let link = clamp(stereo_link, 0.0, 1.0);
+let sh_avg = 0.5 * (a_short_L + a_short_R);
+let lg_avg = 0.5 * (a_long_L + a_long_R);
+
+let sh_use_L = (1.0 - link) * a_short_L + link * sh_avg;
+let lg_use_L = (1.0 - link) * a_long_L + link * lg_avg;
+let sh_use_R = (1.0 - link) * a_short_R + link * sh_avg;
+let lg_use_R = (1.0 - link) * a_long_R + link * lg_avg;
+
+// Microdynamics amount m (Eq. 11 & 12):
+// m < 1.0 -> threshold-free microdynamic compressor / upward sustainer
+// m = 1.0 -> identity bypass
+// m > 1.0 -> threshold-free microdynamic expander / transient punch enhancer
+let m_param = clamp(micro_amount, 0.0, 3.5);
+let max_b = clamp(max_boost_db, 15.0, 42.0);
+
+let gL = ldr_gain(sh_use_L, lg_use_L, m_param, max_b);
+let gR = ldr_gain(sh_use_R, lg_use_R, m_param, max_b);
+
+// Inverse makeup linking (Nercessian Sec. 3: c inversely linked to m) + manual trim
+let auto_c_db = clamp(2.2 * (1.0 - m_param), -6.0, 4.0);
+let c_gain = dbtoa(auto_c_db + clamp(trim_db, -12.0, 12.0));
+
+// Soft safety ceiling at 0 dBFS when expanding aggressively (m > 1)
+let raw_yL = dryL * gL * c_gain;
+let raw_yR = dryR * gR * c_gain;
+let wetL = raw_yL / sqrt(1.0 + 0.12 * raw_yL * raw_yL);
+let wetR = raw_yR / sqrt(1.0 + 0.12 * raw_yR * raw_yR);
+
+let mx = clamp(mix, 0.0, 1.0);
+out1 = (1.0 - mx) * dryL + mx * wetL;
+out2 = (1.0 - mx) * dryR + mx * wetR;

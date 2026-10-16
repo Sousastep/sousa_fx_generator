@@ -1,0 +1,190 @@
+// ============================================================================
+// 18_inst_harmonic_cannon_polybass.txt
+// Advanced Instrument 6: Multiband Harmonic Cannon & Coefficient-Modulated Polybass
+// Combines:
+//   - Pitch-Tracked Multiband Harmonic Splitter (Approach 6: splits at 1.5*f0 & 3.5*f0)
+//   - Band 1 (Fundamental < 1.5*f0): Phase-Divided Sub-Octave + Clean Sine Foundation
+//   - Band 2 (Low-Mids 1.5*f0..3.5*f0): ICASSP 2009 Coefficient-Modulated Allpass PD
+//     + Chebyshev Polynomial Harmonic Generator (Pafnuty2 / Focus concept)
+//   - Band 3 (High Harmonics > 3.5*f0): Pitch-Tracked Stereo Metallic Comb + Bode Detune
+//   - 1-Bar Phasor-Synced Vowel Formant Filter + Joystick X/Y Performance Control
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (Tuba)
+//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+//   in4: 1-Bar Audio-Rate Phasor [0..1] (syncs multiband formant motion)
+// Outlets:
+//   out1: Left Multiband Harmonic Cannon Output
+//   out2: Right Multiband Harmonic Cannon Output
+
+@param({ min: -1.0, max: 1.0 }) joy_x_vowel_tilt = 0.0;
+@param({ min: -1.0, max: 1.0 }) joy_y_multidrive = 0.2;
+@param({ min: 0.0, max: 1.0 }) sub_foundation = 0.8;
+@param({ min: 0.0, max: 1.0 }) mid_allpass_pd = 0.75;
+@param({ min: 0.0, max: 1.0 }) high_comb_metal = 0.65;
+@param({ min: 1.0, max: 16.0, steps: 16 }) motion_subdiv = 4.0;
+@param({ min: 0.0, max: 1.0 }) motion_depth = 0.55;
+@param({ min: 0.0, max: 1.0 }) stereo_spread = 0.5;
+
+// Pitch-tracked crossover SVFs (split at 1.5*f0 and 3.5*f0)
+@state xover1L = new svf(); @state xover1R = new svf();
+@state xover2L = new svf(); @state xover2R = new svf();
+
+// Formant sculpting SVFs on the mid/high bands
+@state formSvfL1 = new svf(); @state formSvfR1 = new svf();
+@state formSvfL2 = new svf(); @state formSvfR2 = new svf();
+
+// Band 2: Coefficient-modulated allpass states (ICASSP 2009)
+@state pdPhasor = new phasor();
+@state apX1L = 0.0; @state apY1L = 0.0;
+@state apX2L = 0.0; @state apY2L = 0.0;
+@state apX1R = 0.0; @state apY1R = 0.0;
+@state apX2R = 0.0; @state apY2R = 0.0;
+
+// Band 3: High-band stereo metallic comb buffer (2048 samples)
+@state hiCombL = new FixedSampleArray(2048);
+@state hiCombR = new FixedSampleArray(2048);
+@state hiWrite: Int = 0;
+
+// Sub-octave zero-crossing flip-flop locked to Band 1 fundamental
+@state prevBand1 = 0.0;
+@state subFlip = 1.0;
+@state subLp = new onepole();
+
+// Pitch & Phasor states
+@state fallbackBar = new phasor();
+@state prevBarIn = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+@state smoothJoyX = 0.0;
+@state smoothJoyY = 0.2;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch & Joystick Conditioning ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 180.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothJoyX += (clamp(joy_x_vowel_tilt, -1.0, 1.0) - smoothJoyX) * slew;
+smoothJoyY += (clamp(joy_y_multidrive, -1.0, 1.0) - smoothJoyY) * slew;
+
+let f0 = clamp(smoothF0, 24.0, 800.0);
+let joyY_u = 0.5 * (smoothJoyY + 1.0);
+
+// --- 2. Pitch-Tracked Harmonic Band Splitting (1.5 * f0 and 3.5 * f0) ---
+let split1Hz = clamp(f0 * 1.5, 36.0, 1500.0);
+let split2Hz = clamp(f0 * 3.5, 84.0, 4500.0);
+
+let sp1L = xover1L.next(xL, split1Hz, 0.55);
+let sp1R = xover1R.next(xR, split1Hz, 0.55);
+let band1L = sp1L[0]; // Fundamental only (< 1.5*f0)
+let band1R = sp1R[0];
+
+let sp2L = xover2L.next(sp1L[1], split2Hz, 0.55);
+let sp2R = xover2R.next(sp1R[1], split2Hz, 0.55);
+let band2L = sp2L[0]; // Harmonics 2 & 3 (1.5*f0 .. 3.5*f0)
+let band2R = sp2R[0];
+let band3L = sp2L[1]; // Upper Harmonics (> 3.5*f0)
+let band3R = sp2R[1];
+
+// --- 3. Band 1: Fundamental + Locked Sub-Octave Foundation ---
+let monoB1 = 0.5 * (band1L + band1R);
+if (prevBand1 <= 0.0 && monoB1 > 0.0) {
+	subFlip = -subFlip;
+}
+prevBand1 = monoB1;
+let subSine = subLp.next(subFlip * abs(monoB1) * 1.6, f0 * 0.65);
+let subGain = pow(clamp(sub_foundation, 0.0, 1.0), 1.2);
+let outB1L = tanh(band1L * 1.4 + subSine * subGain * 1.5);
+let outB1R = tanh(band1R * 1.4 + subSine * subGain * 1.5);
+
+// --- 4. Band 2: Coefficient-Modulated Allpass PD + Chebyshev T3/T5 ---
+let pdAmt = clamp(mid_allpass_pd, 0.0, 1.0) * (0.5 + 0.5 * joyY_u);
+let phPd = pdPhasor.next(f0);
+let P = 0.22;
+let sawPd = (phPd < P) ? (phPd / P) : (1.0 - (phPd - P) / (1.0 - P));
+let mCoef = clamp(0.15 + 0.78 * pdAmt * (0.5 + 0.5 * tanh(2.2 * sawPd - 1.1)), 0.02, 0.95);
+
+let ap1L = -mCoef * band2L + apX1L + mCoef * apY1L; apX1L = band2L; apY1L = ap1L;
+let ap2L = -mCoef * ap1L + apX2L + mCoef * apY2L; apX2L = ap1L; apY2L = ap2L;
+
+let ap1R = -mCoef * band2R + apX1R + mCoef * apY1R; apX1R = band2R; apY1R = ap1R;
+let ap2R = -mCoef * ap1R + apX2R + mCoef * apY2R; apX2R = ap1R; apY2R = ap2R;
+
+// Drive Band 2 through Chebyshev T2 + T3 + T5 harmonic shaper
+let u2L = tanh(ap2L * (1.8 + 4.5 * joyY_u));
+let u2R = tanh(ap2R * (1.8 + 4.5 * joyY_u));
+let u2L2 = u2L * u2L; let u2L3 = u2L2 * u2L; let u2L5 = u2L3 * u2L2;
+let u2R2 = u2R * u2R; let u2R3 = u2R2 * u2R; let u2R5 = u2R3 * u2R2;
+
+let outB2L = 0.5 * u2L + 0.25 * (2.0 * u2L2 - 1.0) + 0.35 * (4.0 * u2L3 - 3.0 * u2L) + 0.2 * (16.0 * u2L5 - 20.0 * u2L3 + 5.0 * u2L);
+let outB2R = 0.5 * u2R - 0.25 * (2.0 * u2R2 - 1.0) + 0.35 * (4.0 * u2R3 - 3.0 * u2R) + 0.2 * (16.0 * u2R5 - 20.0 * u2R3 + 5.0 * u2R);
+
+// --- 5. Band 3: High-Harmonic Pitch-Tracked Stereo Metallic Comb ---
+let barActive = (abs(barIn - prevBarIn) > 0.0000001 || (barIn > 0.0001 && barIn < 0.9999));
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn, 0.0, 1.0) : fallbackBar.next(0.5);
+
+let mSub = floor(clamp(motion_subdiv, 1.0, 16.0));
+let motPh = wrap(barPh * mSub, 0.0, 1.0);
+let motLfo = triangle(motPh, 0.3);
+
+let spr = clamp(stereo_spread, 0.0, 1.0) * 0.25;
+let combHz = clamp(f0 * 4.0 * pow(2.0, 0.8 * smoothJoyX + clamp(motion_depth, 0.0, 1.0) * motLfo), 80.0, 5000.0);
+let delSampsL = clamp(sr / (combHz * (1.0 - spr)), 3.0, 2040.0);
+let delSampsR = clamp(sr / (combHz * (1.0 + spr)), 3.0, 2040.0);
+
+let rL = hiWrite - delSampsL; while (rL < 0.0) { rL += 2048.0; }
+let iL: Int = floor(rL);
+let cL = linearinterp(rL - iL, hiCombL[iL % 2048], hiCombL[(iL + 1) % 2048]);
+
+let rR = hiWrite - delSampsR; while (rR < 0.0) { rR += 2048.0; }
+let iR: Int = floor(rR);
+let cR = linearinterp(rR - iR, hiCombR[iR % 2048], hiCombR[(iR + 1) % 2048]);
+
+let cFb = clamp(high_comb_metal, 0.0, 1.0) * 0.88;
+hiCombL[hiWrite] = tanh(band3L * (1.5 + 3.0 * joyY_u) + cFb * cL);
+hiCombR[hiWrite] = tanh(band3R * (1.5 + 3.0 * joyY_u) + cFb * cR);
+hiWrite = (hiWrite + 1) % 2048;
+
+let outB3L = band3L + cFb * cL;
+let outB3R = band3R + cFb * cR;
+
+// --- 6. Dual Formant Filter Sculpting & Multiband Recombination ---
+// Vowel formant frequencies swept by Joystick X + 1-bar rhythmic LFO
+let formMod = clamp(0.5 + 0.4 * smoothJoyX + 0.35 * clamp(motion_depth, 0.0, 1.0) * (motLfo - 0.5), 0.0, 1.0);
+let f1Hz = 240.0 * pow(3.8, formMod);
+let f2Hz = 750.0 * pow(3.5, 1.0 - 0.6 * formMod + 0.4 * smoothJoyY);
+
+let midHiL = outB2L * 0.75 + outB3L * 0.85;
+let midHiR = outB2R * 0.75 + outB3R * 0.85;
+
+let v1L = formSvfL1.next(midHiL, f1Hz, 0.78);
+let v1R = formSvfR1.next(midHiR, f1Hz * (1.0 + 0.1 * spr), 0.78);
+let v2L = formSvfL2.next(midHiL, f2Hz, 0.82);
+let v2R = formSvfR2.next(midHiR, f2Hz * (1.0 - 0.1 * spr), 0.82);
+
+// Blend direct multiband grit with dual vowel bandpass formants
+let sculptedMidHiL = 0.45 * v1L[0] + 0.65 * (v1L[2] + v2L[2]);
+let sculptedMidHiR = 0.45 * v1R[0] + 0.65 * (v1R[2] + v2R[2]);
+
+out1 = tanh(outB1L * 0.9 + sculptedMidHiL * 1.1);
+out2 = tanh(outB1R * 0.9 + sculptedMidHiR * 1.1);

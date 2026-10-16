@@ -1,0 +1,44 @@
+================================================================================
+chorus_amfm_hilbert_chorifer — Parameter Information
+================================================================================
+
+OVERVIEW
+A standalone stereo AM/FM Analytic Chorus ("ChorIFer", "OctIFer", and "TransColorIFer") from Antonio José Homsi Goulart, Victor Lazzarini, and Joseph Timoney (DAFx-15 Paper 30, Sections 2, 3.1, 3.2 & 3.4, Eq. 3–10, Listings 1–2, Fig. 2, 3, 6). Traditional delay-line choruses smear fast tuba tongue attacks over 10–30 ms and introduce hollow comb-filter notches when summed to mono. The ChorIFer instead decomposes the input in real time via a 4-stage Hilbert transform into its Instantaneous Amplitude `a(t)` and Instantaneous Frequency `f(t)` (Listing 1), integrates multiple detuned and interval-scaled phase trajectories `theta_v(t) = integral(2*pi * r_v(t) * f(tau) dtau)`, and multiplies the resynthesized oscillator choir by the exact, zero-latency amplitude envelope `a(t)` (Listing 2, Eq. 8 & 10)! As explained in Section 3.1, because `a(t)` still carries the original harmonic envelope modulations of the tuba, ring-modulating `a(t)` against the detuned/transposed FM carriers convolves their spectra into a lush, transient-locked brass choir.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Optional Envelope Modulator [0..1] (widens `chorifer_detune_pct` dynamically on loud notes)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs shimmer LFO when patched)
+- out1 / out2: Stereo AM/FM ChorIFer Output
+
+PARAMETERS (6)
+
+1. chorifer_detune_pct
+   - Range: 0.00 to 3.50 % of Instantaneous Frequency (Default: 0.85 %)
+   - Taper: Linear percentage of `f(t)` (DAFx-15 Section 3.4, Fig. 6).
+   - Function: As shown in Section 3.4, values up to 1.0% produce a pure, comb-free unison choir vibrato/chorus; values from 1.0% to 3.5% push the IF modulation into complex FM sideband animation (similar to analog synthesizer waveform animation).
+
+2. shimmer_rate_hz
+   - Range: 0.15 to 6.00 Hz (IF Shimmer LFO Rate, Default: 1.40 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the rate at which the Left and Right ChorIFer phase integrators oscillate around the instantaneous frequency `f(t)`.
+
+3. octifer_sub_up_blend
+   - Range: 0.0 to 1.0 (Section 3.1 "OctIFer" 0.5x Sub-Octave + 2.0x Octave-Up Coloration Level, Default: 0.30)
+   - Taper: Linear voice level (DAFx-15 Section 3.1, Fig. 2–3).
+   - Function: Adds the 0.5x Down-OctIFer (which acts as a tight sub-harmonic bass boost aligned with `a(t)`) and the 2.0x Up-OctIFer (which adds a metallic slide-brass overtone sheen without changing the perceived fundamental pitch).
+
+4. transcolor_fifth
+   - Range: 0.0 to 1.0 (Section 3.2 "TransColorIFer" 3:2 Just-Fifth Harmonic Coloration Level, Default: 0.15)
+   - Taper: Linear voice level (DAFx-15 Section 3.2, Eq. 10).
+   - Function: Integrates a fifth voice at `r = 1.5 * f(t)` under the original `a(t)` envelope, imprinting a rich power-chord brass ensemble timbre onto single tuba notes.
+
+5. if_smoother_hz
+   - Range: 80.0 to 3000.0 Hz (Instantaneous Frequency Lowpass Smoother Cutoff, Default: 450.0 Hz)
+   - Taper: Direct frequency in Hz (DAFx-15 Section 1 & [5]).
+   - Function: Controls how much of the tuba's inter-harmonic FM fine structure passes into the phase integrators: lower cutoffs (80–250 Hz) yield silky, synth-like unison chorusing; higher cutoffs (600–3000 Hz) preserve gritty brass growl inflections.
+
+6. dry_wet_mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet ChorIFer Choir; Default: 0.55)
+   - Taper: Constant-power cosine/sine crossfade.
+   - Function: Blends the dry acoustic tuba with the zero-latency AM/FM ChorIFer ensemble.

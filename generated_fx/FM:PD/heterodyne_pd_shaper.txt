@@ -1,0 +1,161 @@
+// ============================================================================
+// heterodyne_pd_shaper.txt
+// Unix-Style Stereo Effect: Hilbert Quadrature Heterodyne Phase Distortion
+// Implements Lazzarini, Timoney, Pekonen & Valimaki (DAFx-09, Paper 12):
+// "Adaptive Phase Distortion Synthesis" (Section 3.2 & 4.2, Eq. 5-6, 17, Fig. 8-9, 18-20).
+// Places the arbitrary stereo tuba signal in quadrature (s_re, s_im) via a 4-stage
+// IIR Hilbert network and computes exact general-purpose Phase Distortion via:
+//   y(t) = s_im(t) * sin(idx * 2*pi * g(phi_m)) - s_re(t) * cos(idx * 2*pi * g(phi_m))
+// where g(x) morphs between single-inflection sawtooth PD (Eq. 6) and double-
+// inflection square/odd-harmonic PD (Fig. 18), with unbounded PM index (> pi).
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba or 01_harmonic_isolator)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
+//   in4: Optional 1-Bar Phasor [0..1] (sweeps inflection point d if mod_depth > 0)
+// Outlets:
+//   out1: Left Heterodyne Phase-Distorted Output
+//   out2: Right Heterodyne Phase-Distorted Output
+
+@param({ min: 0.25, max: 4.0 }) pd_ratio = 1.0;
+@param({ min: 0.02, max: 0.98 }) inflection_d = 0.15;
+@param({ min: 0.0, max: 5.0 }) pd_index = 1.25;
+@param({ min: 0.0, max: 1.0 }) saw_square = 0.0;
+@param({ min: 0.0, max: 1.0 }) mod_depth = 0.0;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// Stereo 4-stage IIR Hilbert transform allpass states (Left & Right channels)
+@state lReX = new FixedSampleArray(4); @state lReY = new FixedSampleArray(4);
+@state lImX = new FixedSampleArray(4); @state lImY = new FixedSampleArray(4);
+@state lDelRe = 0.0;
+
+@state rReX = new FixedSampleArray(4); @state rReY = new FixedSampleArray(4);
+@state rImX = new FixedSampleArray(4); @state rImY = new FixedSampleArray(4);
+@state rDelRe = 0.0;
+
+// Pitch-tracked PD modulator phasor + fallback bar LFO
+@state modPhasor = new phasor();
+@state barFallback = new phasor();
+@state prevBarIn = 0.0;
+
+// Internal fallback zero-crossing pitch tracker & smoothing
+@state lpTrack = new onepole();
+@state prevTrackSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothD = 0.15;
+@state smoothIdx = 1.25;
+
+// Single-inflection PD phase modulation function g_saw(x, d) (Paper Eq. 6)
+function pdSawG(x: number, d: number): number {
+	let sd = clamp(d, 0.02, 0.98);
+	let g = 0.0;
+	if (x < sd) {
+		g = x * (0.5 / sd - 1.0);
+	} else {
+		g = 0.5 + (x - sd) / (2.0 * (1.0 - sd)) - x;
+	}
+	return g;
+}
+
+// Double-inflection PD phase modulation function g_sq(x, d) (Paper Fig. 18: odd harmonics)
+function pdSquareG(x: number, d: number): number {
+	let halfX = wrap(x * 2.0, 0.0, 1.0);
+	return 0.5 * pdSawG(halfX, d);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch Conditioning (External Tracker on in3 or Fallback ZC) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 180.0);
+zcCount += 1.0;
+if (prevTrackSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevTrackSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. 1-Bar Phasor Detection & Parameter Smoothing ---
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn, 0.0, 1.0) : barFallback.next(0.5);
+let lfoBi = sin(2.0 * pi * barPh);
+
+smoothD += (clamp(inflection_d, 0.02, 0.98) - smoothD) * slew;
+let idxTaper = pow(clamp(pd_index / 5.0, 0.0, 1.0), 1.3) * 5.0;
+smoothIdx += (idxTaper - smoothIdx) * slew;
+
+// Stereo inflection spread + bar LFO modulation
+let mDepth = clamp(mod_depth, 0.0, 1.0) * 0.38;
+let dL = clamp(smoothD + mDepth * lfoBi - 0.025, 0.02, 0.98);
+let dR = clamp(smoothD - mDepth * lfoBi + 0.025, 0.02, 0.98);
+
+// --- 3. Stereo 4-Stage Quadrature IIR Hilbert Transform ---
+let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+// Left Hilbert pair
+let reL = xL;
+let t = cR0 * (reL + lReY[0]) - lReX[0]; lReX[0] = reL; lReY[0] = t; reL = t;
+t = cR1 * (reL + lReY[1]) - lReX[1]; lReX[1] = reL; lReY[1] = t; reL = t;
+t = cR2 * (reL + lReY[2]) - lReX[2]; lReX[2] = reL; lReY[2] = t; reL = t;
+t = cR3 * (reL + lReY[3]) - lReX[3]; lReX[3] = reL; lReY[3] = t; reL = t;
+let sReL = lDelRe;
+lDelRe = reL;
+
+let imL = xL;
+t = cI0 * (imL + lImY[0]) - lImX[0]; lImX[0] = imL; lImY[0] = t; imL = t;
+t = cI1 * (imL + lImY[1]) - lImX[1]; lImX[1] = imL; lImY[1] = t; imL = t;
+t = cI2 * (imL + lImY[2]) - lImX[2]; lImX[2] = imL; lImY[2] = t; imL = t;
+t = cI3 * (imL + lImY[3]) - lImX[3]; lImX[3] = imL; lImY[3] = t; imL = t;
+let sImL = imL;
+
+// Right Hilbert pair
+let reR = xR;
+t = cR0 * (reR + rReY[0]) - rReX[0]; rReX[0] = reR; rReY[0] = t; reR = t;
+t = cR1 * (reR + rReY[1]) - rReX[1]; rReX[1] = reR; rReY[1] = t; reR = t;
+t = cR2 * (reR + rReY[2]) - rReX[2]; rReX[2] = reR; rReY[2] = t; reR = t;
+t = cR3 * (reR + rReY[3]) - rReX[3]; rReX[3] = reR; rReY[3] = t; reR = t;
+let sReR = rDelRe;
+rDelRe = reR;
+
+let imR = xR;
+t = cI0 * (imR + rImY[0]) - rImX[0]; rImX[0] = imR; rImY[0] = t; imR = t;
+t = cI1 * (imR + rImY[1]) - rImX[1]; rImX[1] = imR; rImY[1] = t; imR = t;
+t = cI2 * (imR + rImY[2]) - rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
+t = cI3 * (imR + rImY[3]) - rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
+let sImR = imR;
+
+// --- 4. Heterodyne Phase Distortion (Paper Eq. 17, Fig. 9) ---
+let fm = clamp(f0 * clamp(pd_ratio, 0.25, 4.0), 8.0, sr * 0.22);
+let phL = modPhasor.next(fm);
+let phR = wrap(phL + 0.04, 0.0, 1.0);
+
+let sqMorph = clamp(saw_square, 0.0, 1.0);
+let gL = linearinterp(sqMorph, pdSawG(phL, dL), pdSquareG(phL, dL));
+let gR = linearinterp(sqMorph, pdSawG(phR, dR), pdSquareG(phR, dR));
+
+// Scale phase modulation by smoothIdx (1.0 = classic Casio CZ PD; >1.0 = extended PM formants, Fig. 17)
+let psiL = 2.0 * pi * smoothIdx * gL;
+let psiR = 2.0 * pi * smoothIdx * gR;
+
+// Note: At smoothIdx = 0, cos(0)=1, sin(0)=0 -> wet = sRe * cos(psi) - sIm * sin(psi) preserves polarity cleanly
+let wetL = sReL * cos(psiL) - sImL * sin(psiL);
+let wetR = sReR * cos(psiR) - sImR * sin(psiR);
+
+let m = clamp(mix, 0.0, 1.0);
+out1 = linearinterp(m, sReL, wetL);
+out2 = linearinterp(m, sReR, wetR);

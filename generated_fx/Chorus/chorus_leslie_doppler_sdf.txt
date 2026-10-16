@@ -1,0 +1,168 @@
+// ============================================================================
+// chorus_leslie_doppler_sdf.txt
+// Standalone Stereo Chorus Effect: Dual-Rotor Leslie Rotating Speaker Chorus
+// Synthesizes 3 DAFx Rotary Speaker Papers into one stereo effect:
+//   1. Julius O. Smith, Stefania Serafin, Jonathan Abel & David Berners (DAFx-02):
+//      "Doppler Simulation and the Leslie" (Sections 3.2, 3.6 & 4.1, Eq. 10-20, Fig. 2-3)
+//      + Sascha Disch & Udo Zoelzer (DAFx-99, Sec 4, Eq. 12-13, Fig. 8-9):
+//      Models the 180-degree opposite dual rotating horns with exact circular Doppler
+//      delay modulation (~0.5 ms depth), synchronous directional radiation AM, and
+//      stereo 0.7 cross-reflection cabinet mixing (DAFx-99 Fig. 9).
+//   2. Jussi Pekonen, Tapani Pihlajamaki & Vesa Valimaki (DAFx-11, Paper 49):
+//      "Computationally Efficient Hammond Organ Synthesis" (Sections 3.1 & 3.2,
+//      Eq. 1-5, Fig. 2, Table 1):
+//      Splits the signal at an 800 Hz crossover into Treble Horn and Bass Drum pathways,
+//      applying time-varying Spectral Delay Filters (SDFs: 4-stage Treble with Mb = -0.75,
+//      Ms = 0.20; 3-stage Bass with Mb = -0.92, Ms = 0.04) and independent motor inertia
+//      with 0.1 Hz treble/bass motor mistuning!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Speed Brake/Throw Switch or Envelope [0..1] (0 = Chorale, 1 = Tremolo)
+//   in4: Optional 1-Bar Phasor [0..1]
+// Outlets:
+//   out1: Left Stereo Leslie Cabinet Chorus Output
+//   out2: Right Stereo Leslie Cabinet Chorus Output
+
+@param({ min: 0.0, max: 1.0 }) speed_chorale_tremolo = 0.25;
+@param({ min: 0.0, max: 1.0 }) doppler_horn_depth = 0.65;
+@param({ min: 0.0, max: 1.0 }) sdf_dispersion_depth = 0.70;
+@param({ min: 0.0, max: 1.0 }) directional_am_depth = 0.55;
+@param({ min: 0.0, max: 18.0 }) tube_amp_growl_db = 4.5;
+@param({ min: 0.0, max: 1.0 }) cabinet_stereo_width = 0.80;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 1.0;
+
+// 800 Hz Crossover Filters (DAFx-11 Sec 3.2: 2-stage cascaded one-poles per channel)
+@state xLp1L = new onepole(); @state xLp2L = new onepole();
+@state xLp1R = new onepole(); @state xLp2R = new onepole();
+
+// Dual-Horn Interpolated Doppler Delay Buffers (512 samples per horn, DAFx-02 Sec 4.1)
+@state hornBufL = new FixedSampleArray(512);
+@state hornBufR = new FixedSampleArray(512);
+@state writeIdx: Int = 0;
+
+// Spectral Delay Filter (SDF) Allpass Chains (DAFx-11 Table 1: Treble N=4, Bass N=3)
+@state sdfTrebXL = new FixedSampleArray(4); @state sdfTrebYL = new FixedSampleArray(4);
+@state sdfTrebXR = new FixedSampleArray(4); @state sdfTrebYR = new FixedSampleArray(4);
+@state sdfBassXL = new FixedSampleArray(3); @state sdfBassYL = new FixedSampleArray(3);
+@state sdfBassXR = new FixedSampleArray(3); @state sdfBassYR = new FixedSampleArray(3);
+
+// Independent Treble Horn & Bass Drum Motor Phasors + Inertia Smoothers (DAFx-11 Sec 3.2)
+@state hornPhasor = new phasor();
+@state drumPhasor = new phasor();
+@state smoothHornHz = 1.8;
+@state smoothDrumHz = 1.7;
+
+function readDelay512(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
+	let d = clamp(delSamps, 2.0, 506.0);
+	let readPos = wIdx - d;
+	while (readPos < 0.0) {
+		readPos += 512.0;
+	}
+	let idx0: Int = floor(readPos);
+	let frac = readPos - idx0;
+	let i_m1: Int = (idx0 - 1 + 512) & 511;
+	let i_0: Int  = idx0 & 511;
+	let i_1: Int  = (idx0 + 1) & 511;
+	let i_2: Int  = (idx0 + 2) & 511;
+	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let throwIn = clamp(in3, 0.0, 1.0);
+
+// --- 1. Leslie Tube Amplifier Soft Overdrive ("Growl", DAFx-02 Sec 1) ---
+let growlGain = dbtoa(clamp(tube_amp_growl_db, 0.0, 18.0));
+let normGrowl = 1.0 / tanh(maximum(growlGain * 0.7, 0.8));
+let ampL = tanh(xL * growlGain * 0.7) * normGrowl;
+let ampR = tanh(xR * growlGain * 0.7) * normGrowl;
+
+// --- 2. 800 Hz Cabinet Crossover into Bass Drum & Treble Horn (DAFx-11 Sec 3.2) ---
+let bassInL = xLp2L.next(xLp1L.next(ampL, 800.0), 800.0);
+let bassInR = xLp2R.next(xLp1R.next(ampR, 800.0), 800.0);
+let trebInL = ampL - bassInL;
+let trebInR = ampR - bassInR;
+
+// --- 3. Dual Motor Speeds with Physical Acceleration Inertia (DAFx-11 Sec 3.2) ---
+// Slow (Chorale) ~ 0.8..2.0 Hz, Fast (Tremolo) ~ 6.0..6.8 Hz, with 0.1 Hz mistuning
+let speedCtrl = clamp(speed_chorale_tremolo + throwIn, 0.0, 1.0);
+let targetHornHz = 0.85 + 5.35 * speedCtrl;
+let targetDrumHz = 0.75 + 5.05 * speedCtrl; // 0.1-0.3 Hz mistuning (Henricksen / Pekonen Sec 3.2)
+
+// Treble horn accelerates in ~0.8s; heavy wooden bass drum takes ~2.5s!
+let hornSlew = 1.0 - exp(-1.0 / (0.18 * sr));
+let drumSlew = 1.0 - exp(-1.0 / (0.55 * sr));
+smoothHornHz += (targetHornHz - smoothHornHz) * hornSlew;
+smoothDrumHz += (targetDrumHz - smoothDrumHz) * drumSlew;
+
+let phHorn = hornPhasor.next(smoothHornHz);
+let phDrum = drumPhasor.next(smoothDrumHz);
+
+// Quadrature & 180-deg opposite horn modulators (DAFx-99 Fig. 8-9, DAFx-02 Eq. 15-20)
+let sinHornA = sin(2.0 * pi * phHorn);
+let cosHornA = cos(2.0 * pi * phHorn);
+let sinHornB = -sinHornA; // Opposite horn B (180 degrees out of phase)
+let cosHornB = -cosHornA;
+
+let sinDrumL = sin(2.0 * pi * phDrum);
+let sinDrumR = cos(2.0 * pi * phDrum);
+
+// --- 4. Treble Pathway: Dual-Horn Interpolated Doppler + 4-Stage SDF (DAFx-02 & DAFx-11) ---
+hornBufL[writeIdx] = trebInL;
+hornBufR[writeIdx] = trebInR;
+
+// DAFx-99 Sec 4: Horn Doppler modulation depth is ~0.5 ms around 1.2 ms center delay
+let dopDepthSamps = mstosamps(0.55 * clamp(doppler_horn_depth, 0.0, 1.0));
+let centerSamps = mstosamps(1.2);
+
+let hornAL = readDelay512(hornBufL, writeIdx, centerSamps + dopDepthSamps * sinHornA);
+let hornBR = readDelay512(hornBufR, writeIdx, centerSamps + dopDepthSamps * sinHornB);
+writeIdx = (writeIdx + 1) & 511;
+
+// DAFx-11 Table 1 Treble SDF: N = 4 stages, Mb = -0.75, Ms = 0.20 * sdf_dispersion_depth
+let sdfDepth = clamp(sdf_dispersion_depth, 0.0, 1.0);
+let mTrebL = clamp(-0.75 + 0.20 * sdfDepth * sinHornA, -0.96, 0.96);
+let mTrebR = clamp(-0.75 + 0.20 * sdfDepth * sinHornB, -0.96, 0.96);
+
+let tSigL = hornAL;
+let tSigR = hornBR;
+for (let k: Int = 0; k < 4; k++) {
+	let yL = mTrebL * tSigL + sdfTrebXL[k] - mTrebL * sdfTrebYL[k];
+	sdfTrebXL[k] = tSigL; sdfTrebYL[k] = yL; tSigL = yL;
+
+	let yR = mTrebR * tSigR + sdfTrebXR[k] - mTrebR * sdfTrebYR[k];
+	sdfTrebXR[k] = tSigR; sdfTrebYR[k] = yR; tSigR = yR;
+}
+
+// --- 5. Bass Pathway: 3-Stage Time-Varying SDF (DAFx-11 Table 1: N = 3, Mb = -0.92, Ms = 0.04) ---
+let mBassL = clamp(-0.92 + 0.055 * sdfDepth * sinDrumL, -0.97, -0.50);
+let mBassR = clamp(-0.92 + 0.055 * sdfDepth * sinDrumR, -0.97, -0.50);
+
+let bSigL = bassInL;
+let bSigR = bassInR;
+for (let k: Int = 0; k < 3; k++) {
+	let yL = mBassL * bSigL + sdfBassXL[k] - mBassL * sdfBassYL[k];
+	sdfBassXL[k] = bSigL; sdfBassYL[k] = yL; bSigL = yL;
+
+	let yR = mBassR * bSigR + sdfBassXR[k] - mBassR * sdfBassYR[k];
+	sdfBassXR[k] = bSigR; sdfBassYR[k] = yR; bSigR = yR;
+}
+
+// --- 6. Synchronous Directional Horn/Drum AM & Cabinet Cross-Mixing (DAFx-99 Fig. 8-9) ---
+let amAmt = clamp(directional_am_depth, 0.0, 1.0) * 0.45;
+let hornModL = tSigL * (1.0 + amAmt * cosHornA);
+let hornModR = tSigR * (1.0 + amAmt * cosHornB);
+let drumModL = bSigL * (1.0 + amAmt * 0.7 * sinDrumL);
+let drumModR = bSigR * (1.0 + amAmt * 0.7 * sinDrumR);
+
+// DAFx-99 Fig. 9: 0.7 cross-mixing of opposite horns inside the wooden cabinet
+let crossMix = 1.0 - 0.65 * clamp(cabinet_stereo_width, 0.0, 1.0);
+let cabL = (hornModL + crossMix * hornModR) * 0.75 + (drumModL + crossMix * drumModR) * 0.75;
+let cabR = (hornModR + crossMix * hornModL) * 0.75 + (drumModR + crossMix * drumModL) * 0.75;
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, cabL);
+out2 = linearinterp(mix, xR, cabR);

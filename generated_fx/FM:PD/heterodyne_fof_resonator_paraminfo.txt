@@ -1,0 +1,44 @@
+================================================================================
+heterodyne_fof_resonator — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Filterless Heterodyne & FOF (Fonction d'Onde Formantique) Resonant Synthesis from Lazzarini and Timoney (DAFx-12 Paper 58, Sections 2.1, 2.2, 3 & 3.1, Eq. 4–14, Fig. 2–4). Synthesizes sharp vocal/brass formant resonances and Casio CZ-style resonant waveforms without an IIR filter (eliminating filter instability and phase smearing). Synchronizes a periodic decaying exponential modulator `ephasor` M(n) = R^(n mod T0) — plus an optional FOF attack-skirt exponential Ma(n) - Mb(n) (Eq. 12) — to each period of the tuba's analytic phase, and multiplies it by two interpolated adjacent-harmonic cosine carriers (1-a)*cos(k*w0*n) + a*cos((k+1)*w0*n) (Eq. 8–10) for alias-free continuous formant sweeps.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps formant_ratio when sweep_depth > 0)
+- out1 / out2: Stereo Heterodyne / FOF Resonant Output
+
+PARAMETERS (6)
+
+1. formant_ratio
+   - Range: 1.0 to 16.0 (Formant Center Frequency Ratio f_c / f_0, Default: 4.5)
+   - Taper: Continuous linear harmonic multiplier. Uses DAFx-12 Eq. 8–10 dual-carrier harmonic crossfading so fractional ratios never create phase-reset clicks.
+   - Function: Tunes the resonant formant center frequency to any harmonic or fractional multiple of the tuba's fundamental.
+
+2. resonance_q
+   - Range: 1.0 to 40.0 (Equivalent Resonator Quality Factor Q, Default: 12.0)
+   - Taper: Linear Q mapped via DAFx-12 Eq. 4 (R = exp(-pi * fc / (sr * Q))).
+   - Function: Controls the decay rate of the intra-period exponential envelope M(n), narrowing the formant bandwidth as Q increases.
+
+3. fof_attack_skirt
+   - Range: 0.0 to 1.0 (0.0 = 2nd-Order All-Pole Impulse Decay Eq. 6, 1.0 = Full FOF Rounded Attack Skirt Ma(n) - Mb(n) Eq. 12)
+   - Taper: Linear blend.
+   - Function: Subtracts a faster-decaying secondary exponential at the start of each period (DAFx-12 Fig. 3), smoothing the grain onset and steepening the formant skirt roll-off like a true vocal FOF synthesizer.
+
+4. cz_window_mode
+   - Range: 0.0 to 1.0 (0.0 = Exponential All-Pole / FOF Envelope, 1.0 = Casio CZ Sawtooth/Triangle Resonant Window Eq. 13–14)
+   - Taper: Linear crossfade.
+   - Function: Morphs the intra-period formant envelope from physical exponential decay (0.0) to classic Casio CZ-101 linear sawtooth/triangle resonant windowing (1.0).
+
+5. sweep_depth
+   - Range: 0.0 to 1.0 (maps to +/- 1.2 Octaves of Counter-Phase Stereo Formant Sweep)
+   - Taper: Exponential octave sweep driven by the 1-bar phasor on in4.
+   - Function: Sweeps the Left and Right formant ratios in opposite directions for wide stereo vowel/talking-synth animation.
+
+6. tuba_ring_blend
+   - Range: 0.0 to 1.0 (0.0 = Pure Phase-Locked FOF Formant Resynthesis, 1.0 = Heterodyne Formant Ring-Modulated Acoustic Tuba)
+   - Taper: Linear crossfade.
+   - Function: Blends between pure FOF/CZ formant resynthesis and direct heterodyne formant excitation of the full acoustic tuba signal.

@@ -1,0 +1,44 @@
+================================================================================
+buchla259_parallel_wavefolder — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the Antialiased Virtual Analog Buchla 259 Parallel Wavefolder from Fabián Esqueda, Henri Pöntynen, Vesa Välimäki, and Julian D. Parker (DAFx-17 Paper 82, Sections 2 & 3, Eq. 9–18, Table 1, Fig. 1–4, 9). Unlike series sine/Lockhart wavefolders (`12_adaa_chebyshev_wavefolder`), Don Buchla's 1970 Complex Waveform Generator uses five parallel CA3160 CMOS op-amp folding cells V_1..V_5 with staggered voltage deadbands (+/-0.600 V, +/-1.800 V, +/-2.994 V, +/-4.080 V, +/-5.460 V) and alternating summing amplifier weights (Eq. 13–18), followed by the active 1st-order lowpass filter in the upper summing op-amp (C = 100 pF, RF2 = 1.2 MOhm). Uses exact First-Order Antiderivative Antialiasing (ADAA1) on all five piecewise deadband branches to round every folding corner without 8x oversampling!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba or 01_harmonic_isolator)
+- in3: Optional Modulation Envelope [0..1] (patch out2 of 00b_tuba_transient_valve_detector to whip Buchla folding voltage on attacks)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps DC symmetry offset when sym_wobble > 0)
+- out1 / out2: Stereo Buchla 259 Wavefolded Output
+
+PARAMETERS (6)
+
+1. timbre_drive_v
+   - Range: 0.20 to 10.00 Volts Peak Equivalent Input Swing (Default: 4.20 V)
+   - Taper: Linear voltage drive (matching DAFx-17 Fig. 4a: folding thresholds fire sequentially at 0.60 V, 1.80 V, 2.99 V, 4.08 V, and 5.46 V).
+   - Function: Controls the "Timbre" knob of the Buchla 259, pushing the tuba waveform across up to five parallel op-amp folding reversals per half-cycle.
+
+2. symmetry_offset_v
+   - Range: -2.50 to +2.50 Volts DC Bias (Default: 0.00 V)
+   - Taper: Linear bipolar voltage offset (applied in opposite polarity to Left and Right channels for stereo width).
+   - Function: Implements the Buchla 259 "Symmetry" control, shifting positive peaks across more folding cells than negative troughs to inject rich even-order harmonics.
+
+3. buchla_lp_hz
+   - Range: 300.0 to 16000.0 Hz (Upper Summing Amplifier Active Lowpass Cutoff, Default: 2800.0 Hz)
+   - Taper: Direct frequency in Hz (DAFx-17 Section 3.1: the original 100 pF / 1.2 MOhm circuit has a nominal cutoff near 1.33 kHz; adjustable here from warm 300 Hz West-Coast bongo/bass to 16 kHz wide-open tearout).
+   - Function: Smooths the sharp edges of the folded waveform exactly like the active integrator in the Buchla 259 output stage.
+
+4. env_timbre_mod
+   - Range: 0.0 to 1.0 (maps to +0.0 to +5.0 V Envelope Timbre Modulation, Default: 0.35)
+   - Taper: Linear modulation depth.
+   - Function: Allows a transient envelope on in3 to sweep the wavefolder through all five folding thresholds on every tongue attack.
+
+5. sym_wobble
+   - Range: 0.0 to 1.0 (maps to +/- 1.4 V 1-Bar Synced Symmetry Sweep, Default: 0.25)
+   - Taper: Linear modulation depth.
+   - Function: Continuously rocks the Buchla folding symmetry back and forth in stereo using the 1-bar phasor on in4.
+
+6. mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet Buchla 259 Wavefolder)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba with the Buchla 259 folded output.

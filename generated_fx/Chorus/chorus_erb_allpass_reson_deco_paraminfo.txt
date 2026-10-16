@@ -1,0 +1,46 @@
+================================================================================
+chorus_erb_allpass_reson_deco — Parameter Information
+================================================================================
+
+OVERVIEW
+A standalone stereo Perceptual ERB Allpass & Group-Delay Chorus uniting two DAFx spatial decorrelation papers:
+1. Elliot Kermit-Canfield and Jonathan Abel (DAFx-16 Paper 30, Sections 3.1–3.3, Eq. 1–6, Fig. 1–3): Cascades 6 conjugate-symmetric biquad allpass filters with ERB-spaced pole frequencies and mutually prime multi-sample delays (`z^-P`, where Left uses primes `[19, 13, 11, 7, 5, 3]` and Right uses `[23, 17, 7, 11, 3, 5]`) so the phase wraps rapidly around the unit circle while maintaining a 100% flat magnitude response when used at 100% wet.
+2. Jon Fagerström, Nils Meyer-Kahlen, Sebastian J. Schlecht, and Vesa Välimäki (DAFx-25 Paper 80, Sections 3 & 4, Table 1, Eq. 4–14, Fig. 2–4): Tunes the frequency-dependent inter-channel group-delay profile `ICTD(w) = tau_R(w) - tau_L(w)` to the listening-test-derived 75th-percentile ERB curve (Table 1: concentrating 13–19 ms of group-delay difference in the 100–1000 Hz tuba fundamental/warmth bands while tapering group delay above 2 kHz via `hf_transient_tightness` so high-frequency brass transients never smear).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Optional Envelope Modulator [0..1] (sweeps ERB pole angles on loud tuba attacks)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs pole drift LFO when patched)
+- out1 / out2: Stereo ERB Perceptual Allpass Chorus Output
+
+PARAMETERS (6)
+
+1. erb_group_delay_scale
+   - Range: 0.10 to 1.00 (Prime-Delay Multiplier `z^(-P)` Across the 6 ERB Allpass Stages, Default: 0.70)
+   - Taper: Linear scaling of the prime sample delays `P_L` and `P_R` (DAFx-16 Section 3.3).
+   - Function: Controls how many times the phase wraps around the unit circle in each ERB critical band, scaling the inter-channel time difference (ICTD) up to the DAFx-25 Table 1 perceptual width ceiling.
+
+2. pole_radius_resonance
+   - Range: 0.0 to 1.0 (maps to Pole Radius `r` = 0.52 to 0.92, Default: 0.72)
+   - Taper: Linear pole radius within the DAFx-16 Eq. 5–6 bounds (`0.5 <= r < beta`).
+   - Function: Controls the sharpness and peak group delay `tau(w_k) = 1 / alpha_k` (DAFx-25 Eq. 10, Fig. 4b) at each of the 6 ERB resonator/allpass center frequencies.
+
+3. pole_drift_depth
+   - Range: 0.0 to 1.0 (Time-Varying ERB Pole-Angle Drift Depth, Default: 0.45)
+   - Taper: Linear octave sweep depth.
+   - Function: At 0.0, operates as a static LTI perceptual stereo widener; above 0.0, gently drifts the 6 ERB pole angles in counter-quadrature between Left and Right for liquid, multi-pole allpass chorusing.
+
+4. drift_rate_hz
+   - Range: 0.08 to 3.50 Hz (ERB Pole-Angle Drift Rate, Default: 0.42 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the speed of the counter-rotating ERB pole modulation.
+
+5. hf_transient_tightness
+   - Range: 0.0 to 1.0 (DAFx-25 Table 1 High-Frequency Group-Delay Taper, Default: 0.75)
+   - Taper: Linear reduction of pole radii in the 1.05 kHz, 2.2 kHz, and 4.8 kHz ERB bands.
+   - Function: Implements the key finding of DAFx-25 Section 3 & 5: reducing group delay in the upper ERB bands preserves crisp high-frequency transient definition while maintaining full binaural width in the 100–800 Hz range!
+
+6. dry_wet_chorus_mix
+   - Range: 0.0 to 1.0 (Default: 0.50 = Dense Multi-Notch Allpass Chorus; 1.00 = Pure Flat-Magnitude Perceptual Stereo Widener!)
+   - Taper: Constant-power cosine/sine crossfade.
+   - Function: Because the 6 prime-delay biquad stages are strictly allpass, setting `dry_wet_chorus_mix = 1.00` gives you a **zero-comb-coloration, 100% flat-magnitude stereo widener**, while setting `0.50` creates a rich, 36-pole phase-interference chorus!

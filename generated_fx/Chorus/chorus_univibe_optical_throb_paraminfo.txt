@@ -1,0 +1,47 @@
+================================================================================
+chorus_univibe_optical_throb — Parameter Information
+================================================================================
+
+OVERVIEW
+A standalone stereo model of the late-1960s Shin-ei Uni-Vibe Chorus/Vibrato foot pedal from Champ Darabundit, Russell Wedelich, and Pete Bischoff (DAFx-19 Paper 31, Sections 2, 3.1, 3.2 & 4.2, Eq. 1–21, Table 1, Fig. 2–8). Captures the three exact circuit discoveries from DAFx-19 that give the Uni-Vibe its iconic liquid "double-beat" throb rather than a generic phaser sweep:
+1. Staggered Phasing Capacitors Cp (Table 1: 0.015 uF, 0.22 uF, 470 pF, 0.0047 uF) so Stage 2 sweeps deep in the 4.5–185 Hz tuba fundamental region while Stages 1, 3, and 4 sweep the midrange and highs.
+2. Collector/Emitter Gain Imbalance (alpha_n != beta_n) + Blocking Capacitor C_DC (Eq. 4–21, Fig. 6): Turns each stage into a sweeping high-shelf + phase shifter H_cn(z) + H_en(z) whose low-frequency shelf throb interacts with the dry signal in Chorus mode.
+3. Asymmetric Darlington Emitter-Follower tanh Bias + DC Blocker (Fig. 7) and the fast-attack/slow-recovery incandescent lamp + CdS LDR resistance curve (Fig. 8).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Optional Envelope Modulator [0..1] (boosts incandescent bulb intensity on loud tuba attacks)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (locks the Uni-Vibe lamp cycle to host tempo when patched)
+- out1 / out2: Stereo Uni-Vibe Chorus/Vibrato Output
+
+PARAMETERS (6)
+
+1. pedal_speed_hz
+   - Range: 0.20 to 7.60 Hz (Uni-Vibe Foot-Pedal LFO Rate, Default: 1.35 Hz, matching DAFx-19 Section 2.1)
+   - Taper: Direct frequency in Hz (includes the physical regenerative phase-shift oscillator drift with Intensity).
+   - Function: Controls the speed of the incandescent lamp pulsation.
+
+2. lamp_intensity
+   - Range: 0.0 to 1.0 (Incandescent Lamp Brightness & LDR Sweep Asymmetry, Default: 0.78)
+   - Taper: Nonlinear CdS photoconductor response curve (DAFx-19 Fig. 8).
+   - Function: Controls both the frequency sweep range of the 4 LDRs and the fast-turn-on / slow-turn-off "heartbeat" asymmetry of the lamp-LDR chamber.
+
+3. shelf_throb_cdc
+   - Range: 0.0 to 1.0 (Blocking Capacitor C_DC High-Shelf & Collector/Emitter Imbalance, Default: 0.75)
+   - Taper: Linear circuit authenticity control (DAFx-19 Section 3.1, Eq. 6–9, Fig. 6).
+   - Function: At 0.0, forces ideal unity-gain allpass stages; at 0.75–1.0, engages the exact measured Table 1 alpha/beta imbalance and C_DC high-shelf response responsible for the Uni-Vibe's deep low-end throb.
+
+4. emitter_bias_grit
+   - Range: 0.0 to 1.0 (Darlington Emitter-Follower Asymmetric Saturation & DC-Blocker, Default: 0.35)
+   - Taper: Linear drive + bias offset u (DAFx-19 Section 3.2.1, Fig. 7).
+   - Function: Adds warm even/odd transistor harmonic grit inside each of the 4 phase stages without DC clicks.
+
+5. stereo_chamber_spread
+   - Range: 0.0 to 1.0 (Left/Right Lamp-Chamber LDR Angular Offset, Default: 0.45)
+   - Taper: Linear phase offset (0 to 126 degrees).
+   - Function: Simulates placing Left and Right LDR banks on opposite walls of the reflective lamp chamber for a swirling 3D stereo throb.
+
+6. chorus_to_vibrato
+   - Range: 0.0 to 1.0 (0.0 = Uni-Vibe Chorus Mode, 1.0 = Uni-Vibe Vibrato Mode; Default: 0.0)
+   - Taper: Linear crossfade modeling the resistive output mixer switch (DAFx-19 Section 2).
+   - Function: Switches or blends between deep phase-canceling rotary Chorus (0.0) and pure pitch-swept Vibrato (1.0).

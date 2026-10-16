@@ -1,0 +1,46 @@
+================================================================================
+chorus_supersaw_waveform_animator — Parameter Information
+================================================================================
+
+OVERVIEW
+A standalone stereo 7-Voice Unison "Supersaw" & Waveform Animator Chorus implementing Joseph Timoney, Victor Lazzarini, Jari Kleimola, and Vesa Välimäki's "Examining the Oscillator Waveform Animation Effect" (DAFx-14, Sections 2, 3, 4 & 5, Eq. 1, 17–27, Fig. 1–7). Combines both unison animation architectures derived in the paper:
+1. 7-Voice Delay-Line Pitch-Shifter Unison Bank (Section 5, Eq. 24–27, Fig. 6–7): Uses four dual-head raised-cosine-windowed pitch-shifting delay lines at symmetric transposition ratios `s`, `s^3`, `1/s`, and `1/s^3` (where `s = 1 + df0/f0`) plus two slow triangle-modulated unison voices and the center voice. Unlike a standard LFO chorus whose pitch oscillates up and down, this produces true Risset/JP-8000 constant-interval harmonic cluster beating (`Bk(t)`, Eq. 1) on live acoustic tuba!
+2. Hutchins Comparator PWM Waveform Animator (Sections 3 & 4, Eq. 17–23, Fig. 1–5): Subtracts slow (<2 Hz) triangle LFOs scaled to the optimal 0.70 duty-cycle width (Fig. 5) and applies soft comparator pulse subtraction so upper harmonics receive progressively wider phase modulation (`J_o(k * I_1)`, Eq. 23).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Unused / Thru
+- in4: Unused / Thru
+- out1 / out2: Stereo 7-Voice Unison Supersaw Chorus Output
+
+PARAMETERS (6)
+
+1. unison_detune_cents
+   - Range: 1.0 to 45.0 Cents (Outer Unison Voice Detune Spread `s^3` and `1/s^3`, Default: 14.0 cents)
+   - Taper: Exponential pitch ratio `s = 2^(cents / 3600)` so inner voices sit at +/- 1/3 spread (`s, 1/s`) and outer voices sit at full +/- spread (`s^3, 1/s^3`, DAFx-14 Fig. 6).
+   - Function: Controls the width of the 7-voice unison harmonic clusters (DAFx-14 Fig. 7).
+
+2. grain_window_ms
+   - Range: 12.0 to 45.0 ms (Raised-Cosine Pitch-Shifter Crossfade Window `tau`, Default: 24.0 ms)
+   - Taper: Direct window duration in milliseconds (DAFx-14 Eq. 24–26).
+   - Function: Sets the overlap window of the dual-head delay-line pitch shifters.
+
+3. hutchins_pwm_anim
+   - Range: 0.0 to 1.0 (Hutchins Comparator PWM Waveform Animation Depth, Default: 0.25)
+   - Taper: Linear comparator pulse subtraction depth (calibrated to the DAFx-14 Fig. 5 optimal 0.70 duty-cycle width).
+   - Function: Adds Bernard Hutchins's 1981 modular Waveform Animator phase-shifted PWM edge directly to the center voices for extra upper-harmonic sizzle.
+
+4. pwm_lfo_rate_hz
+   - Range: 0.10 to 2.00 Hz (Triangle LFO Rate for Comparator & Auxiliary Unison Voices, Default: 0.65 Hz, matching DAFx-14 Section 3 recommendation of < 2 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Controls the sweep rate of the three incommensurate triangle LFOs (0.73x, 1.00x, 1.37x).
+
+5. stereo_voice_spread
+   - Range: 0.0 to 1.0 (Stereo Unison Panning Spread, Default: 0.85)
+   - Taper: Linear stereo separation.
+   - Function: Pans Voices `+s`, `-s^3`, and `LFO1` to the Left and Voices `-s`, `+s^3`, and `LFO2` to the Right for a massive wall-of-brass stereo image.
+
+6. center_to_side_mix
+   - Range: 0.0 to 1.0 (6 Detuned Side Voices Mix vs. Center Voice, Default: 0.65, matching the JP-8000 Supersaw Mix control cited in DAFx-14 Section 4)
+   - Taper: Linear unison side-voice balance.
+   - Function: Balances the solid fundamental center voice against the 6 detuned/animated side voices.

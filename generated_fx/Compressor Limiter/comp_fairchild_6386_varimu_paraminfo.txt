@@ -1,0 +1,49 @@
+================================================================================
+EFFECT: comp_fairchild_6386_varimu
+SOURCE: Raffensperger (DAFx-2012, "Toward a Wave Digital Filter Model of the
+        Fairchild 670 Limiter", Sections 2, 5, 6; Eqs. 1, 10-14; Fig. 8; Table 3)
+TYPE:   Stereo Variable-Mu 6386 Remote-Cutoff Triode Feedback Limiter with
+        3-Capacitor Program-Dependent Memory & Lateral-Vertical (M/S) Matrix
+================================================================================
+
+OVERVIEW
+--------
+Models the 1950s Fairchild 670 stereo variable-mu vacuum-tube feedback limiter.
+Its sidechain monitors the output signal through a Class-B crossover stage with
+interacting AC and DC threshold controls (Eq. 10), rectified into a three-capacitor
+RC network (CT fast, CU medium, CV slow memory, Fig. 8 & Table 3) that elongates
+release time after sustained heavy peaks. The signal path models a balanced
+push-pull pair of GE 6386 remote-cutoff triodes whose odd-order harmonic
+saturation increases proportionally with gain reduction (Sec. 6, Fig. 13).
+
+PARAMETERS (7 total)
+--------------------
+1. drive_db        [0.0 .. 24.0 dB, default: 8.0]
+   Input step attenuator / transformer drive into the 6386 variable-mu stage.
+
+2. ac_thresh       [0.0 .. 1.0, default: 0.55]
+   Front-panel AC Threshold (phi_AC): controls sidechain sensitivity and amount
+   of feedback limiting.
+
+3. dc_knee         [0.0 .. 1.0, default: 0.25]
+   Under-chassis DC Threshold (phi_DC, Eq. 10): biases the Class-B sidechain
+   crossover stage, continuously morphing from soft vari-mu compression to hard
+   brickwall limiting.
+
+4. tc_mode         [1.0 .. 6.0, default: 5.0]
+   Six-way Fairchild Time-Constant selector (Table 3):
+   - 1..4: Single-RC release (100 ms, 300 ms, 880 ms, 1.76 s).
+   - 5: Dual-RC program-dependent release (CT + CU).
+   - 6: Triple-RC dual-memory auto-release (CT + CU + CV) for fast transient
+        recovery and slow sustained leveling.
+
+5. tube_harmonics  [0.0 .. 1.0, default: 0.5]
+   Gain-reduction-dependent push-pull 6386 3rd-harmonic saturation depth
+   (Raffensperger Sec. 6, Fig. 13).
+
+6. lat_vert_mode   [0.0 .. 1.0, default: 0.35]
+   Continuous blend between Left/Right independent feedback limiting (0.0) and
+   Lateral/Vertical (Mid-Side) matrixed limiting (1.0).
+
+7. mix             [0.0 .. 1.0, default: 1.0]
+   Dry/wet parallel NY-compression blend.

@@ -1,0 +1,44 @@
+================================================================================
+heterodyne_pd_shaper — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements General-Purpose Heterodyne Phase Distortion (PD) from Lazzarini, Timoney, Pekonen, and Välimäki (DAFx-09 Paper 12, Section 3.2 & 4.2, Eq. 5–6, 17, Fig. 9, 17–20). Places the arbitrary stereo tuba signal in quadrature (s_re, s_im) via a 4-stage IIR Hilbert network and ring-modulates it with the cosine and sine of a pitch-tracked Casio CZ-style piecewise phase-distortion function g(phi). Unlike lookup-table PD, this applies true phase distortion across every partial of the live acoustic tuba while allowing the modulation index to exceed the classical pi limit to boost secondary vocal/brass formant regions.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Full Tuba or 01_harmonic_isolator)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (modulates the inflection point d when mod_depth > 0; internal 0.5 Hz fallback if unpatched)
+- out1 / out2: Stereo Heterodyne Phase-Distorted Output
+
+PARAMETERS (6)
+
+1. pd_ratio
+   - Range: 0.25 to 4.00 (Modulator-to-Fundamental Ratio f_m / f_0)
+   - Taper: Linear ratio (1.0 = classic phase-synchronous PD; 2.0 = octave-doubled formant PD; 0.5 = sub-octave phase inflection).
+   - Function: Scales the frequency of the piecewise phase-distortion modulator relative to the tuba's fundamental pitch.
+
+2. inflection_d
+   - Range: 0.02 to 0.98 (Piecewise Breakpoint Duty Cycle d, Default: 0.15)
+   - Taper: Linear duty ratio centered at 0.50 (no distortion). Moving d toward 0.02 or 0.98 steepens the phase inflection and widens the harmonic bandwidth like opening a lowpass filter.
+   - Function: Sets the horizontal breakpoint where the two linear phase segments meet (DAFx-09 Fig. 1).
+
+3. pd_index
+   - Range: 0.0 to 5.0 (Phase Distortion Index Multiplier, Default: 1.25)
+   - Taper: Power curve (x^1.3) for smooth low-index warmth and aggressive high-index formant multiplication.
+   - Function: Scales the amplitude of the phase-distortion function g(phi). 0.0 is clean bypass, 1.0 reproduces exact Casio CZ Phase Distortion, and values up to 5.0 implement DAFx-09 Section 4.2 (Fig. 17) extended PM index scaling (up to 5*pi rad) to strongly enhance upper brass formants.
+
+4. saw_square
+   - Range: 0.0 to 1.0 (0.0 = Single-Inflection Sawtooth PD, 1.0 = Double-Inflection Square/Odd-Harmonic PD)
+   - Taper: Linear crossfade between Eq. 6 and Fig. 18 modulation functions.
+   - Function: Morphs the phase-distortion contour from all-harmonic sawtooth inflection (0.0) to hollow, clarinet/riddim square-wave double inflection (1.0).
+
+5. mod_depth
+   - Range: 0.0 to 1.0 (0% to +/-38% Inflection Duty Sweep)
+   - Taper: Linear modulation depth with opposite-polarity stereo offset between Left and Right channels.
+   - Function: Sweeps the inflection breakpoint d in counter-phase stereo using the 1-bar phasor on in4.
+
+6. mix
+   - Range: 0.0 to 1.0 (0% Dry Phase-Aligned Hilbert Carrier to 100% Wet Heterodyne PD)
+   - Taper: Linear crossfade (both Dry and Wet share the exact same Hilbert allpass group delay, preventing comb cancellation in parallel blends).
+   - Function: Balances the dry phase-aligned tuba with the heterodyne phase-distorted signal.

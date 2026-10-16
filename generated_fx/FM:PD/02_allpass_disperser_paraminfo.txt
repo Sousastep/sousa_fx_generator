@@ -1,0 +1,33 @@
+================================================================================
+02_allpass_disperser — Parameter Information
+================================================================================
+
+OVERVIEW
+A pure feed-forward cascade of up to 32 second-order biquad allpass filters per channel inspired by Kilohearts Disperser ("Disburser"). Because allpass filters have a flat magnitude response (0 dB across all frequencies) but a peaked group-delay curve around their corner frequency, stacking 32 stages multiplies the phase dispersion without carving phaser notches. Brass articulations and distorted harmonic spikes are unfolded in time into squelchy, liquid "chirp" transients.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Left / Right)
+- in3: Optional Tracked Pitch in Hz (if connected > 20 Hz, scales the dispersion corner frequency relative to 110 Hz so the smear tracks the tuba's register)
+- out1 / out2: Stereo Phase-Dispersed Audio Output
+
+PARAMETERS (4)
+
+1. stages
+   - Range: 1.0 to 32.0 stages per channel
+   - Taper: Continuous linear with fractional stage interpolation between stage N and N+1 to prevent clicks while sweeping dispersion depth.
+   - Function: Controls the total accumulated group delay (tau_total = N * tau_single). Low counts tighten sub punch; 16–32 stages create dramatic laser-like transient chirps.
+
+2. freq_hz
+   - Range: 30.0 to 4000.0 Hz
+   - Taper: Direct value in Hz (smoothly slewed over 5 ms). Low settings (50–180 Hz) smear and fatten the tuba's sub-bass body; mid-high settings (300–2500 Hz) turn distorted brass buzz into liquid dubstep squelches.
+   - Function: Sets the corner frequency of every allpass stage where maximum group delay occurs.
+
+3. pinch_q
+   - Range: 0.707 to 12.0 (Q / Resonance)
+   - Taper: Direct Q factor (0.707 = Butterworth maximally flat delay bump; > 3.0 = tall, narrow resonant group-delay spike).
+   - Function: Controls the sharpness ("Smash" / "Pinch") of the group delay peak around freq_hz. Higher values cause the time-smear to ring with a pitched, vocal-like metallic edge.
+
+4. spread
+   - Range: 0.0 to 1.0 (0 to +/- 0.75 octaves L/R offset)
+   - Taper: Exponential octave offset (2^(spread * 0.75)).
+   - Function: Offsets the Left and Right allpass cascade corner frequencies in opposite directions around freq_hz, creating massive stereo phase width while preserving mono magnitude compatibility.

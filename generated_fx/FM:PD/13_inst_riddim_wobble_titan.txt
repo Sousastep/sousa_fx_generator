@@ -1,0 +1,207 @@
+// ============================================================================
+// 13_inst_riddim_wobble_titan.txt
+// Advanced Instrument 1: Riddim Wobble Titan
+// Complete Tuba-to-Dubstep/Riddim Instrument in a single codebox~:
+//   1. Pitch-Tracked Harmonic Sine-ifier (isolates f0 with envelope normalization)
+//   2. Phase-Locked Sub-Octave Carrier + Tuba Modulator FM Synthesis (with Joy X)
+//   3. ADAA1 Wavefolder & Asymmetric Saturation (with Joy Y)
+//   4. 8-Stage Allpass Phase Disperser (for liquid transient "chirp")
+//   5. 1-Bar Phasor-Synced Dual SVF Morphing Wobble Filter (Lowpass <-> Bandpass/Notch)
+// Designed for live performance with a game controller attached to the tuba.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (Tuba)
+//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+//   in4: 1-Bar Audio-Rate Phasor [0..1] (syncs wobble LFO; internal fallback if unpatched)
+// Outlets:
+//   out1: Left Stereo Dubstep Instrument Output
+//   out2: Right Stereo Dubstep Instrument Output
+
+@param({ min: -1.0, max: 1.0 }) joy_x_filtsweep = 0.0;
+@param({ min: -1.0, max: 1.0 }) joy_y_fm_scream = 0.0;
+@param({ min: 1.0, max: 16.0, steps: 16 }) wobble_rate = 4.0;
+@param({ min: 0.0, max: 1.0 }) wobble_shape = 0.35;
+@param({ min: 0.0, max: 36.0 }) sine_boost_db = 24.0;
+@param({ min: 0.0, max: 1.0 }) sub_oct_level = 0.75;
+@param({ min: 0.0, max: 1.0 }) disperse_amt = 0.6;
+@param({ min: 0.0, max: 1.0 }) filter_res = 0.72;
+
+// Pitch-tracked bell isolator + envelope follower
+@state bqIso = new biquad();
+@state svfIso = new svf();
+@state lpTrack = new onepole();
+@state prevTrack = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+@state envFast = 0.0;
+@state envSlow = 0.0;
+
+// Carrier & Sub-octave oscillators
+@state carPhasor = new phasor();
+@state subPhasor = new phasor();
+@state fallbackBar = new phasor();
+@state prevBarIn = 0.0;
+
+// ADAA1 Wavefolder state
+@state prevXL = 0.0; @state prevF1L = 0.0;
+@state prevXR = 0.0; @state prevF1R = 0.0;
+
+// 8-stage 2nd-order Allpass Disperser state per channel
+@state apZ1L = new FixedSampleArray(8);
+@state apZ2L = new FixedSampleArray(8);
+@state apZ1R = new FixedSampleArray(8);
+@state apZ2R = new FixedSampleArray(8);
+
+// Dual Stereo SVF Wobble Filter states
+@state wobSvfL1 = new svf();
+@state wobSvfR1 = new svf();
+@state wobSvfL2 = new svf();
+@state wobSvfR2 = new svf();
+
+// Smoothers for joystick X/Y
+@state smoothJoyX = 0.0;
+@state smoothJoyY = 0.0;
+
+function folderF1(x: number): number {
+	let ax = abs(x);
+	let logCosh = ax + log(1.0 + exp(-2.0 * ax)) - 0.69314718056;
+	return (-cos(pi * x) / pi) + 0.5 * logCosh;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch Tracking & Joystick Smoothing ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 180.0);
+zcCount += 1.0;
+if (prevTrack <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevTrack = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slewFast = 1.0 - exp(-1.0 / (0.005 * sr));
+smoothF0 += (rawF0 - smoothF0) * slewFast;
+smoothJoyX += (clamp(joy_x_filtsweep, -1.0, 1.0) - smoothJoyX) * slewFast;
+smoothJoyY += (clamp(joy_y_fm_scream, -1.0, 1.0) - smoothJoyY) * slewFast;
+
+let f0 = clamp(smoothF0, 24.0, 800.0);
+
+// --- 2. Fundamental Sine-ifier & Dynamic Envelope Extraction ---
+let A_iso = pow(10.0, clamp(sine_boost_db, 0.0, 36.0) / 40.0);
+let w0 = 2.0 * pi * f0 / sr;
+let alphaIso = sin(w0) / (2.0 * 4.5);
+let a0_inv = 1.0 / (1.0 + alphaIso / A_iso);
+let b0 = (1.0 + alphaIso * A_iso) * a0_inv;
+let b1 = (-2.0 * cos(w0)) * a0_inv;
+let b2 = (1.0 - alphaIso * A_iso) * a0_inv;
+let a1 = b1;
+let a2 = (1.0 - alphaIso / A_iso) * a0_inv;
+
+let boosted = bqIso.next(mono, b0, b1, b2, a1, a2) / pow(A_iso, 1.25);
+let isoSine = svfIso.next(boosted, f0, 0.75)[2] * 2.0;
+
+let absIn = abs(isoSine);
+envFast += (absIn - envFast) * (1.0 - exp(-1.0 / (0.003 * sr)));
+envSlow += (absIn - envSlow) * (1.0 - exp(-1.0 / (0.035 * sr)));
+let gate = clamp((envSlow - 0.0008) * 250.0, 0.0, 1.0);
+let uMod = tanh(isoSine / (envFast * 1.2 + 0.0006)) * gate;
+
+// --- 3. Adaptive FM + Sub-Octave Synthesis Driven by Joystick Y ---
+// Joystick Y [-1..1] sweeps FM index and harmonic carrier ratio (1x -> 2x/3x scream)
+let joyY_unip = 0.5 * (smoothJoyY + 1.0);
+let fmIndex = (1.2 + 5.5 * pow(joyY_unip, 1.3)) * (0.4 + 0.6 * clamp(envSlow * 3.0, 0.0, 1.0));
+let harmMult = (smoothJoyY > 0.25) ? (1.0 + floor((smoothJoyY - 0.25) * 4.0)) : 1.0;
+
+let cPh = carPhasor.next(f0 * harmMult);
+let subPh = subPhasor.next(f0 * 0.5);
+
+// Stereo phase-modulated carrier locked to tuba modulator uMod
+let fmL = cos(2.0 * pi * cPh + fmIndex * uMod);
+let fmR = cos(2.0 * pi * (cPh + 0.04) + fmIndex * uMod * 0.92);
+
+// Clean + 3rd-harmonic rich Sub-Octave foundation
+let subWave = (sin(2.0 * pi * subPh) + 0.25 * sin(6.0 * pi * subPh)) * clamp(sub_oct_level, 0.0, 1.0);
+
+// Combine FM carrier, raw brass articulation, and ADAA1 Wavefolder
+let preFoldL = (fmL * 0.75 + xL * 0.45) * (1.0 + 1.8 * joyY_unip);
+let preFoldR = (fmR * 0.75 + xR * 0.45) * (1.0 + 1.8 * joyY_unip);
+
+let dL = preFoldL - prevXL;
+let f1L = folderF1(preFoldL);
+let foldL = (abs(dL) > 0.00001) ? ((f1L - prevF1L) / dL) : (sin(pi * preFoldL) + 0.5 * tanh(preFoldL));
+prevXL = preFoldL; prevF1L = f1L;
+
+let dR = preFoldR - prevXR;
+let f1R = folderF1(preFoldR);
+let foldR = (abs(dR) > 0.00001) ? ((f1R - prevF1R) / dR) : (sin(pi * preFoldR) + 0.5 * tanh(preFoldR));
+prevXR = preFoldR; prevF1R = f1R;
+
+let synthL = (foldL * 0.7 + subWave * 0.85) * clamp(envSlow * 2.2, 0.0, 1.2) * gate;
+let synthR = (foldR * 0.7 + subWave * 0.85) * clamp(envSlow * 2.2, 0.0, 1.2) * gate;
+
+// --- 4. 8-Stage Allpass Phase Disperser ---
+let apW0 = 2.0 * pi * clamp(f0 * 2.5, 90.0, 1200.0) / sr;
+let apAlpha = sin(apW0) / (2.0 * 2.5);
+let apA0_inv = 1.0 / (1.0 + apAlpha);
+let apB0 = (1.0 - apAlpha) * apA0_inv;
+let apB1 = (-2.0 * cos(apW0)) * apA0_inv;
+
+let dispL = synthL;
+let dispR = synthR;
+for (let i: Int = 0; i < 8; i++) {
+	let yL = apB0 * dispL + apZ1L[i];
+	apZ1L[i] = apB1 * dispL - apB1 * yL + apZ2L[i];
+	apZ2L[i] = dispL - apB0 * yL;
+	dispL = yL;
+
+	let yR = apB0 * dispR + apZ1R[i];
+	apZ1R[i] = apB1 * dispR - apB1 * yR + apZ2R[i];
+	apZ2R[i] = dispR - apB0 * yR;
+	dispR = yR;
+}
+let postDispL = linearinterp(clamp(disperse_amt, 0.0, 1.0), synthL, dispL);
+let postDispR = linearinterp(clamp(disperse_amt, 0.0, 1.0), synthR, dispR);
+
+// --- 5. 1-Bar Phasor-Synced Wobble LFO + Joystick X Filter Control ---
+let barActive = (abs(barIn - prevBarIn) > 0.0000001 || (barIn > 0.0001 && barIn < 0.9999));
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn, 0.0, 1.0) : fallbackBar.next(0.5);
+
+let subRate = floor(clamp(wobble_rate, 1.0, 16.0));
+let wobPh = wrap(barPh * subRate, 0.0, 1.0);
+
+// Morph wobble LFO shape: Sine (0.0) -> Riddim Whip Triangle (0.5) -> Chopped Square/Ramp (1.0)
+let shp = clamp(wobble_shape, 0.0, 1.0);
+let lfoSin = 0.5 - 0.5 * cos(2.0 * pi * wobPh);
+let lfoWhip = pow(triangle(wobPh, 0.2), 1.5);
+let lfoChop = (wobPh < 0.55) ? pow(1.0 - wobPh / 0.55, 0.7) : 0.0;
+let wobEnv = (shp < 0.5) ? linearinterp(shp * 2.0, lfoSin, lfoWhip) : linearinterp((shp - 0.5) * 2.0, lfoWhip, lfoChop);
+
+// Cutoff combines Wobble LFO + Joystick X manual sweep (exponentially mapped 75 Hz .. 6500 Hz)
+let cutoffExp = clamp(0.15 + 0.65 * wobEnv + 0.45 * smoothJoyX, 0.0, 1.0);
+let cutoffHz = 70.0 * pow(90.0, cutoffExp);
+let qSvf = clamp(0.55 + 0.4 * pow(clamp(filter_res, 0.0, 1.0), 1.2), 0.5, 0.96);
+
+let svfOutL1 = wobSvfL1.next(postDispL, cutoffHz, qSvf);
+let svfOutR1 = wobSvfR1.next(postDispR, cutoffHz * 1.04, qSvf);
+
+// Morph LP + BP peak when Joystick Y is pushed up for vocal "yoink" formant
+let bpBlend = clamp(0.25 + 0.45 * joyY_unip, 0.0, 0.75);
+let stage1L = svfOutL1[0] + bpBlend * svfOutL1[2];
+let stage1R = svfOutR1[0] + bpBlend * svfOutR1[2];
+
+let svfOutL2 = wobSvfL2.next(stage1L, cutoffHz * 1.35, qSvf * 0.85);
+let svfOutR2 = wobSvfR2.next(stage1R, cutoffHz * 1.40, qSvf * 0.85);
+
+out1 = tanh((svfOutL2[0] + 0.35 * svfOutL2[2]) * 1.3);
+out2 = tanh((svfOutR2[0] + 0.35 * svfOutR2[2]) * 1.3);

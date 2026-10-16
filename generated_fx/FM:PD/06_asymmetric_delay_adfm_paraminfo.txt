@@ -1,0 +1,33 @@
+================================================================================
+06_asymmetric_delay_adfm — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Asymmetric Delay-Based Adaptive Frequency Modulation (ASDFM1 & ASDFM2) from Lazzarini, Timoney, and Lysaght (DAFx-08, Section 2, Eq. 3 & 4). The full stereo tuba signal acts as a multi-harmonic carrier passed through a cubic-interpolated variable delay line modulated at a ratio of the tracked pitch, then ring-modulated by an exponentially mapped cosine wave normalized by a rational approximation of the Modified Bessel function I0. Displaces sideband energy above or below each brass harmonic to sculpt synthetic formants without sub-bass mud.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Full Tuba Carrier)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
+- out1 / out2: Stereo Asymmetric Adaptive FM Output
+
+PARAMETERS (4)
+
+1. cm_ratio
+   - Range: 0.25 to 4.00 (Carrier-to-Modulator Frequency Ratio c:m, where f_m = f_0 / cm_ratio)
+   - Taper: Linear ratio (1.0 = fundamental-locked harmonic sidebands; 2.0 = sub-octave sidebands; 3.0 = twelfth down; non-integer values like 2.45 create metallic multiphonic growls).
+   - Function: Sets the pitch-tracked modulator frequency relative to the tuba's fundamental.
+
+2. mod_index
+   - Range: 0.0 to 6.0 (FM Index k)
+   - Taper: Power curve (x^1.3) for smooth low-index warmth and aggressive high-index spectral expansion. Delay depth is automatically scaled by 1 / (pi * f0) so modulation brightness remains uniform across the tuba's entire register.
+   - Function: Controls the bandwidth and number of sidebands generated around every tuba partial.
+
+3. symmetry_r
+   - Range: -1.0 to +1.0 (maps exponentially to Palamin symmetry factor r = 4^symmetry_r in [0.25, 4.00])
+   - Taper: Exponential octave-symmetric taper centered at 0.0 (r = 1.0, classic symmetric FM). Positive values (r > 1.0) shift sideband energy into the upper spectrum (bright formant boost without muddying sub-bass); negative values (r < 1.0) shift energy into lower sub-harmonics.
+   - Function: Dislocates the center of spectral symmetry above or below each carrier harmonic.
+
+4. bessel_mode
+   - Range: 0.0 to 1.0 (0.0 = ASDFM1 Standard Bessel Jn, 1.0 = ASDFM2 Modified Bessel In)
+   - Taper: Linear crossfade between Eq. 3 and Eq. 4 coefficient mappings.
+   - Function: Morphs between standard oscillating Bessel sidebands (0.0) and monotonic Modified Bessel sidebands (1.0), which guarantee that sideband n never exceeds sideband n-1, creating clean, undistorted "moving formants."

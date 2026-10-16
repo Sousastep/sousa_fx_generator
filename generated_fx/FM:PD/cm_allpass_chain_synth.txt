@@ -1,0 +1,127 @@
+// ============================================================================
+// cm_allpass_chain_synth.txt
+// Unix-Style Stereo Effect: Cascaded Audio-Rate Coefficient-Modulated Allpass Chain
+// Implements Kleimola, Pekonen, Penttinen, Valimaki & Abel (DAFx-09, Paper 66):
+// "Sound Synthesis Using an Allpass Filter Chain with Audio-rate Coefficient Modulation"
+// (Sections 2.1, 2.2, 2.5, 4.1 & 4.3, Eq. 3, 11-17, Table 1, Fig. 2-4, 8-10).
+// Cascades up to 48 first-order allpass stages per channel using the spike-free
+// same-sample difference equation:
+//   y_k(n) = x_k(n-1) - m(n)*x_k(n) + m(n)*y_k(n-1)   (Eq. 3)
+// Stage 1 generates a Feedback-AM sideband cluster, while succeeding stages act as a
+// dispersive variable-length delay line that applies non-sinusoidal Complex FM (Eq. 17).
+// Chain length N dynamically controls spectral bandwidth and upper resonance peak!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba Carrier)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
+//   in4: Optional External Audio-Rate Modulator [-1..1] (e.g. out3 of 01_harmonic_isolator;
+//        if unpatched, uses internal pitch-tracked oscillator at fm = f0 / cm_ratio)
+// Outlets:
+//   out1: Left CM Allpass Chain Output
+//   out2: Right CM Allpass Chain Output
+
+@param({ min: 1.0, max: 48.0 }) chain_stages = 24.0;
+@param({ min: 0.0, max: 0.98 }) mod_index_m = 0.82;
+@param({ min: 0.25, max: 4.0 }) cm_ratio = 1.0;
+@param({ min: -15.0, max: 15.0 }) detune_hz = 0.0;
+@param({ min: 0.0, max: 1.0 }) mod_phase_spread = 0.2;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// 48 first-order CM allpass stages per channel (x[n-1] and y[n-1] state arrays)
+@state x1L = new FixedSampleArray(48);
+@state y1L = new FixedSampleArray(48);
+@state x1R = new FixedSampleArray(48);
+@state y1R = new FixedSampleArray(48);
+
+// Internal modulator phasors (Left and Right for stereo beating/phase offset)
+@state modPhL = new phasor();
+@state modPhR = new phasor();
+
+// Fallback ZC pitch tracker & smoothing
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothM = 0.82;
+@state smoothStages = 24.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let extMod = in4;
+
+// --- 1. Pitch Conditioning ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Compute Audio-Rate Coefficient Modulator m(n) in [-M, +M] ---
+let mTarget = pow(clamp(mod_index_m / 0.98, 0.0, 1.0), 0.85) * 0.98;
+smoothM += (mTarget - smoothM) * slew;
+smoothStages += (clamp(chain_stages, 1.0, 48.0) - smoothStages) * slew;
+
+let baseFm = f0 / clamp(cm_ratio, 0.25, 4.0);
+let det = clamp(detune_hz, -15.0, 15.0);
+let fmL = clamp(baseFm - 0.5 * det, 4.0, sr * 0.24);
+let fmR = clamp(baseFm + 0.5 * det, 4.0, sr * 0.24);
+
+let phL = modPhL.next(fmL);
+let phR = wrap(modPhR.next(fmR) + clamp(mod_phase_spread, 0.0, 1.0) * 0.5, 0.0, 1.0);
+
+// Use external audio-rate modulator on in4 if present, else internal cosine oscillator
+let hasExtMod = (abs(extMod) > 0.0001) ? 1.0 : 0.0;
+let modWaveL = hasExtMod ? clamp(extMod, -1.0, 1.0) : cos(2.0 * pi * phL);
+let modWaveR = hasExtMod ? clamp(extMod * cos(pi * mod_phase_spread), -1.0, 1.0) : cos(2.0 * pi * phR);
+
+let mL = clamp(smoothM * modWaveL, -0.98, 0.98);
+let mR = clamp(smoothM * modWaveR, -0.98, 0.98);
+
+// --- 3. Cascaded First-Order CM Allpass Chain (Paper Eq. 3 & 12) ---
+// y(n) = x(n-1) - x(n)*m(n) + y(n-1)*m(n)
+let numFull: Int = floor(smoothStages);
+let frac = smoothStages - numFull;
+
+let sigL = xL;
+let sigR = xR;
+let prevStageL = xL;
+let prevStageR = xR;
+
+for (let i: Int = 0; i < 48; i++) {
+	if (i < numFull + 1) {
+		prevStageL = sigL;
+		prevStageR = sigR;
+
+		let ynL = x1L[i] - sigL * mL + y1L[i] * mL;
+		x1L[i] = sigL;
+		y1L[i] = ynL;
+		sigL = ynL;
+
+		let ynR = x1R[i] - sigR * mR + y1R[i] * mR;
+		x1R[i] = sigR;
+		y1R[i] = ynR;
+		sigR = ynR;
+	}
+}
+
+if (numFull < 48) {
+	sigL = linearinterp(frac, prevStageL, sigL);
+	sigR = linearinterp(frac, prevStageR, sigR);
+}
+
+let mMix = clamp(mix, 0.0, 1.0);
+out1 = linearinterp(mMix, xL, sigL);
+out2 = linearinterp(mMix, xR, sigR);

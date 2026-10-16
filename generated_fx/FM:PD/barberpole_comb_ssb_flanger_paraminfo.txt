@@ -1,0 +1,46 @@
+================================================================================
+barberpole_comb_ssb_flanger — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Endless Barberpole Flanging and Spectral-Delay-Warped SSB Phasing from Fabián Esqueda, Vesa Välimäki, and Julian Parker (DAFx-15 Paper 67, Sections 3, 4 & 4.1, Eq. 9–14, Fig. 7–11). Unites two complementary barberpole architectures:
+1. Synchronized Dual Flanger (Section 3, Fig. 7–8): Two cubic-interpolated fractional-delay comb lines driven by out-of-phase sawtooth ramps (Eq. 9) and crossfaded via triangular gain envelopes so spectral notches climb or dive infinitely without hard-reset clicks.
+2. Warped SSB Barberpole (Section 4 & 4.1, Fig. 10): Combines a 4-stage Hilbert Single-Sideband (SSB) frequency shifter with a 6-stage allpass spectral delay line so the endlessly moving comb notches warp from linear to logarithmic octave spacing!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Optional Tracked Fundamental Pitch f0 in Hz (if > 25 Hz, biases the center comb delay toward the tuba's half-period)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (locks the barberpole sweep cycle to host tempo)
+- out1 / out2: Stereo Endless Barberpole Comb/SSB Output
+
+PARAMETERS (6)
+
+1. sweep_rate_hz
+   - Range: -4.00 to +4.00 Hz (or Cycles per Bar when in4 is patched; Default: +0.50)
+   - Taper: Linear bipolar rate. Positive values sweep spectral notches endlessly upward; negative values sweep spectral notches endlessly downward.
+   - Function: Controls both the speed and direction of the infinite barberpole illusion.
+
+2. center_delay_ms
+   - Range: 0.40 to 12.00 ms (Nominal Comb Delay Time, Default: 2.20 ms)
+   - Taper: Direct delay time in milliseconds (automatically sets D_min = 0.68*D0 and D_max = 1.32*D0 per DAFx-15 Section 3 to guaranteeD_min > 0.5*D_max for seamless reset masking).
+   - Function: Controls the spectral density and number of moving comb notches M = D/2.
+
+3. feedback
+   - Range: -0.92 to +0.92 (Comb Regeneration Feedback, Default: 0.72)
+   - Taper: Linear bipolar feedback with internal tanh saturation guard.
+   - Function: Turns gentle barberpole notches into sharp, metallic riddim pipe resonances that climb or fall forever.
+
+4. dual_to_ssb_mode
+   - Range: 0.0 to 1.0 (0.0 = Section 3 Synchronized Dual-Delay Flanger, 1.0 = Section 4.1 SSB + Spectral Delay Barberpole)
+   - Taper: Linear crossfade.
+   - Function: Morphs between time-domain dual-comb crossfading (0.0) and Bode-style quadrature SSB + allpass dispersion barberpole phasing (1.0).
+
+5. notch_warp_a1
+   - Range: -0.80 to +0.80 (Allpass Spectral Delay Warp Coefficient a1, Default: -0.50)
+   - Taper: Linear allpass coefficient (DAFx-15 Section 4.1).
+   - Function: Warps the frequency-dependent delay tau(w) in the SSB branch so the moving comb notches cluster in the bass/low-midrange like a Shepard-Risset glissando rather than spacing linearly.
+
+6. stereo_counter_dir
+   - Range: 0.0 to 1.0 (Default: 0.50)
+   - Taper: Below 0.5, spreads Left/Right barberpole phase up to 90 degrees; above 0.5, reverses the Right channel sweep direction so Left climbs infinitely while Right dives infinitely!
+   - Function: Creates psychoacoustic stereo rotation and counter-sweeping barberpole illusions.

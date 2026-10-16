@@ -1,0 +1,44 @@
+================================================================================
+modfm_pulse_saw_formant — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Bandlimited Pulse, Sawtooth, and Formant Generation via Modified FM (ModFM) Synthesis from Timoney, Lazzarini, and Lysaght (DAFx-08 Paper 05, Sections 2 & 3, Eq. 1–4, Fig. 1–7). Generates the phase-synchronous ModFM waveform y_pulse(t) = exp(k * (cos(w0*t) - 1)) * cos(wc*t), whose harmonics follow scaled Modified Bessel functions exp(-k) * In(k) (Eq. 2). Unlike classic Chowning FM (whose Bessel Jn sidebands oscillate and cancel), Modified Bessel partials decay monotonically with harmonic number and open/close smoothly like an analog lowpass filter as k varies (Fig. 3–4). Passing the zero-mean ModFM pulse train through the DAFx-08 Figure 5 leaky integrator + DC blocker transforms it into a fat, alias-controlled ModFM Sawtooth wave!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps ModFM bandwidth index k when k_wobble > 0)
+- out1 / out2: Stereo ModFM Pulse / Sawtooth / Formant Output
+
+PARAMETERS (6)
+
+1. modfm_index_k
+   - Range: 0.1 to 60.0 (ModFM Bandwidth Index k, Default: 12.0)
+   - Taper: Exponential lowpass-like cutoff taper (0.1 * 600^(x/60)) with automatic pitch-dependent anti-aliasing clamp (DAFx-08 Fig. 7).
+   - Function: Controls the pulse width and Modified-Bessel harmonic roll-off slope (DAFx-08 Fig. 2–4). Sweeping k feels exactly like sweeping a steep 24 dB/oct lowpass filter.
+
+2. formant_harmonic
+   - Range: 1.0 to 12.0 (Carrier-to-Fundamental Harmonic Ratio f_c / f_0, Default: 1.0)
+   - Taper: Continuous linear harmonic multiplier with dual-carrier crossfading.
+   - Function: At 1.0, generates a fundamental-locked Bandlimited Pulse or Sawtooth (DAFx-08 Eq. 1 & 4). Above 1.0, shifts the ModFM Bessel cluster up to a vocal formant peak centered at formant_harmonic * f0.
+
+3. pulse_to_saw
+   - Range: 0.0 to 1.0 (0.0 = Eq. 1 Bandlimited ModFM Pulse Train, 1.0 = Eq. 4 Integrated Bandlimited ModFM Sawtooth)
+   - Taper: Linear crossfade with automatic RMS loudness compensation across k.
+   - Function: Morphs between the punchy, hollow ModFM pulse train (Fig. 1) and the mean-removed, leaky-integrated, DC-blocked ModFM sawtooth waveform (Fig. 5–6).
+
+4. tuba_carrier_mix
+   - Range: 0.0 to 1.0 (0.0 = Pure Phase-Locked Cosine Carrier, 1.0 = Live Acoustic Tuba Carrier)
+   - Taper: Linear crossfade.
+   - Function: Blends between pure phase-locked ModFM oscillator resynthesis (0.0) and direct ModFM exponential windowing of the live stereo tuba waveform (1.0).
+
+5. k_wobble
+   - Range: 0.0 to 1.0 (Rhythmic 1-Bar Wobble Depth on Index k, Default: 0.35)
+   - Taper: Linear modulation depth multiplying k by up to 4x on quarter-note beats.
+   - Function: Sweeps the Modified Bessel bandwidth index k synchronously with the 1-bar phasor on in4 for filter-free ModFM dubstep wobbles.
+
+6. stereo_width
+   - Range: 0.0 to 1.0 (Stereo Index Asymmetry & Modulator Phase Spread, Default: 0.25)
+   - Taper: Linear stereo spread.
+   - Function: Spreads the ModFM index k and modulator phase between Left and Right channels.

@@ -1,0 +1,33 @@
+================================================================================
+10_phasor_synced_comb_flanger — Parameter Information
+================================================================================
+
+OVERVIEW
+A tempo-synced stereo comb/flange sweeper driven by the 1-bar audio-rate phasor (0 to 1) on in3. Multiplies and wraps the 1-bar phasor into integer rhythmic subdivisions (quarter notes, 8ths, triplets, 16ths) and shapes each cycle into an asymmetric fast-rise / curved-decay riddim whip envelope. Sweeps a pair of cubic-interpolated resonant comb filters across up to 3.5 octaves to turn steady tuba notes into syncopated, metallic riddim chop-sweeps.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Left / Right)
+- in3: 1-Bar Audio-Rate Phasor [0..1] (automatically falls back to an internal 0.5 Hz LFO if unpatched)
+- out1 / out2: Stereo Rhythmic Comb-Swept Audio Output
+
+PARAMETERS (4)
+
+1. subdiv_rate
+   - Range: 1 to 16 cycles per bar (Quantized in 16 integer steps)
+   - Taper: Stepped integer multiplier of the 1-bar phasor (1 = 1 bar, 2 = half notes, 3 = half-note triplets, 4 = quarter notes, 6 = quarter triplets, 8 = eighth notes, 12 = eighth triplets, 16 = sixteenth notes).
+   - Function: Sets the rhythmic rate of the comb sweep within the 1-bar phasor window.
+
+2. base_ms
+   - Range: 0.15 to 15.0 ms (equivalent to comb base frequencies from ~66 Hz to 6,666 Hz)
+   - Taper: Direct delay time in milliseconds (exponentially modulated in octaves by the sweep envelope).
+   - Function: Sets the center delay time of the stereo comb filters. Short values (0.3–2.0 ms) create screaming jet-flange vowels; longer values (3.0–12.0 ms) create hollow metallic tube whips.
+
+3. sweep_depth
+   - Range: 0.0 to 1.0 (maps to 0.0 to 3.5 octaves of delay modulation)
+   - Taper: Power curve (x^1.3) into exponential octave scaling (2^(env * 3.5)).
+   - Function: Controls how far the rhythmic envelope sweeps the comb delay time on each beat subdivision.
+
+4. resonance
+   - Range: -0.96 to +0.96 (Bipolar Comb Feedback/Feedforward Gain)
+   - Taper: Linear bipolar feedback with internal tanh soft-clipping.
+   - Function: Positive values produce bright harmonic flange peaks; negative values produce hollow, odd-harmonic phase-inverted comb sweeps.

@@ -1,0 +1,189 @@
+// ============================================================================
+// 14_inst_metallic_comb_growler.txt
+// Advanced Instrument 2: Metallic Comb & Formant Growler ("Talking Riddim Machine")
+// Combines:
+//   1. Adaptive Asymmetric Delay-Line FM (DAFx-08 ASDFM2 moving formants)
+//   2. Dual Parallel Pitch-Tracked Waveguide Comb Filters (Vowel/Pipe Resonator)
+//   3. Allpass Phase Dispersion Matrix
+//   4. 1-Bar Phasor-Synced Comb Ratio Whip + Joystick X/Y Performance Mapping
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (Tuba)
+//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+//   in4: 1-Bar Audio-Rate Phasor [0..1] (syncs rhythmic comb whip)
+// Outlets:
+//   out1: Left Metallic Comb Growler Output
+//   out2: Right Metallic Comb Growler Output
+
+@param({ min: -1.0, max: 1.0 }) joy_x_comb_morph = 0.0;
+@param({ min: -1.0, max: 1.0 }) joy_y_adfm_growl = 0.0;
+@param({ min: 1.0, max: 16.0, steps: 16 }) whip_subdiv = 4.0;
+@param({ min: 0.0, max: 1.0 }) whip_depth = 0.55;
+@param({ min: -0.98, max: 0.98 }) comb_feedback = 0.85;
+@param({ min: 0.0, max: 1.0 }) comb_damping = 0.75;
+@param({ min: 0.0, max: 1.0 }) disperse_pinch = 0.6;
+@param({ min: 0.0, max: 1.0 }) stereo_width = 0.4;
+
+// Delay buffer for AdFM stage (2048 samples)
+@state fmBufL = new FixedSampleArray(2048);
+@state fmBufR = new FixedSampleArray(2048);
+@state fmWrite: Int = 0;
+
+// Dual Comb Filter buffers (4096 samples per channel)
+@state combBufL = new FixedSampleArray(4096);
+@state combBufR = new FixedSampleArray(4096);
+@state combWrite: Int = 0;
+
+@state dampLpL = new onepole();
+@state dampLpR = new onepole();
+
+// 6-stage Allpass Disperser post-comb
+@state apZ1L = new FixedSampleArray(6);
+@state apZ2L = new FixedSampleArray(6);
+@state apZ1R = new FixedSampleArray(6);
+@state apZ2R = new FixedSampleArray(6);
+
+// Pitch & Phasor states
+@state modPhasor = new phasor();
+@state fallbackBar = new phasor();
+@state prevBarIn = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+@state smoothJoyX = 0.0;
+@state smoothJoyY = 0.0;
+@state smoothCombDelL = 150.0;
+@state smoothCombDelR = 150.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- 1. Pitch & Controller Conditioning ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 180.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothJoyX += (clamp(joy_x_comb_morph, -1.0, 1.0) - smoothJoyX) * slew;
+smoothJoyY += (clamp(joy_y_adfm_growl, -1.0, 1.0) - smoothJoyY) * slew;
+
+let f0 = clamp(smoothF0, 25.0, 900.0);
+
+// --- 2. Stage 1: Delay-Based Asymmetric AdFM Driven by Joystick Y ---
+fmBufL[fmWrite] = xL;
+fmBufR[fmWrite] = xR;
+
+let joyY_u = 0.5 * (smoothJoyY + 1.0);
+let kIdx = 0.4 + 4.2 * pow(joyY_u, 1.3);
+// Asymmetry factor r shifts upward as Joy Y increases -> upper moving formants
+let rSym = pow(3.2, smoothJoyY);
+let phMod = modPhasor.next(f0);
+let modSin = 0.5 * (1.0 - sin(2.0 * pi * phMod));
+let modCos = cos(2.0 * pi * phMod);
+
+let delDepth = clamp((kIdx / (pi * f0)) * sr, 0.0, 1000.0);
+let dSamps = 2.0 + delDepth * modSin;
+
+let rFm = fmWrite - dSamps;
+while (rFm < 0.0) { rFm += 2048.0; }
+let iFm0: Int = floor(rFm);
+let fracFm = rFm - iFm0;
+let fmOutL = cubicinterp(fracFm, fmBufL[(iFm0 - 1 + 2048) % 2048], fmBufL[iFm0 % 2048], fmBufL[(iFm0 + 1) % 2048], fmBufL[(iFm0 + 2) % 2048]);
+let fmOutR = cubicinterp(fracFm, fmBufR[(iFm0 - 1 + 2048) % 2048], fmBufR[iFm0 % 2048], fmBufR[(iFm0 + 1) % 2048], fmBufR[(iFm0 + 2) % 2048]);
+fmWrite = (fmWrite + 1) % 2048;
+
+let kAsym = clamp(0.4 * kIdx * (rSym - 1.0 / rSym), -3.5, 3.5);
+let envAsym = exp(kAsym * modCos - abs(kAsym));
+let preCombL = fmOutL * envAsym;
+let preCombR = fmOutR * envAsym;
+
+// --- 3. Stage 2: 1-Bar Rhythmic Comb Whip + Joystick X Harmonic Ratio ---
+let barActive = (abs(barIn - prevBarIn) > 0.0000001 || (barIn > 0.0001 && barIn < 0.9999));
+prevBarIn = barIn;
+let barPh = barActive ? wrap(barIn, 0.0, 1.0) : fallbackBar.next(0.5);
+
+let subDiv = floor(clamp(whip_subdiv, 1.0, 16.0));
+let whipPh = wrap(barPh * subDiv, 0.0, 1.0);
+let whipEnv = kink(whipPh, 0.35);
+let whipTri = pow(triangle(whipEnv, 0.25), 1.4);
+
+// Comb harmonic ratio controlled by Joystick X (0.5x sub-pipe to 12x high metallic formant) + Whip LFO
+let octShift = 1.8 * smoothJoyX + 2.4 * clamp(whip_depth, 0.0, 1.0) * (whipTri - 0.3);
+let combHz = clamp(f0 * 2.0 * pow(2.0, octShift), 22.0, 4500.0);
+
+let wid = pow(clamp(stereo_width, 0.0, 1.0), 1.5) * 0.35; // up to +/- 0.35 octaves L/R
+let widRatio = pow(2.0, wid);
+
+let targetDelL = clamp(sr / (combHz / widRatio), 4.0, 4090.0);
+let targetDelR = clamp(sr / (combHz * widRatio), 4.0, 4090.0);
+
+let delSlew = 1.0 - exp(-1.0 / (0.005 * sr));
+smoothCombDelL += (targetDelL - smoothCombDelL) * delSlew;
+smoothCombDelR += (targetDelR - smoothCombDelR) * delSlew;
+
+let rCL = combWrite - smoothCombDelL;
+while (rCL < 0.0) { rCL += 4096.0; }
+let icL: Int = floor(rCL);
+let fcL = rCL - icL;
+let cReadL = cubicinterp(fcL, combBufL[(icL - 1 + 4096) % 4096], combBufL[icL % 4096], combBufL[(icL + 1) % 4096], combBufL[(icL + 2) % 4096]);
+
+let rCR = combWrite - smoothCombDelR;
+while (rCR < 0.0) { rCR += 4096.0; }
+let icR: Int = floor(rCR);
+let fcR = rCR - icR;
+let cReadR = cubicinterp(fcR, combBufR[(icR - 1 + 4096) % 4096], combBufR[icR % 4096], combBufR[(icR + 1) % 4096], combBufR[(icR + 2) % 4096]);
+
+let dampHz = 450.0 * pow(38.0, clamp(comb_damping, 0.0, 1.0));
+let dReadL = dampLpL.next(cReadL, dampHz);
+let dReadR = dampLpR.next(cReadR, dampHz);
+
+let fbSign = (comb_feedback >= 0.0) ? 1.0 : -1.0;
+let fbMag = 1.0 - pow(1.0 - abs(clamp(comb_feedback, -0.98, 0.98)), 1.4);
+let fb = fbSign * clamp(fbMag, 0.0, 0.985);
+
+combBufL[combWrite] = tanh(preCombL + fb * dReadL);
+combBufR[combWrite] = tanh(preCombR + fb * dReadR);
+combWrite = (combWrite + 1) % 4096;
+
+let combOutL = (preCombL + fb * cReadL) / (1.0 + 0.55 * abs(fb));
+let combOutR = (preCombR + fb * cReadR) / (1.0 + 0.55 * abs(fb));
+
+// --- 4. Stage 3: 6-Stage Allpass Phase Disperser Tuned to Comb Formant ---
+let pinch = clamp(disperse_pinch, 0.0, 1.0);
+let apQ = 0.707 + 6.5 * pow(pinch, 1.4);
+let apW0 = 2.0 * pi * clamp(combHz * 0.75, 60.0, 3500.0) / sr;
+let apAlpha = sin(apW0) / (2.0 * apQ);
+let apA0_inv = 1.0 / (1.0 + apAlpha);
+let apB0 = (1.0 - apAlpha) * apA0_inv;
+let apB1 = (-2.0 * cos(apW0)) * apA0_inv;
+
+let dispL = combOutL;
+let dispR = combOutR;
+for (let i: Int = 0; i < 6; i++) {
+	let yL = apB0 * dispL + apZ1L[i];
+	apZ1L[i] = apB1 * dispL - apB1 * yL + apZ2L[i];
+	apZ2L[i] = dispL - apB0 * yL;
+	dispL = yL;
+
+	let yR = apB0 * dispR + apZ1R[i];
+	apZ1R[i] = apB1 * dispR - apB1 * yR + apZ2R[i];
+	apZ2R[i] = dispR - apB0 * yR;
+	dispR = yR;
+}
+
+out1 = linearinterp(pinch, combOutL, dispL);
+out2 = linearinterp(pinch, combOutR, dispR);

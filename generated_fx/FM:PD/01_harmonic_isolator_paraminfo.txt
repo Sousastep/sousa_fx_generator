@@ -1,0 +1,34 @@
+================================================================================
+01_harmonic_isolator — Parameter Information
+================================================================================
+
+OVERVIEW
+Isolates the fundamental or a chosen overtone of the live tuba using a pitch-tracked RBJ peaking filter (+0 to +48 dB) cascaded into a dual-stage state-variable bandpass filter. Decouples breath dynamics via fast envelope normalization so the tuba approximates a pure, phase-locked sine wave ready to act as a carrier or modulator in downstream FM, phase distortion, or waveshaping effects.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Left / Right)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; automatically falls back to internal zero-crossing tracker if <= 0)
+- out1 / out2: Stereo Filtered & Boosted Output
+- out3 / out4: Pure Normalized Unit-Sine Output (for patching into downstream modulation inlets)
+
+PARAMETERS (4)
+
+1. harmonic
+   - Range: 1.0 to 8.0 (Harmonic Ratio / Partial Number)
+   - Taper: Linear in harmonic ratio (1.0 = fundamental f0, 2.0 = octave, 3.0 = twelfth, etc.; fractional values tune to inharmonic ghost-note zones).
+   - Function: Multiplies the conditioned input fundamental frequency to select which partial of the tuba is isolated.
+
+2. boost_db
+   - Range: 0.0 to 48.0 dB
+   - Taper: Logarithmic amplitude (dB-linear, computed as 10^(dB/40) for peaking EQ gain with automatic headroom compensation).
+   - Function: Boosts the target harmonic using a resonant bell filter before bandpass isolation, elevating the chosen partial far above the surrounding brass spectrum.
+
+3. focus
+   - Range: 0.0 to 1.0 (maps to Q from 1.0 to 28.0)
+   - Taper: Exponential (x^1.4 power curve into base-28 exponential Q) so low-to-mid values offer smooth musical formant tightening while the top 30% locks onto a single harmonic with surgical precision.
+   - Function: Simultaneously increases the Q of the peaking filter and crossfades into the cascaded 2-stage SVF bandpass filter.
+
+4. norm_amount
+   - Range: 0.0 to 1.0 (0% to 100% Dynamic Levelling)
+   - Taper: Slight power curve (x^1.2) for natural dynamic feel.
+   - Function: Blends between the natural breath envelope of the isolated harmonic (0.0) and a silence-gated, sample-accurate amplitude-normalized unit sine wave (1.0).

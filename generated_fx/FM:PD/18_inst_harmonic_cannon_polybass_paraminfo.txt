@@ -1,0 +1,57 @@
+================================================================================
+18_inst_harmonic_cannon_polybass — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the Pitch-Tracked Multiband Adaptive Processor (Approach 6 from "Novel Distortion Approaches for Live Tuba") combined with Airwindows Focus/BassDrive philosophy. Because the tuba's fundamental f0 is known, the crossover frequencies slide dynamically with the played pitch at 1.5 * f0 and 3.5 * f0 so each band always contains a fixed set of harmonics across the entire compass of the horn:
+- Band 1 (< 1.5 * f0, Fundamental): Kept pristine and reinforced with a zero-crossing-locked sub-octave wave.
+- Band 2 (1.5 * f0 to 3.5 * f0, 2nd & 3rd Harmonics): Processed through ICASSP 2009 Coefficient-Modulated Allpass Phase Distortion and Chebyshev T2/T3/T5 polynomial waveshaping.
+- Band 3 (> 3.5 * f0, Upper Brass Overtones): Routed into a stereo pitch-tracked metallic comb resonator, then sculpted by dual vowel formant filters (F1 & F2).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Tuba Audio Input (Left / Right)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
+- in4: 1-Bar Audio-Rate Phasor [0..1] (syncs multiband comb and vowel formant motion; internal 0.5 Hz fallback if unpatched)
+- out1 / out2: Stereo Multiband Harmonic Cannon Output
+
+PARAMETERS (8)
+
+1. joy_x_vowel_tilt (Joystick X-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Exponential formant frequency mapping (F1 sweeps 240–910 Hz; F2 counter-sweeps 750–2,625 Hz; Band 3 comb shifts +/- 0.8 octaves).
+   - Function: Morphs the mid/high harmonic bands across vocal dubstep formants ("oo" -> "ah" -> "ee"/"yoink") while leaving Band 1's sub-fundamental untouched.
+
+2. joy_y_multidrive (Joystick Y-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Linear-to-exponential drive scaling across Band 2 Chebyshev saturation, Allpass PD depth, Band 3 comb excitation, and F2 formant brightness.
+   - Function: Acts as a master "aggression / bloom" axis for the upper two harmonic bands while Band 1 maintains rock-solid low-end weight.
+
+3. sub_foundation
+   - Range: 0.0 to 1.0 (0% to 100% Locked Sub-Octave Injection in Band 1)
+   - Taper: Power curve (x^1.2).
+   - Function: Controls the level of the f0-locked sub-octave generator summed with the isolated fundamental in Band 1.
+
+4. mid_allpass_pd
+   - Range: 0.0 to 1.0 (0% to 100% Coefficient-Modulated Allpass Phase Distortion on Band 2)
+   - Taper: Linear modulation of the ICASSP 2009 tanh-smoothed sawtooth allpass coefficient m(t) in [0.15, 0.93].
+   - Function: Imparts sawtooth phase distortion specifically to the 2nd and 3rd harmonics of the tuba.
+
+5. high_comb_metal
+   - Range: 0.0 to 1.0 (maps to Band 3 comb feedback from 0.0 to 0.88)
+   - Taper: Linear feedback scaling with internal tanh loop saturation.
+   - Function: Controls the metallic pipe resonance applied exclusively to harmonics above 3.5 * f0.
+
+6. motion_subdiv
+   - Range: 1 to 16 cycles per bar (Quantized in 16 integer steps)
+   - Taper: Stepped integer multiplier of the 1-bar phasor.
+   - Function: Sets the rhythmic subdivision rate of the synced formant and comb modulation LFO.
+
+7. motion_depth
+   - Range: 0.0 to 1.0
+   - Taper: Asymmetric triangle LFO (duty = 0.30) modulating both the Band 3 comb pitch (up to +1 octave) and the F1/F2 vowel formant cutoffs.
+   - Function: Controls the depth of the 1-bar synced rhythmic animation.
+
+8. stereo_spread
+   - Range: 0.0 to 1.0 (maps to +/- 25% L/R comb delay offset and +/- 10% vowel formant offset)
+   - Taper: Linear stereo divergence (Band 1 fundamental and sub-octave remain 100% mono-centered for club/PA sub compatibility).
+   - Function: Widens the stereo image of the upper two harmonic bands while keeping the sub-bass mono.

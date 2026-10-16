@@ -1,0 +1,57 @@
+================================================================================
+13_inst_riddim_wobble_titan — Parameter Information
+================================================================================
+
+OVERVIEW
+A complete live tuba-to-dubstep/riddim synthesizer instrument designed for thumb-joystick performance. Internally isolates the tuba's fundamental via a pitch-tracked peaking/SVF front end, normalizes it into a phase-locked modulator, drives an Adaptive FM + Sub-Octave oscillator core through an ADAA1 wavefolder and an 8-stage Allpass Phase Disperser, and sculpts the result through a 1-bar-phasor-synced dual state-variable wobble filter.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Tuba Audio Input (Left / Right)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
+- in4: 1-Bar Audio-Rate Phasor [0..1] (syncs the wobble rhythm; falls back to internal 0.5 Hz LFO if unpatched)
+- out1 / out2: Stereo Riddim Wobble Instrument Output
+
+PARAMETERS (8)
+
+1. joy_x_filtsweep (Joystick X-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Exponential octave mapping (70 * 90^x Hz, spanning 70 Hz sub-growl to 6,300 Hz open roar).
+   - Function: Manual offset/override on the dual-SVF wobble filter cutoff frequency for expressive thumb-controlled filter sweeps and fills.
+
+2. joy_y_fm_scream (Joystick Y-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Power curve (x^1.3) on FM index (1.2 to 6.7), ADAA wavefolder drive, bandpass formant emphasis, and upper harmonic carrier ratio steps (jumping to 2x and 3x harmonics above +0.25).
+   - Function: Pushing the joystick forward transforms a deep chesty sub-wobble into a screaming tearout/riddim harmonic screech ("yoink").
+
+3. wobble_rate
+   - Range: 1 to 16 cycles per bar (Quantized in 16 integer steps)
+   - Taper: Stepped integer multiplier of the 1-bar phasor (1 = whole bar, 2 = half, 3 = half-triplet, 4 = quarter, 6 = quarter-triplet, 8 = eighth, 12 = eighth-triplet, 16 = sixteenth).
+   - Function: Sets the rhythmic subdivision of the synced wobble LFO.
+
+4. wobble_shape
+   - Range: 0.0 to 1.0
+   - Taper: Three-shape continuous morph:
+     * 0.00: Smooth raised-cosine dubstep wobble
+     * 0.50: Asymmetric fast-attack / curved-decay riddim whip (duty = 0.20)
+     * 1.00: Gated square-ramp riddim chop (hard silence gap between chops)
+   - Function: Shapes the contour of each wobble cycle.
+
+5. sine_boost_db
+   - Range: 0.0 to 36.0 dB
+   - Taper: Logarithmic dB scale (10^(dB/40)) with automatic gain compensation.
+   - Function: Sets the peaking EQ boost at f0 before the modulator normalizer. Higher values yield cleaner, more synthetic FM sidebands; lower values let raw brass overtones grit up the FM carrier.
+
+6. sub_oct_level
+   - Range: 0.0 to 1.0 (0% to 100% Sub-Octave Foundation)
+   - Taper: Linear amplitude (includes a 1st + 3rd harmonic sub-waveform for chest-hitting weight on PA systems).
+   - Function: Blends in a pitch-locked f0/2 sub-octave oscillator before the wobble filter.
+
+7. disperse_amt
+   - Range: 0.0 to 1.0 (0% Dry to 100% 8-Stage Allpass Dispersion)
+   - Taper: Linear crossfade.
+   - Function: Routes the pre-filter distorted bass through an 8-stage allpass cascade tuned to 2.5 * f0, smearing each wobble transient into a liquid laser punch.
+
+8. filter_res
+   - Range: 0.0 to 1.0 (maps to SVF resonance Q from 0.55 to 0.95)
+   - Taper: Power curve (x^1.2).
+   - Function: Controls the vocal resonance peak of the dual-stage morphing wobble filter.

@@ -1,0 +1,45 @@
+================================================================================
+EFFECT: limiter_allpass_phase_antiklip
+SOURCE: Fontana, Bernardini, Pasin & D'Angelo (DAFx-2026, "A Clipping Prevention
+        Method for All-Pass Digital Filters with Time-Varying Coefficients",
+        Sections 1 & 2, Eqs. 1-7, Algorithm 1; citing Parker et al. & Schlecht)
+TYPE:   Stereo Dispersive All-Pass Peak Eraser & Algebraically Coefficient-Bounded
+        Anti-Clipping Limiter
+================================================================================
+
+OVERVIEW
+--------
+Combines local all-pass phase dispersion around transients (which redistributes
+spectral phase to smear sharp crest factors by up to 5 dB, Sec. 1) with Fontana
+et al.'s (DAFx-2026) exact algebraic clipping-prevention bound on time-varying
+all-pass coefficient increments Delta_c(n) (Eqs. 4-7, Algorithm 1). When a sharp
+transient drives the envelope-modulated all-pass pole frequency, Algorithm 1
+adaptively constrains Delta_c(n) sample-by-sample so the output never exceeds the
+prescribed magnitude threshold M, creating a liquid, laser-like phase-dispersed
+peak limiter.
+
+PARAMETERS (7 total)
+--------------------
+1. drive_db        [0.0 .. 20.0 dB, default: 6.0]
+   Input gain driving into the hyperbolic pre-ceiling and dispersive all-pass cascade.
+
+2. ceiling_mag     [0.10 .. 1.00, default: 0.92]
+   Prescribed linear magnitude ceiling M (Fontana Eq. 4) strictly enforced by
+   the coefficient-increment bounds.
+
+3. ap_freq_hz      [60.0 .. 2500.0 Hz, default: 340.0]
+   Base break frequency of the first dispersive all-pass stage.
+
+4. env_mod_depth   [0.0 .. 1.0, default: 0.70]
+   Depth of transient-envelope modulation sweeping the all-pass pole frequencies
+   upward during signal peaks.
+
+5. mod_slew_ms     [0.5 .. 50.0 ms, default: 6.0]
+   Release time constant of the transient envelope driving the all-pass coefficients.
+
+6. stage2_spread   [0.0 .. 1.0, default: 0.55]
+   Frequency ratio offset of the second cascaded anti-clipping all-pass section
+   for broadband transient dispersion.
+
+7. mix             [0.0 .. 1.0, default: 1.0]
+   Dry/wet blend (blending < 1.0 creates dynamic phase-cancellation notch limiting).

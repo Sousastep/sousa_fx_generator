@@ -1,0 +1,159 @@
+// ============================================================================
+// chorus_bbd_blep_clock_matrix.txt
+// Standalone Stereo Chorus Effect: Asynchronous Clock-Stepped BBD Chorus with PolyBLEP
+// Synthesizes 2 DAFx BBD Clock & Aliasing Papers:
+//   1. Leonardo Gabrielli, Stefano D'Angelo & Stefano Squartini (DAFx-25, Paper 29):
+//      "Antialiasing in BBD Chips Using BLEP" (Sections 2.1, 3 & 4.3, Alg. 1, Eq. 1-2).
+//      Distinguishes authentic BBD-Generated Aliasing (BGA, the musical sample-and-hold
+//      foldback images at k * F_CLK +/- f0 when F_CLK drops into the audio band) from
+//      harsh digital Simulation-Generated Aliasing (SGA) by clocking a discrete bucket
+//      chain at F_CLK(t) = F_CLK0 * (1 + m*LFO) and applying a continuous-time PolyBLEP
+//      residual across every sample-and-hold output step!
+//   2. Jaromir Macak (DAFx-16, Paper 59, Sections 2.1 & 2.2, Eq. 8-11, Fig. 2-3):
+//      Models the nonlinear RC astable comparator clock generator
+//      T_clock = -2 * tau * ln((U_Max - U_THD(t)) / U_Max) that warps a lowpass-filtered
+//      triangle LFO into the iconic asymmetric sweep of vintage Electro-Harmonix BBDs.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Envelope Modulator [0..1] (modulates astable threshold U_THD on attacks)
+//   in4: Optional 1-Bar Phasor [0..1] (syncs LFO when patched)
+// Outlets:
+//   out1: Left PolyBLEP Clock-Stepped BBD Chorus Output
+//   out2: Right PolyBLEP Clock-Stepped BBD Chorus Output
+
+@param({ min: 0.08, max: 5.0 }) lfo_rate_hz = 0.45;
+@param({ min: 0.0, max: 1.0 }) sweep_depth = 0.55;
+@param({ min: 4.0, max: 48.0 }) bbd_clock_khz = 18.0;
+@param({ min: 0.0, max: 1.0 }) astable_curve = 0.55;
+@param({ min: -0.85, max: 0.85 }) matrix_feedback = 0.30;
+@param({ min: 1500.0, max: 18000.0 }) recon_filter_hz = 7500.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.50;
+
+// Fixed-bucket circular queues (N/2 = 256 active charge buckets per channel, DAFx-25 Alg. 1)
+@state bucketL = new FixedSampleArray(512);
+@state bucketR = new FixedSampleArray(512);
+@state rIdxL: Int = 0;
+@state rIdxR: Int = 0;
+
+// BBD asynchronous clock phase accumulators t in [0, 1) & sample-and-hold states (Alg. 1)
+@state clkPhL = 0.0; @state clkPhR = 0.0;
+@state prevInL = 0.0; @state prevInR = 0.0;
+@state holdCurrL = 0.0; @state holdPrevL = 0.0;
+@state holdCurrR = 0.0; @state holdPrevR = 0.0;
+@state lastStepFracL = 1.0; @state lastStepFracR = 1.0;
+
+// Feedback & Reconstruction filter states
+@state fbSampleL = 0.0; @state fbSampleR = 0.0;
+@state lfoFilterL = new onepole(); @state lfoFilterR = new onepole();
+@state recLp1L = new onepole(); @state recLp2L = new onepole();
+@state recLp1R = new onepole(); @state recLp2R = new onepole();
+@state lfoPhasor = new phasor();
+@state prevBarIn = 0.0;
+
+// PolyBLEP residual for smoothing asynchronous BBD sample-and-hold steps (DAFx-25 Sec 3, Eq. 1)
+function polyBlepStep(tFrac: number, dt: number): number {
+	if (tFrac < dt && dt > 0.0001) {
+		let u = tFrac / dt;
+		return u + u - u * u - 1.0;
+	}
+	return 0.0;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let envMod = clamp(in3, 0.0, 1.0);
+let barIn = in4;
+
+// --- 1. LFO & Macak Nonlinear Astable RC Clock Generator (DAFx-16 Sec 2.1-2.2, Eq. 7-11) ---
+let rate = clamp(lfo_rate_hz, 0.08, 5.0);
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+
+let ph = barActive ? wrap(barIn, 0.0, 1.0) : lfoPhasor.next(rate);
+let rawTriL = 2.0 * triangle(ph, 0.5) - 1.0;
+let rawTriR = 2.0 * triangle(wrap(ph + 0.5, 0.0, 1.0), 0.5) - 1.0;
+
+// IC1 Lowpass filter rounding the triangle LFO corners (DAFx-16 Eq. 7)
+let smoothTriL = lfoFilterL.next(rawTriL, maximum(rate * 3.5, 1.0));
+let smoothTriR = lfoFilterR.next(rawTriR, maximum(rate * 3.5, 1.0));
+
+// Macak Eq. 9: T_clock = -2 * tau * ln((U_Max - U_THD) / U_Max)
+// As U_THD approaches U_Max, charging time lengthens logarithmically!
+let depth = clamp(sweep_depth, 0.0, 1.0);
+let curve = clamp(astable_curve, 0.0, 1.0);
+let uThdL = clamp(0.5 + 0.42 * depth * (smoothTriL + 0.35 * envMod), 0.06, 0.94);
+let uThdR = clamp(0.5 + 0.42 * depth * (smoothTriR - 0.35 * envMod), 0.06, 0.94);
+
+let logPeriodL = -log(1.0 - uThdL) / log(2.0); // Normalized to 1.0 at uThd = 0.5
+let logPeriodR = -log(1.0 - uThdR) / log(2.0);
+let linPeriodL = 1.0 + 0.75 * depth * smoothTriL;
+let linPeriodR = 1.0 + 0.75 * depth * smoothTriR;
+
+let periodMultL = clamp(linearinterp(curve, linPeriodL, logPeriodL), 0.25, 3.5);
+let periodMultR = clamp(linearinterp(curve, linPeriodR, logPeriodR), 0.25, 3.5);
+
+let baseClkHz = clamp(bbd_clock_khz, 4.0, 48.0) * 1000.0;
+let fClkL = clamp(baseClkHz / periodMultL, 2500.0, sr * 1.8);
+let fClkR = clamp(baseClkHz / periodMultR, 2500.0, sr * 1.8);
+
+// --- 2. Discrete-Time BBD Clocking & PolyBLEP Step Correction (DAFx-25 Alg. 1 & Sec 3) ---
+let fb = clamp(matrix_feedback, -0.85, 0.85);
+let uInL = tanh(xL + fb * fbSampleL);
+let uInR = tanh(xR + fb * fbSampleR);
+
+// Left BBD Channel (N/2 = 256 active buckets -> delay = 256 / F_CLK seconds)
+let dtL = fClkL / sr;
+clkPhL += dtL;
+let steppedL = 0.0;
+while (clkPhL >= 1.0) {
+	// Linear interpolation of input at exact clock firing instant d (Alg. 1 lines 9-10)
+	let dL = clamp(1.0 - (clkPhL - 1.0) / maximum(dtL, 0.0001), 0.0, 1.0);
+	let sampInL = prevInL + dL * (uInL - prevInL);
+	holdPrevL = holdCurrL;
+	holdCurrL = bucketL[rIdxL];
+	bucketL[rIdxL] = sampInL;
+	rIdxL = (rIdxL + 1) & 255;
+	clkPhL -= 1.0;
+	lastStepFracL = clkPhL;
+	steppedL = 1.0;
+}
+prevInL = uInL;
+
+// Apply PolyBLEP residual across the sample-and-hold step (DAFx-25 Eq. 1, Fig. 1)
+let blepCorrL = (steppedL > 0.5) ? ((holdCurrL - holdPrevL) * polyBlepStep(lastStepFracL, dtL)) : 0.0;
+let rawBbdOutL = holdCurrL - blepCorrL;
+
+// Right BBD Channel
+let dtR = fClkR / sr;
+clkPhR += dtR;
+let steppedR = 0.0;
+while (clkPhR >= 1.0) {
+	let dR = clamp(1.0 - (clkPhR - 1.0) / maximum(dtR, 0.0001), 0.0, 1.0);
+	let sampInR = prevInR + dR * (uInR - prevInR);
+	holdPrevR = holdCurrR;
+	holdCurrR = bucketR[rIdxR];
+	bucketR[rIdxR] = sampInR;
+	rIdxR = (rIdxR + 1) & 255;
+	clkPhR -= 1.0;
+	lastStepFracR = clkPhR;
+	steppedR = 1.0;
+}
+prevInR = uInR;
+
+let blepCorrR = (steppedR > 0.5) ? ((holdCurrR - holdPrevR) * polyBlepStep(lastStepFracR, dtR)) : 0.0;
+let rawBbdOutR = holdCurrR - blepCorrR;
+
+// --- 3. Post-BBD Reconstruction Filter & Matrix Feedback ---
+let recCut = clamp(recon_filter_hz, 1500.0, 18000.0);
+let wetL = recLp2L.next(recLp1L.next(rawBbdOutL, recCut), recCut);
+let wetR = recLp2R.next(recLp1R.next(rawBbdOutR, recCut), recCut);
+
+fbSampleL = wetL;
+fbSampleR = wetR;
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = cos(mix * 0.5 * pi) * xL + sin(mix * 0.5 * pi) * wetL;
+out2 = cos(mix * 0.5 * pi) * xR + sin(mix * 0.5 * pi) * wetR;

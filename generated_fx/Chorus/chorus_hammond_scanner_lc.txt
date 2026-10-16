@@ -1,0 +1,147 @@
+// ============================================================================
+// chorus_hammond_scanner_lc.txt
+// Standalone Stereo Chorus Effect: Hammond B-3 18-Stage LC Ladder & 9-Tap
+// "There-and-Back-Again" Capacitive Scanner Vibrato/Chorus (V1-V3 / C1-C3)
+// Implements Kurt James Werner, W. Ross Dunkel & Francois G. Germain (DAFx-16, Paper 54):
+// "A Computational Model of the Hammond Organ Vibrato/Chorus using Wave Digital Filters"
+// (Sections 2.1, 2.2, 3 & Table 1-2, Fig. 1-3).
+// Models the complete Hammond Organ Vibrato/Chorus line box and electromechanical scanner:
+//   1. 18 Dispersive Lowpass-Allpass Ladder Stages (v_1 .. v_19) with the progressive
+//      6-stage input voltage-divider attenuation (R1+..R6+, R1-..R6-, Table 1) and
+//      inductor-capacitor phase dispersion + passband ripple.
+//   2. Exact Table 2 Tap Wiring Matrix for Depth Settings V1/C1, V2/C2, and V3/C3
+//      connecting ladder nodes v_1..v_19 to the 9 scanner terminals t_1..t_9:
+//        - V1/C1: [v1, v2, v3, v4, v5, v6, v7, v8, v9]
+//        - V2/C2: [v1, v2, v3, v5, v7, v9, v11, v12, v13]
+//        - V3/C3: [v1, v2, v4, v7, v10, v13, v16, v18, v19]
+//   3. 16-Stack Capacitive Rotor Scanner (Section 3, Fig. 3): Scans linearly "there-and-
+//      back-again" from t_1 -> t_9 -> t_1 using overlapping trapezoidal plate capacitances
+//      v_out = eta * v_alpha + (1 - eta) * v_beta, with stereo rotor phase offset!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Envelope Modulator [0..1] (modulates scanner depth V1->V3 dynamically)
+//   in4: Optional 1-Bar Phasor [0..1] (locks scanner motor rotation when patched)
+// Outlets:
+//   out1: Left Hammond Scanner Chorus/Vibrato Output
+//   out2: Right Hammond Scanner Chorus/Vibrato Output
+
+@param({ min: 1.0, max: 3.0 }) scanner_depth_c1_c3 = 2.5;
+@param({ min: 0.5, max: 12.0 }) scanner_rate_hz = 6.12;
+@param({ min: 1800.0, max: 12000.0 }) lc_cutoff_hz = 4800.0;
+@param({ min: 0.0, max: 0.75 }) lc_passband_ripple = 0.35;
+@param({ min: 0.0, max: 1.0 }) stereo_rotor_spread = 0.50;
+@param({ min: 0.0, max: 1.0 }) chorus_to_vibrato = 0.0;
+
+// 18-Stage Dispersive LC Ladder State Arrays (Left & Right channels, nodes v_1..v_19)
+@state ladApXL = new FixedSampleArray(18); @state ladApYL = new FixedSampleArray(18);
+@state ladLpL  = new FixedSampleArray(18);
+@state nodeVL  = new FixedSampleArray(19);
+
+@state ladApXR = new FixedSampleArray(18); @state ladApYR = new FixedSampleArray(18);
+@state ladLpR  = new FixedSampleArray(18);
+@state nodeVR  = new FixedSampleArray(19);
+
+// Scanner synchronous motor phasor (physical Hammond motor = 6.12 Hz, Sec 3)
+@state motorPhasor = new phasor();
+@state prevBarIn = 0.0;
+
+// Evaluate Table 2 Tap Selection & Fig. 3 "There-and-Back-Again" Capacitive Scanner
+function evalScanner(nodes: FixedSampleArray, rotorPhase: number, depthSetting: number): number {
+	// 16-segment "there-and-back-again" scan across terminals t_1 (idx 0) .. t_9 (idx 8)
+	// Angle 0 -> pi scans t_1..t_9; angle pi -> 2*pi scans t_9..t_1 (Fig. 3)
+	let triScan = triangle(wrap(rotorPhase, 0.0, 1.0), 0.5) * 8.0; // in [0.0 .. 8.0]
+	let termIdx: Int = clamp(floor(triScan), 0, 7);
+	let eta = triScan - termIdx; // Capacitive voltage divider overlap C_alpha / (C_alpha + C_beta)
+
+	// Table 2 tap indices (0-based for v_1..v_19) for V1/C1, V2/C2, V3/C3:
+	// V1/C1: 0, 1, 2, 3, 4, 5, 6, 7, 8
+	// V2/C2: 0, 1, 2, 4, 6, 8, 10, 11, 12
+	// V3/C3: 0, 1, 3, 6, 9, 12, 15, 17, 18
+	let v1Tap0: Int = termIdx;
+	let v1Tap1: Int = termIdx + 1;
+
+	let v2Tap0: Int = (termIdx <= 2) ? termIdx : ((termIdx <= 6) ? (2 + (termIdx - 2) * 2) : (termIdx + 4));
+	let nextT: Int = termIdx + 1;
+	let v2Tap1: Int = (nextT <= 2) ? nextT : ((nextT <= 6) ? (2 + (nextT - 2) * 2) : (nextT + 4));
+
+	let v3Tap0: Int = (termIdx <= 1) ? termIdx : ((termIdx == 2) ? 3 : ((termIdx <= 6) ? (3 + (termIdx - 2) * 3) : (termIdx + 10)));
+	let v3Tap1: Int = (nextT <= 1) ? nextT : ((nextT == 2) ? 3 : ((nextT <= 6) ? (3 + (nextT - 2) * 3) : (nextT + 10)));
+
+	let outV1 = (1.0 - eta) * nodes[v1Tap0] + eta * nodes[v1Tap1];
+	let outV2 = (1.0 - eta) * nodes[v2Tap0] + eta * nodes[v2Tap1];
+	let outV3 = (1.0 - eta) * nodes[v3Tap0] + eta * nodes[v3Tap1];
+
+	let d = clamp(depthSetting, 1.0, 3.0);
+	return (d <= 2.0) ? linearinterp(d - 1.0, outV1, outV2) : linearinterp(d - 2.0, outV2, outV3);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let envMod = clamp(in3, 0.0, 1.0);
+let barIn = in4;
+
+// --- 1. Propagate Signal Through 18-Stage Dispersive LC Line Box (Sec 2.1, Table 1) ---
+let fc = clamp(lc_cutoff_hz, 1800.0, 12000.0);
+let ripple = clamp(lc_passband_ripple, 0.0, 0.75);
+
+// Dispersive allpass coefficient + lowpass cutoff per LC section (L = 500 mH, C = 0.004 uF)
+let w0 = 2.0 * pi * fc / sr;
+let apG = clamp((1.0 - sin(w0 * 0.35)) / cos(w0 * 0.35), -0.85, 0.85);
+let lpAlpha = clamp(1.0 - exp(-w0 * 1.35), 0.05, 0.99);
+
+nodeVL[0] = xL;
+nodeVR[0] = xR;
+let curL = xL;
+let curR = xR;
+
+for (let k: Int = 0; k < 18; k++) {
+	// Backward-wave reflection coupling from next node (non-unidirectional LC ladder ripple, Sec 2)
+	let nextNodeL = (k < 17) ? nodeVL[k + 1] : 0.0;
+	let nextNodeR = (k < 17) ? nodeVR[k + 1] : 0.0;
+	let inStageL = curL + ripple * 0.06 * (nextNodeL - curL);
+	let inStageR = curR + ripple * 0.06 * (nextNodeR - curR);
+
+	// Dispersive phase delay stage
+	let apOutL = apG * inStageL + ladApXL[k] - apG * ladApYL[k];
+	ladApXL[k] = inStageL; ladApYL[k] = apOutL;
+
+	let apOutR = apG * inStageR + ladApXR[k] - apG * ladApYR[k];
+	ladApXR[k] = inStageR; ladApYR[k] = apOutR;
+
+	// Inductor-capacitor lowpass roll-off per stage
+	ladLpL[k] += (apOutL - ladLpL[k]) * lpAlpha;
+	ladLpR[k] += (apOutR - ladLpR[k]) * lpAlpha;
+
+	// First 6 stages (x in [1..6]) include subtle Rk+/Rk- voltage divider attenuation (Table 1)
+	let atten = (k < 6) ? 0.988 : 0.996;
+	curL = ladLpL[k] * atten;
+	curR = ladLpR[k] * atten;
+
+	nodeVL[k + 1] = curL;
+	nodeVR[k + 1] = curR;
+}
+
+// --- 2. Electromechanical Capacitive Rotor Scanner (Sec 2.2 & 3, Fig. 3, Table 2) ---
+let rate = clamp(scanner_rate_hz, 0.5, 12.0);
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+
+let phL = barActive ? wrap(barIn * 4.0, 0.0, 1.0) : motorPhasor.next(rate);
+let spread = clamp(stereo_rotor_spread, 0.0, 1.0) * 0.5;
+let phR = wrap(phL + spread, 0.0, 1.0);
+
+let effDepth = clamp(scanner_depth_c1_c3 + envMod * 1.2, 1.0, 3.0);
+let scanL = evalScanner(nodeVL, phL, effDepth);
+let scanR = evalScanner(nodeVR, phR, effDepth);
+
+// --- 3. Chorus (C1/C2/C3) vs. Vibrato (V1/V2/V3) Switch (Fig. 1, Sec 2.1) ---
+// In Chorus mode (switch open), dry signal passes through Rc = 22 kOhm and mixes with scanner
+let vibBlend = clamp(chorus_to_vibrato, 0.0, 1.0);
+let chorusL = 0.58 * xL + 0.58 * scanL;
+let chorusR = 0.58 * xR + 0.58 * scanR;
+
+out1 = linearinterp(vibBlend, chorusL, scanL);
+out2 = linearinterp(vibBlend, chorusR, scanR);

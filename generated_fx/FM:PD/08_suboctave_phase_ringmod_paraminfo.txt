@@ -1,0 +1,36 @@
+================================================================================
+08_suboctave_phase_ringmod — Parameter Information
+================================================================================
+
+OVERVIEW
+Combines zero-drift Analytic Phase-Divided Sub-Octave Ring Modulation (Approach 3b & 5 from "Novel Distortion Approaches for Live Tuba") with Feedback Amplitude Modulation (Kleimola et al., 2011). Instead of running a separate f0/2 oscillator that slowly drifts and beats against the tuba, this effect unwraps the tuba's analytic phase modulo 6 cycles to compute cos(theta/2) and cos(theta/3) directly from the player's waveform. Every lip bend and vibrato stays 100% phase-locked, while Feedback AM (y[n] = x[n]*(1 + k*y[n-1])) injects sawtooth-like upper harmonic bite.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Left / Right)
+- in3: Optional Tracked Pitch in Hz (if connected > 20 Hz, tunes the pre-Hilbert fundamental lowpass to 1.35 * f0 for rock-solid wrap counting)
+- out1 / out2: Stereo Sub-Octave Ring-Mod / Feedback AM Output
+
+PARAMETERS (4)
+
+1. sub_harmonic
+   - Range: 0.0 to 1.0
+   - Taper: Three-zone linear morph:
+     * 0.00: Pure phase-locked Sub-Octave modulator cos(theta / 2)
+     * 0.50: Phase-locked Sub-Twelfth modulator cos(theta / 3)
+     * 1.00: Dual Sub-Octave + Locked Octave-Up cos(2*theta) modulator (stereo inverted on Right for wide reese width)
+   - Function: Selects the harmonic division ratio of the phase-locked modulator.
+
+2. rm_depth
+   - Range: 0.0 to 1.0 (0% Clean -> 50% Amplitude Modulation -> 100% Full Ring Modulation)
+   - Taper: Power curve (x^1.2).
+   - Function: Sweeps the modulation law y = x * ((1 - d) + d * m(t)) continuously from unmodulated carrier (0.0), through 100% AM where carrier + sub-sidebands coexist (0.5), to pure balanced Ring Modulation (1.0).
+
+3. fb_am
+   - Range: 0.0 to 0.92 (Feedback Amplitude Modulation Coefficient k)
+   - Taper: Power curve (x^1.4) for subtle warmth in the lower half and aggressive sawtooth brightening near 0.92.
+   - Function: Feeds the previous output sample y[n-1] back into the amplitude modulator (Kleimola et al. 2011), transforming rounded brass partials into a bright, buzzy harmonic slope.
+
+4. mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet)
+   - Taper: Linear crossfade (phase-locked summing prevents phase cancellation).
+   - Function: Balances the dry stereo tuba with the DC-blocked sub-octave ring-modulated signal.

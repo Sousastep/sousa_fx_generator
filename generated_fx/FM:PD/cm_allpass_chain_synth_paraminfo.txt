@@ -1,0 +1,44 @@
+================================================================================
+cm_allpass_chain_synth — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements Coefficient Modulation (CM) Synthesis using a Cascaded First-Order Allpass Filter Chain from Kleimola, Pekonen, Penttinen, Välimäki, and Abel (DAFx-09 Paper 66, Sections 2.1, 2.2, 2.5 & 4.3, Eq. 3, 11–17). Routes the stereo tuba through up to 48 cascaded first-order allpass stages per channel whose coefficients are modulated at audio rate using the transient-free difference equation y(n) = x(n-1) - m(n)*x(n) + m(n)*y(n-1). Stage 1 scatters each tuba partial into a Feedback-AM sideband cluster, while cascading N stages acts as a dispersive variable-length delay line that applies non-sinusoidal Complex FM (Eq. 17) with a prominent upper-spectrum resonance peak (Fig. 3a).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba Carrier)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional External Audio-Rate Modulator [-1..1] (e.g., patch out3 of 01_harmonic_isolator here for self-modulated CM; if unpatched, uses internal pitch-tracked cosine modulator)
+- out1 / out2: Stereo CM Allpass Chain Output
+
+PARAMETERS (6)
+
+1. chain_stages
+   - Range: 1.0 to 48.0 Allpass Stages per Channel (Default: 24.0)
+   - Taper: Continuous fractional stage interpolation.
+   - Function: Controls the cascade length N (DAFx-09 Eq. 14 & Fig. 4). N = 1 produces pure Feedback AM; increasing N widens the FM frequency deviation and spectral bandwidth while acting as a natural anti-aliasing bandwidth ceiling.
+
+2. mod_index_m
+   - Range: 0.00 to 0.98 (Coefficient Modulation Index M, Default: 0.82)
+   - Taper: Slight concave curve (x^0.85) for responsive high-index resonance control.
+   - Function: Scales the audio-rate allpass coefficient excursion [-M, +M]. Acts like a subtractive lowpass filter cutoff at moderate values (0.3–0.7) and creates a screaming upper-frequency resonant formant edge as M approaches 0.95+ (DAFx-09 Fig. 3a).
+
+3. cm_ratio
+   - Range: 0.25 to 4.00 (Carrier-to-Modulator Ratio f_0 / f_m, Default: 1.00)
+   - Taper: Linear ratio (1.0 = pseudo-sawtooth spectrum; 0.5 = 1:2 pseudo-square/triangle spectrum, DAFx-09 Fig. 10; 2.0 = sub-octave sideband density).
+   - Function: Sets the pitch-tracked modulator frequency fm = f0 / cm_ratio.
+
+4. detune_hz
+   - Range: -15.0 to +15.0 Hz (Default: 0.0 Hz)
+   - Taper: Linear bipolar frequency offset in Hz (splits Left by -0.5*detune and Right by +0.5*detune).
+   - Function: Introduces the beating harmonic animation between f0 and fm shown in DAFx-09 Fig. 11 for thick stereo Reese-bass movement.
+
+5. mod_phase_spread
+   - Range: 0.0 to 1.0 (maps to 0 to 180 degrees Right-channel modulator phase offset theta_m)
+   - Taper: Linear phase offset.
+   - Function: Offsets the modulator phase between Left and Right channels (DAFx-09 Table 1), altering partial amplitudes for wide stereo imaging.
+
+6. mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet CM Allpass Chain)
+   - Taper: Linear crossfade.
+   - Function: Blends the dry tuba with the coefficient-modulated allpass cascade.

@@ -1,0 +1,49 @@
+================================================================================
+EFFECT: comp_ldr_microdynamics_shaper
+SOURCE: Nercessian, McClellan & Lukin (DAFx-2022, "A Direct Microdynamics
+        Adjusting Processor with Matching Paradigm and Differentiable
+        Implementation", Section 3, Eqs. 7-12, Figs. 2-3)
+TYPE:   Stereo Threshold-Free Relative-Level (LDR) Microdynamics Compressor,
+        Upward Sustainer & Transient Punch Expander
+================================================================================
+
+OVERVIEW
+--------
+Implements the iZotope Loudness Dynamic Range (LDR) relative-level processor
+(DAFx-2022). By defining signal strength as the ratio L[n] = a_short[n] / a_long[n]
+between a fast asymmetric ballistic envelope and a slow macrodynamic envelope,
+the processor has NO threshold dead-zone and is completely invariant to input
+gain or verse/chorus macrodynamic changes. Applying g[n] = L[n]^((m-1)/p) (Eq. 12)
+directly compresses microdynamics and pulls up room/sustain when m < 1.0, or
+expands transient punch and articulation when m > 1.0.
+
+PARAMETERS (8 total)
+--------------------
+1. micro_amount    [0.0 .. 3.5, default: 0.35]
+   Direct microdynamics scaling exponent m (Eq. 11-12):
+   - 0.0 .. 0.99: Microdynamic compression & upward sustain inflation (0.0 = flat sustain).
+   - 1.0:         Unity bypass.
+   - 1.01 .. 3.5: Microdynamic expansion & snappy transient punch enhancement.
+
+2. attack_ms       [0.2 .. 80.0 ms, default: 5.0]
+   Short-term envelope rise time constant tau_up (Eq. 9).
+
+3. release_ms      [5.0 .. 500.0 ms, default: 85.0]
+   Short-term envelope fall time constant tau_down (Eq. 9).
+
+4. macro_scale     [2.0 .. 40.0, default: 12.0]
+   Long-term macrodynamic window multiplier s (tau_long = s * max(tau_up, tau_down),
+   Eq. 10) separating microdynamics from phrase-level macrodynamics.
+
+5. max_boost_db    [15.0 .. 42.0 dB, default: 24.0]
+   Maximum upward sustain boost / transient expansion range in dB.
+
+6. stereo_link     [0.0 .. 1.0, default: 0.75]
+   Blends between dual-mono relative-level detection (0.0) and stereo-linked
+   energy detection (1.0).
+
+7. trim_db         [-12.0 .. 12.0 dB, default: 0.0]
+   Manual output trim on top of the automatic inverse-linked makeup gain c.
+
+8. mix             [0.0 .. 1.0, default: 1.0]
+   Dry/wet parallel microdynamics blend.

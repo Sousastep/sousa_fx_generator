@@ -1,0 +1,190 @@
+// ============================================================================
+// barberpole_comb_ssb_flanger.txt
+// Unix-Style Stereo Effect: Endless Barberpole Dual-Comb & SSB Spectral-Delay Flanger
+// Implements Fabian Esqueda, Vesa Valimaki & Julian Parker (DAFx-15, Paper 67):
+// "Barberpole Phasing and Flanging Illusions" (Sections 3, 4 & 4.1, Eq. 9-14, Fig. 7-12).
+// Combines BOTH time-domain/hybrid barberpole comb engines from the paper:
+//   1. Synchronized Dual Flanger (Sec 3, Fig. 7-8): Two cubic-interpolated comb
+//      delay lines modulated by 90-degree-offset sawtooth ramps (Eq. 9) and
+//      seamlessly crossfaded by synchronized triangular window gains so comb
+//      notches sweep infinitely upward or downward without reset clicks!
+//   2. Single-Sideband (SSB) Spectral-Delay Barberpole (Sec 4 & 4.1, Fig. 10):
+//      Hilbert SSB frequency shifting mixed with a dispersive 6-stage allpass
+//      spectral delay chain to warp the moving comb notches logarithmically!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Tracked Pitch f0 in Hz (if > 20 Hz, tunes comb sweep range around f0)
+//   in4: Optional 1-Bar Phasor [0..1] (syncs barberpole sweep cycle to host tempo)
+// Outlets:
+//   out1: Left Endless Barberpole Comb/SSB Output
+//   out2: Right Endless Barberpole Comb/SSB Output
+
+@param({ min: -4.0, max: 4.0 }) sweep_rate_hz = 0.5;
+@param({ min: 0.4, max: 12.0 }) center_delay_ms = 2.2;
+@param({ min: -0.92, max: 0.92 }) feedback = 0.72;
+@param({ min: 0.0, max: 1.0 }) dual_to_ssb_mode = 0.4;
+@param({ min: -0.8, max: 0.8 }) notch_warp_a1 = -0.5;
+@param({ min: 0.0, max: 1.0 }) stereo_counter_dir = 0.5;
+
+// Circular delay buffers for Dual Barberpole Flanger (2048 samples per channel)
+@state flgBufL = new FixedSampleArray(2048);
+@state flgBufR = new FixedSampleArray(2048);
+@state writeIdx: Int = 0;
+
+// 4-stage Quadrature IIR Hilbert states for SSB Barberpole (Paper Sec 4, Fig. 10)
+@state lReX = new FixedSampleArray(4); @state lReY = new FixedSampleArray(4);
+@state lImX = new FixedSampleArray(4); @state lImY = new FixedSampleArray(4);
+@state lDelRe = 0.0;
+
+@state rReX = new FixedSampleArray(4); @state rReY = new FixedSampleArray(4);
+@state rImX = new FixedSampleArray(4); @state rImY = new FixedSampleArray(4);
+@state rDelRe = 0.0;
+
+// 6-stage First-Order Allpass Spectral Delay Chain for Log-Warped Notches (Sec 4.1)
+@state apXL = new FixedSampleArray(6); @state apYL = new FixedSampleArray(6);
+@state apXR = new FixedSampleArray(6); @state apYR = new FixedSampleArray(6);
+
+// Feedback states & LFO phasor
+@state fbStateL = 0.0;
+@state fbStateR = 0.0;
+@state lfoPhasor = new phasor();
+@state prevBarIn = 0.0;
+@state smoothCenterMs = 2.2;
+
+function readDelay2k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
+	let d = clamp(delSamps, 2.0, 2042.0);
+	let readPos = wIdx - d;
+	while (readPos < 0.0) {
+		readPos += 2048.0;
+	}
+	let idx0: Int = floor(readPos);
+	let frac = readPos - idx0;
+	let i_m1: Int = (idx0 - 1 + 2048) & 2047;
+	let i_0: Int  = idx0 & 2047;
+	let i_1: Int  = (idx0 + 1) & 2047;
+	let i_2: Int  = (idx0 + 2) & 2047;
+	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let barIn = in4;
+
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothCenterMs += (clamp(center_delay_ms, 0.4, 12.0) - smoothCenterMs) * slew;
+
+// If pitch tracker is connected on in3, bias center delay toward 1/(2*f0)
+let baseDelaySamps = mstosamps(smoothCenterMs);
+if (pitchIn > 25.0 && pitchIn < 1000.0) {
+	baseDelaySamps = linearinterp(0.5, baseDelaySamps, clamp(sr / (2.0 * pitchIn), 15.0, 1200.0));
+}
+
+// Per DAFx-15 Sec 3 (p. 5): D_min should be > 0.5 * D_max to hide resets cleanly
+let dMin = clamp(baseDelaySamps * 0.68, 4.0, 1200.0);
+let dMax = clamp(baseDelaySamps * 1.32, 8.0, 1800.0);
+
+// --- 1. Barberpole Sweep Phasor (Internal Hz or 1-Bar Synced) ---
+let rate = clamp(sweep_rate_hz, -4.0, 4.0);
+let dirSign = (rate >= 0.0) ? 1.0 : -1.0;
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+
+let rawPh = barActive ? wrap(barIn * maximum(floor(abs(rate) + 0.5), 1.0), 0.0, 1.0) : lfoPhasor.next(abs(rate));
+let phL = (dirSign > 0.0) ? rawPh : (1.0 - rawPh);
+// Stereo counter-direction option: Right channel sweeps opposite direction when stereo_counter_dir > 0.5
+let counter = clamp(stereo_counter_dir, 0.0, 1.0);
+let phR = (counter > 0.5) ? (1.0 - phL) : wrap(phL + 0.25 * counter, 0.0, 1.0);
+
+let fb = clamp(feedback, -0.92, 0.92);
+let uL = tanh(xL + fb * fbStateL);
+let uR = tanh(xR + fb * fbStateR);
+
+flgBufL[writeIdx] = uL;
+flgBufR[writeIdx] = uR;
+
+// --- 2. Engine A: Synchronized Dual Flanger (Paper Sec 3, Eq. 9, Fig. 7-8) ---
+// Two sawtooth LFOs offset by 0.5 cycle (so reset of one falls at midpoint of the other)
+// with complementary raised-triangle/cosine crossfade gains g1 + g2 = 1.0
+let ph1L = phL;
+let ph2L = wrap(phL + 0.5, 0.0, 1.0);
+let del1L = dMin + (dMax - dMin) * ph1L;
+let del2L = dMin + (dMax - dMin) * ph2L;
+let g1L = triangle(ph1L, 0.5);
+let g2L = 1.0 - g1L;
+let dualCombL = 0.5 * (uL + g1L * readDelay2k(flgBufL, writeIdx, del1L) + g2L * readDelay2k(flgBufL, writeIdx, del2L));
+
+let ph1R = phR;
+let ph2R = wrap(phR + 0.5, 0.0, 1.0);
+let del1R = dMin + (dMax - dMin) * ph1R;
+let del2R = dMin + (dMax - dMin) * ph2R;
+let g1R = triangle(ph1R, 0.5);
+let g2R = 1.0 - g1R;
+let dualCombR = 0.5 * (uR + g1R * readDelay2k(flgBufR, writeIdx, del1R) + g2R * readDelay2k(flgBufR, writeIdx, del2R));
+
+// --- 3. Engine B: SSB + Spectral-Delay Warped Barberpole (Paper Sec 4 & 4.1, Fig. 10) ---
+let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+let reL = uL;
+let t = cR0 * (reL + lReY[0]) - lReX[0]; lReX[0] = reL; lReY[0] = t; reL = t;
+t = cR1 * (reL + lReY[1]) - lReX[1]; lReX[1] = reL; lReY[1] = t; reL = t;
+t = cR2 * (reL + lReY[2]) - lReX[2]; lReX[2] = reL; lReY[2] = t; reL = t;
+t = cR3 * (reL + lReY[3]) - lReX[3]; lReX[3] = reL; lReY[3] = t; reL = t;
+let sReL = lDelRe; lDelRe = reL;
+
+let imL = uL;
+t = cI0 * (imL + lImY[0]) - lImX[0]; lImX[0] = imL; lImY[0] = t; imL = t;
+t = cI1 * (imL + lImY[1]) - lImX[1]; lImX[1] = imL; lImY[1] = t; imL = t;
+t = cI2 * (imL + lImY[2]) - lImX[2]; lImX[2] = imL; lImY[2] = t; imL = t;
+t = cI3 * (imL + lImY[3]) - lImX[3]; lImX[3] = imL; lImY[3] = t; imL = t;
+let sImL = imL;
+
+let reR = uR;
+t = cR0 * (reR + rReY[0]) - rReX[0]; rReX[0] = reR; rReY[0] = t; reR = t;
+t = cR1 * (reR + rReY[1]) - rReX[1]; rReX[1] = reR; rReY[1] = t; reR = t;
+t = cR2 * (reR + rReY[2]) - rReX[2]; rReX[2] = reR; rReY[2] = t; reR = t;
+t = cR3 * (reR + rReY[3]) - rReX[3]; rReX[3] = reR; rReY[3] = t; reR = t;
+let sReR = rDelRe; rDelRe = reR;
+
+let imR = uR;
+t = cI0 * (imR + rImY[0]) - rImX[0]; rImX[0] = imR; rImY[0] = t; imR = t;
+t = cI1 * (imR + rImY[1]) - rImX[1]; rImX[1] = imR; rImY[1] = t; imR = t;
+t = cI2 * (imR + rImY[2]) - rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
+t = cI3 * (imR + rImY[3]) - rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
+let sImR = imR;
+
+// Quadrature SSB shift by phL / phR
+let ssbL = sReL * cos(2.0 * pi * phL) - sImL * sin(2.0 * pi * phL);
+let ssbR = sReR * cos(2.0 * pi * phR) - sImR * sin(2.0 * pi * phR);
+
+// Pass delayed SSB signal through 6-stage allpass spectral delay to warp notch spacing (Sec 4.1)
+let a1 = clamp(notch_warp_a1, -0.8, 0.8);
+let dispL = readDelay2k(flgBufL, writeIdx, baseDelaySamps * 0.5);
+let dispR = readDelay2k(flgBufR, writeIdx, baseDelaySamps * 0.5);
+
+for (let k: Int = 0; k < 6; k++) {
+	let ynL = a1 * dispL + apXL[k] - a1 * apYL[k];
+	apXL[k] = dispL; apYL[k] = ynL; dispL = ynL;
+
+	let ynR = a1 * dispR + apXR[k] - a1 * apYR[k];
+	apXR[k] = dispR; apYR[k] = ynR; dispR = ynR;
+}
+
+let ssbCombL = 0.5 * (ssbL + dispL);
+let ssbCombR = 0.5 * (ssbR + dispR);
+
+// --- 4. Blend Dual-Comb Flanger & SSB Spectral-Delay Barberpole ---
+let mode = clamp(dual_to_ssb_mode, 0.0, 1.0);
+let outL = linearinterp(mode, dualCombL, ssbCombL);
+let outR = linearinterp(mode, dualCombR, ssbCombR);
+
+fbStateL = outL;
+fbStateR = outR;
+writeIdx = (writeIdx + 1) & 2047;
+
+out1 = outL;
+out2 = outR;

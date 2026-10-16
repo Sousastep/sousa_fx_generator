@@ -1,0 +1,51 @@
+================================================================================
+spectral_delay_chirp_filter — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the Stretched Spectral Delay Filter (SDF) with Feedback, Time-Varying Coefficients, and Chirp Envelope Equalization from Pekonen, Välimäki, Abel, and Smith (DAFx-09 Paper 36, Sections 2.1–2.4, 3 & 4, Eq. 2, 5, 14–25, Fig. 2–8). Unlike standard 2nd-order phaser allpasses (`02_allpass_disperser`), this effect cascades M first-order allpass sections whose unit delays z^-1 are replaced by z^-K (Stretched SDF, Section 2.4). Setting K > 1 stretches the impulse-response chirp duration by K and folds multiple opposing-direction "image chirps" down into the audible midrange (0–7 kHz, Fig. 6b), while a damped global feedback loop B(z) (Section 3) regenerates rhythmic laser chirp trains on every tuba attack!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Optional Modulation Envelope [0..1] (patch out2 of 00b_tuba_transient_valve_detector here to whip the chirp coefficient on every tongue attack)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (modulates the allpass coefficient a1 when mod_depth > 0)
+- out1 / out2: Stereo Stretched Spectral Delay Chirp Output
+
+PARAMETERS (7)
+
+1. chirp_coeff_a1
+   - Range: -0.85 to +0.85 (First-Order Allpass Coefficient a1, Default: +0.60)
+   - Taper: Linear bipolar coefficient (DAFx-09 Fig. 2 & Eq. 6):
+     * a1 < 0: Downward-sweeping frequency chirps (bass delayed longer than treble)
+     * a1 > 0: Upward-sweeping frequency chirps (treble delayed longer than bass)
+   - Function: Controls the direction and group-delay curvature of the spectral delay chirps.
+
+2. stretch_k
+   - Range: 1 to 8 Unit Delays per Allpass Stage (Quantized in 8 integer steps, Default: 3)
+   - Taper: Stepped integer delay multiplier K in A(z^K) (DAFx-09 Section 2.4, Fig. 6).
+   - Function: Multiplies the chirp duration by K and subdivides the Nyquist band into K bands of alternating upward and downward image chirps, bringing dramatic liquid laser dispersion right into the tuba's 200 Hz–4 kHz harmonic range.
+
+3. allpass_stages
+   - Range: 4.0 to 24.0 Cascaded Stretched Stages (Default: 20.0)
+   - Taper: Continuous fractional stage interpolation.
+   - Function: Multiplies the total group delay M * tau_g(w) (effective chirp duration up to M * K * 6 samples).
+
+4. sdf_feedback
+   - Range: -0.88 to +0.88 (Global Spectral Delay Feedback Gain, Default: 0.55)
+   - Taper: Linear bipolar feedback routed through the DAFx-09 Eq. 25 one-zero damping filter B(z) = 0.5*(1 + z^-1) and soft-clipping stability guard.
+   - Function: Feeds the dispersed chirp output back into the input of the allpass chain (DAFx-09 Section 3, Fig. 7–8), generating cascading series of pitched chirps and metallic resonator tails.
+
+5. mod_depth
+   - Range: 0.0 to 1.0 (Time-Varying Coefficient Modulation Depth, Default: 0.30)
+   - Taper: Linear modulation depth combining the 1-bar phasor (in4) in counter-phase stereo with any transient envelope on in3.
+   - Function: Sweeps a1(n) dynamically (DAFx-09 Section 4) for Doppler-shifted chirp pitch bends.
+
+6. chirp_eq
+   - Range: 0.0 to 1.0 (Allpass Chirp Envelope Equalization Blend, Default: 0.65)
+   - Taper: Linear crossfade into the DAFx-09 Section 2.3 Eq. 15/17 inverse-envelope equalizer H_eq,d(z^K).
+   - Function: Boosts the frequency region where the chirp lingers longest so the dispersed chirp maintains a punchy, constant-level amplitude envelope (Fig. 5b).
+
+7. mix
+   - Range: 0.0 to 1.0 (0% Dry to 100% Wet Stretched SDF)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba attack with the stretched spectral delay chirps.

@@ -1,0 +1,51 @@
+================================================================================
+deformed_circle_map_fbfm — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the Iterative Sine Circle Map (Feedback FM) over Deformed 2D Closed-Loop Geometries from Georg Essl (DAFx-22 Paper 23, Sections 3.1–3.4, 4.1–4.4 & 6.2, Eq. 2, 5–6). Formulates Feedback FM as a discrete dynamical map on the topological circle S^1: x_n = (x_{n-1} + Omega + (k / 2*pi)*sin(2*pi*x_{n-1})) mod 1, coupled to the tuba's analytic phase. The normalized perturbation strength k gives direct access to Arnold-tongue nonlinear dynamics: k < 1 produces smooth sawtooth Feedback FM, k = 1.0 is the exact topological point of invertibility, and 1.0 < k <= 3.5 enters mode-locked subharmonic period-doubling and tearout chaos! Independently of the phase dynamics, the phase x_n is mapped into R^2 along a deformable closed loop (Circle -> 4-Point Diamond -> Concave L-Loop) and projected onto orthogonal X/Y stereo axes.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba or 01_harmonic_isolator)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (rotates the 2D geometric projection angle when angle_spin > 0)
+- out1 / out2: Stereo Deformed Loop Output (out1 = X-Projection, out2 = Orthogonal Y-Projection)
+
+PARAMETERS (6)
+
+1. circle_map_k
+   - Range: 0.00 to 3.50 (Normalized Sine Circle Map Coupling Constant k, Default: 0.95)
+   - Taper: Linear dynamical coupling parameter (DAFx-22 Section 3.3, Eq. 5):
+     * 0.00: Bare Circle Map (pure linear phase rotation)
+     * 0.01 to 1.00: Invertible Feedback FM (progressively tilts waveform into a rich sawtooth)
+     * 1.00: Exact critical boundary of invertibility
+     * 1.01 to 3.50: Non-invertible regime — passes through Arnold-tongue subharmonic mode-locking (octave/fifth sub-growls) into aggressive chaotic tearout textures!
+   - Function: Controls the iterative Feedback FM nonlinearity on the circle.
+
+2. loop_deformation
+   - Range: 0.0 to 1.0 (2D Closed-Loop Geometry Morph, Default: 0.45)
+   - Taper: Three-shape continuous geometric deformation (DAFx-22 Section 4.3 & 4.4):
+     * 0.00: Euclidean Unit Circle (smooth sinusoidal projection)
+     * 0.50: 4-Point Diamond Loop P_D = [(0,1), (1,0), (0,-1), (-1,0)] (sharp triangle/odd harmonics)
+     * 1.00: 4-Point Irregular Concave L-Shaped Loop P_L = [(0.65,0.65), (0.75,-0.7), (-0.8,-0.85), (0.6,-0.6)] (self-inflecting double-peak waveshape per period, Fig. 6 & 14)
+   - Function: Deforms the 2D geometric loop in R^2 onto which the iterative phase is mapped.
+
+3. phase_lock_strength
+   - Range: 0.0 to 1.0 (Analytic Tuba Phase-Locking Strength, Default: 0.65)
+   - Taper: Linear phase-error coupling.
+   - Function: Controls how tightly the iterative circle map phase x_n is pulled toward the tuba's instantaneous Hilbert phase. Lower values allow free-running Arnold-tongue subharmonics at k > 1.2; higher values force even chaotic k settings to reset in lockstep with every period of the tuba.
+
+4. proj_angle_rad
+   - Range: -3.14159 to +3.14159 rad (-180 to +180 degrees Planar Projection Angle, Default: 0.0 rad)
+   - Taper: Linear angle in radians (DAFx-22 Section 3.4).
+   - Function: Rotates the 2D viewing angle of the deformed loop (especially dramatic on the asymmetric Concave L-Loop).
+
+5. angle_spin
+   - Range: 0.0 to 1.0 (1-Bar Synced Projection Angle Rotation Depth, Default: 0.25)
+   - Taper: Linear rotation depth.
+   - Function: Continuously orbits the 2D projection angle around the deformed loop in sync with the 1-bar phasor on in4.
+
+6. env_follow
+   - Range: 0.0 to 1.0 (0.0 = Gate-Normalized Synth Sustain, 1.0 = Natural Tuba Hilbert Amplitude Envelope)
+   - Taper: Linear crossfade.
+   - Function: Scales the projected loop output by the tuba's dynamic breath envelope.

@@ -1,0 +1,57 @@
+================================================================================
+14_inst_metallic_comb_growler — Parameter Information
+================================================================================
+
+OVERVIEW
+A signature modern riddim / tearout "metallic talking pipe" instrument. Combines three core technologies from the papers:
+1. Delay-Based Asymmetric Adaptive FM (Lazzarini et al. DAFx-08) to inject moving upper-sideband formants onto every harmonic of the tuba.
+2. Pitch-tracked cubic-interpolated stereo waveguide comb resonators swept by a kink-warped 1-bar phasor envelope.
+3. A 6-stage Allpass Phase Disperser whose corner frequency tracks 0.75x the comb resonant pitch, turning metallic flange peaks into watery, dispersed dubstep laser vowels.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Tuba Audio Input (Left / Right)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
+- in4: 1-Bar Audio-Rate Phasor [0..1] (syncs the rhythmic comb whip; internal 0.5 Hz fallback if unpatched)
+- out1 / out2: Stereo Metallic Comb Growler Output
+
+PARAMETERS (8)
+
+1. joy_x_comb_morph (Joystick X-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Exponential octave offset (+/- 1.8 octaves around 2 * f0).
+   - Function: Sweeps the pitch-tracked comb delay ratio from deep sub-octave hollow pipes (-1.0) through fundamental-locked metallic throat resonance (0.0) to high-pitched robotic screech pipes (+1.0).
+
+2. joy_y_adfm_growl (Joystick Y-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Power curve (x^1.3) on FM modulation index (0.4 to 4.6) paired with exponential Palamin symmetry factor r = 3.2^y.
+   - Function: Controls the pre-comb Asymmetric AdFM stage. Pulling back (-1.0) shifts FM sidebands below the carrier for dark sub-grit; pushing forward (+1.0) blasts upper-sideband moving formants into the comb resonator.
+
+3. whip_subdiv
+   - Range: 1 to 16 cycles per bar (Quantized in 16 integer steps)
+   - Taper: Stepped integer multiplier of the 1-bar phasor.
+   - Function: Sets the rhythmic subdivision rate of the kink-warped comb pitch-whip envelope.
+
+4. whip_depth
+   - Range: 0.0 to 1.0 (maps to 0.0 to 2.4 octaves of rhythmic comb sweep)
+   - Taper: Exponential octave depth.
+   - Function: Determines how far each beat subdivision whips the comb resonator pitch upward and back down.
+
+5. comb_feedback
+   - Range: -0.98 to +0.98 (Bipolar Waveguide Feedback)
+   - Taper: Reverse-power curve (1 - (1 - |x|)^1.4) for high precision near self-oscillation.
+   - Function: Positive values produce bright, open-pipe metallic ring; negative values produce hollow, odd-harmonic stopped-pipe resonance.
+
+6. comb_damping
+   - Range: 0.0 to 1.0 (maps to loop lowpass cutoff from 450 Hz to 17,100 Hz)
+   - Taper: Exponential frequency taper (450 * 38^x Hz).
+   - Function: Adjusts high-frequency absorption inside the comb feedback loop from warm brassy wood to razor-sharp steel.
+
+7. disperse_pinch
+   - Range: 0.0 to 1.0 (maps to Allpass Q from 0.707 to 7.2 and wet blend 0% to 100%)
+   - Taper: Power curve (x^1.4) on allpass Q.
+   - Function: Simultaneously blends in the 6-stage allpass disperser and pinches its group-delay spike around the comb frequency.
+
+8. stereo_width
+   - Range: 0.0 to 1.0 (0.0 to +/- 0.35 octaves L/R comb detune)
+   - Taper: Power curve (x^1.5) for fine micro-cent stereo widening in the lower half.
+   - Function: Splits the Left and Right comb waveguide frequencies in opposite directions.

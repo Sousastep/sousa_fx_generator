@@ -1,0 +1,45 @@
+================================================================================
+EFFECT: comp_la2a_t4b_opto_leveler
+SOURCE: Wright & Valimaki (DAFx-2022, "Grey-Box Modelling of Dynamic Range
+        Compression", Sec. 2.1, 3.2, 3.3; Eqs. 2, 6, 9) and Simionato & Fasciani
+        (DAFx-2023, "Fully Conditioned and Low-Latency Black-Box Modeling of
+        Analog Compression", Sec. 2.1, 2.3)
+TYPE:   Stereo Teletronix LA-2A T4B Electro-Optical Leveling Amplifier with
+        Dual-Stage CdS Photocell Memory & 12AX7/12BH7 Tube Make-Up Stage
+================================================================================
+
+OVERVIEW
+--------
+Emulates the Teletronix LA-2A / Tube-Tech CL 1B electro-optical leveling
+amplifier. The sidechain drives an electro-luminescent panel coupled to a CdS
+photoresistor (T4B cell) with program-dependent attack (~10 ms, accelerating on
+transient bursts) and a two-stage release (60 ms initial fast decay followed by
+a 0.5-4.5 s photoconductive memory tail governed by integrated cell exposure).
+Includes the front-panel R37 sidechain high-frequency pre-emphasis control and
+an asymmetric 12AX7/12BH7 vacuum-tube make-up amplifier stage.
+
+PARAMETERS (7 total)
+--------------------
+1. peak_reduction  [0.0 .. 100.0, default: 58.0]
+   Main LA-2A Peak Reduction dial controlling optical sidechain sensitivity.
+
+2. limit_mode      [0.0 .. 1.0, default: 0.25]
+   Morphs continuously between Compress mode (~3.2:1, wide 18 dB knee) and
+   Limit mode (~18:1, tighter knee).
+
+3. r37_hf_emph     [0.0 .. 1.0, default: 0.35]
+   R37 sidechain high-frequency pre-emphasis trim (>1.25 kHz): increases
+   high-frequency sensitivity for sibilance/transient taming or leaves flat.
+
+4. cell_memory     [0.0 .. 1.0, default: 0.65]
+   Controls the depth and persistence of the T4B CdS photocell slow-release
+   memory tail (0.5 s to 4.5 s).
+
+5. tube_warmth     [0.0 .. 1.0, default: 0.45]
+   Asymmetric 2nd/3rd harmonic saturation of the 12AX7/12BH7 output amplifier.
+
+6. makeup_db       [-12.0 .. 24.0 dB, default: 6.0]
+   Output Gain dial driving the vacuum-tube make-up amplifier.
+
+7. mix             [0.0 .. 1.0, default: 1.0]
+   Dry/wet parallel leveling blend.

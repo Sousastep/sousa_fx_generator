@@ -1,0 +1,46 @@
+================================================================================
+chorus_dissonance_roughness_bank — Parameter Information
+================================================================================
+
+OVERVIEW
+A standalone stereo Critical-Band Chorus & Sensory Roughness Processor ("Dissonancizer / De-Dissonancizer") from Matthew Hoffman and Perry Cook (DAFx-08 Paper 30, Sections 2, 2.1, 3 & 4, Eq. 1–4, Fig. 1–4). Splits the stereo tuba into 4 critical-band regions (<160 Hz, 160–500 Hz, 500–1500 Hz, >1500 Hz) and modulates each band using Kameoka and Kuriyagawa's psychoacoustic roughness law `g(f_1) = 2.27 * f_1^0.477` (Eq. 1), which predicts the exact frequency separation between two beating partials that produces maximum sensory dissonance.
+- At lower `roughness_scale_g` settings (0.10–0.35) and moderate `noise_smear_chorus` (Section 4), each subband is modulated by a fraction of `g(f_1)/2` mixed with lowpass-filtered subband noise, creating a lush, critical-band-calibrated ensemble chorus where low harmonics beat slowly and high harmonics shimmer faster.
+- Cranking `roughness_scale_g` to 1.00 places every subband at the exact Kameoka-Kuriyagawa maximum sensory roughness peak for aggressive dubstep/riddim brass growl!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Optional Envelope Modulator [0..1] (dynamically boosts `impact_depth_p` on loud notes, acting as the "dissonance pedal" described in DAFx-08 Section 2.1)
+- in4: Unused / Thru
+- out1 / out2: Stereo Critical-Band Roughness / Chorus Output
+
+PARAMETERS (6)
+
+1. impact_depth_p
+   - Range: 0.0 to 1.0 (Modulation Impact Parameter `p` in `a = (1 - p) + p * mod`, Default: 0.65)
+   - Taper: Linear modulation mix (DAFx-08 Section 2.1).
+   - Function: Smoothly mixes the DC dry subband carrier `(1 - p)` with the sideband modulator `p * mod(t)`.
+
+2. roughness_scale_g
+   - Range: 0.08 to 1.25 (Multiplier on Kameoka-Kuriyagawa Optimal Beat Frequency `0.5 * g(f_1)`, Default: 0.32)
+   - Taper: Linear scaling of `g(f_i) = 2.27 * f_i^0.477` across all 4 subbands.
+   - Function: At 0.10–0.35, produces psychoacoustically proportioned critical-band chorus beating (1.5–15 Hz across low to high bands); at 1.00, locks every subband to maximum sensory roughness/dissonance (10–48 Hz).
+
+3. noise_smear_chorus
+   - Range: 0.0 to 1.0 (0.0 = Section 2 Periodic Sinusoidal Beating, 1.0 = Section 4 Lowpass-Noise Dissonance-Reduction Chorus; Default: 0.40)
+   - Taper: Linear crossfade between sinusoidal and subband-filtered random noise modulators (DAFx-08 Section 4, p. 4).
+   - Function: Implements the Section 4 discovery that modulating subbands with narrowband lowpass-filtered noise smears sharp beating partials into a warm, choir-like ensemble resonance.
+
+4. bass_clean_protect
+   - Range: 0.0 to 1.0 (Sub/Bass Band Protection < 160 Hz, Default: 0.70)
+   - Taper: Linear attenuation of modulation impact `p` in the lowest subband (DAFx-08 Section 2.1).
+   - Function: Prevents low-frequency beating from muddying the tuba's fundamental sub-bass weight while keeping upper harmonics wide and rough.
+
+5. subband_am_expand
+   - Range: 0.0 to 1.0 (Section 3 Fast/Slow Envelope Ratio Exponent `p`, Default: 0.30)
+   - Taper: Linear exponent scaling `(fastEnv / slowEnv)^p` using Eq. 4 optimal fast-decay time constants `cf = 1 - 0.00083734 * sqrt(b_i)`.
+   - Function: Exaggerates existing natural harmonic beating and brass growl inside each critical band without altering overall note dynamics (DAFx-08 Fig. 4).
+
+6. stereo_phase_spread
+   - Range: 0.0 to 1.0 (maps to 0 to 90 degrees Left/Right Subband Modulator Quadrature Offset + Independent Noise Streams, Default: 0.75)
+   - Taper: Linear stereo spread.
+   - Function: Decorrelates the Left and Right subband beat envelopes for wide stereo imaging.

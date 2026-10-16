@@ -1,0 +1,52 @@
+================================================================================
+chorus_multiscale_random_env — Parameter Information
+================================================================================
+
+OVERVIEW
+A standalone stereo Multiscale Chorus implementing all three digital chorus enhancements from P. Fernández-Cid and F. J. Casajús-Quirós (DAFx-98 Paper FER09, Sections 5, 6, 7 & 8):
+1. Raised-Cosine Interpolated Narrowband Random Modulation Law (Section 5): Generates a random process at sub-audio rate f_sm, interpolates smoothly via an infinitely differentiable raised-cosine (Hann) window, and multiplies point-by-point with a cosine carrier to blend continuously from periodic sinusoidal chorusing to organic, non-repeating ensemble drift.
+2. Multiscale Dyadic Filterbank Chorus (Section 7): Splits the tuba into 3 octave scales (Low < 250 Hz, Mid 250–1250 Hz, High > 1250 Hz) with independent modulated delay lines per band—keeping the low tuba fundamental tight while richly chorusing the midrange and bell overtones.
+3. Per-Band Envelope Automation (Sections 6 & 8): Each scale's envelope follower automates its own wet/dry mix (leaving quiet bands unprocessed so background breath/valve noise is never timbrally modulated) and dynamically increases randomness and tonal center on loud blasts.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Unused / Thru
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (locks the central carrier LFO when patched)
+- out1 / out2: Stereo Multiscale Chorus Output
+
+PARAMETERS (7)
+
+1. central_rate_hz
+   - Range: 0.15 to 5.00 Hz (Central Modulation Frequency, Default: 0.85 Hz)
+   - Taper: Direct frequency in Hz (DAFx-98 Section 5).
+   - Function: Sets the perceived central speed of the modulation law whether sinusoidal or random.
+
+2. randomness_bw
+   - Range: 0.0 to 1.0 (0.0 = Pure Sinusoidal LFO, 1.0 = Full Raised-Cosine Narrowband Random LFO, Default: 0.55)
+   - Taper: Linear blend + bandwidth expansion of the sub-audio random sampling rate f_sm (DAFx-98 Section 5).
+   - Function: Eliminates the repetitive "seasick LFO cycle" of standard choruses while remaining 100% click-free because the raised-cosine interpolator has zero derivative discontinuities.
+
+3. delay_depth_ms
+   - Range: 2.0 to 25.0 ms (Nominal Chorus Delay & Excursion Scale, Default: 8.5 ms)
+   - Taper: Direct delay time in milliseconds.
+   - Function: Scales both the mean delay and modulation excursion across all three octave scales (from 2 ms flanger-chorus to 25 ms wide ensemble doubling).
+
+4. scale_independence
+   - Range: 0.0 to 1.0 (0.0 = All 3 Scales Share One Modulation Law, 1.0 = Fully Independent Modulation Laws per Scale, Default: 0.75)
+   - Taper: Linear crossfade (DAFx-98 Section 7).
+   - Function: As shown on page 5 of DAFx-98, sharing a single modulation law across all scales (0.0) imparts a "metallic/tonal" comb character, whereas independent modulation laws per scale (1.0) produce a smooth, non-metallic phaser/ensemble texture!
+
+5. env_mix_duck_noise
+   - Range: 0.0 to 1.0 (Per-Band Envelope-Driven Wet Mix Gating, Default: 0.45)
+   - Taper: Linear sensitivity (DAFx-98 Sections 6 & 7).
+   - Function: Frequency bands with little energy remain dry so steady background/preamp noise is never modulated into "swishing" chorus noise during rests.
+
+6. env_color_shift
+   - Range: 0.0 to 1.0 (Envelope-Driven Main Delay / Tonal Center Shift, Default: 0.35)
+   - Taper: Linear modulation depth (DAFx-98 Section 8).
+   - Function: Shortens the fixed main delay portion on loud notes, shifting the tonal center of each band in proportion to playing intensity.
+
+7. dry_wet_mix
+   - Range: 0.0 to 1.0 (Chorus Wet Level, Default: 0.55)
+   - Taper: Linear wet-ray gain summed with the dry multiscale bands.
+   - Function: Sets the overall intensity of the multiscale chorus voices.

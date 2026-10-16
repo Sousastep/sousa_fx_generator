@@ -1,0 +1,154 @@
+// ============================================================================
+// chorus_univibe_optical_throb.txt
+// Standalone Stereo Chorus Effect: Shin-ei Uni-Vibe 4-Stage Optical Chorus/Vibrato
+// Implements Champ Darabundit, Russell Wedelich & Pete Bischoff (DAFx-19, Paper 31):
+// "Digital Grey Box Model of the Uni-Vibe Effects Pedal" (Sections 2, 3.1, 3.2 & 4.2,
+// Eq. 1-21, Table 1, Fig. 2-8).
+// Captures the three crucial physical mechanisms discovered in the paper that make
+// the Uni-Vibe Chorus sound like a throbbing, double-beating rotary chorus rather
+// than a standard symmetric phaser:
+//   1. Staggered Phasing Capacitors Cp (Table 1):
+//      Stage 1: 0.015 uF, Stage 2: 0.22 uF, Stage 3: 470 pF, Stage 4: 0.0047 uF
+//      producing spread, non-paired notches where only two main notches dominate ("double beat").
+//   2. Collector/Emitter Gain Imbalance (alpha_n != beta_n, Table 1) + Blocking Capacitor
+//      C_DC (Eq. 4-21, Fig. 6): Each stage is NOT a unity-gain allpass filter, but a
+//      sum H_n(z) = H_cn(z) + H_en(z) with a sweeping high-shelf magnitude response that
+//      creates the iconic low-end "throbbing pulse" in Chorus mode!
+//   3. Asymmetric Emitter-Follower Bias Clipping (Sec 3.2.1, Fig. 7) + Incandescent Lamp
+//      Fast-Turn-On / Slow-CdS-Decay LDR Trajectory (Sec 4.2, Fig. 8).
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional Envelope Modulator [0..1] (boosts incandescent bulb intensity on attacks)
+//   in4: Optional 1-Bar Phasor [0..1] (syncs lamp LFO when patched)
+// Outlets:
+//   out1: Left Uni-Vibe Optical Chorus/Vibrato Output
+//   out2: Right Uni-Vibe Optical Chorus/Vibrato Output
+
+@param({ min: 0.2, max: 7.6 }) pedal_speed_hz = 1.35;
+@param({ min: 0.0, max: 1.0 }) lamp_intensity = 0.78;
+@param({ min: 0.0, max: 1.0 }) shelf_throb_cdc = 0.75;
+@param({ min: 0.0, max: 1.0 }) emitter_bias_grit = 0.35;
+@param({ min: 0.0, max: 1.0 }) stereo_chamber_spread = 0.45;
+@param({ min: 0.0, max: 1.0 }) chorus_to_vibrato = 0.0;
+
+// 4-Stage Uni-Vibe Bilinear Filter States per channel (Eq. 19-21)
+@state stXL = new FixedSampleArray(4); @state stYL = new FixedSampleArray(4);
+@state stXR = new FixedSampleArray(4); @state stYR = new FixedSampleArray(4);
+
+// Per-stage DC-blocking filter states after asymmetric emitter-follower tanh (Fig. 7)
+@state dcXL = new FixedSampleArray(4); @state dcYL = new FixedSampleArray(4);
+@state dcXR = new FixedSampleArray(4); @state dcYR = new FixedSampleArray(4);
+
+@state lampPhasor = new phasor();
+@state prevBarIn = 0.0;
+
+// Asymmetric Incandescent Lamp + CdS LDR conductance trajectory (DAFx-19 Sec 4.2, Fig. 8)
+// Fast filament turn-on peak + exponential CdS darkness recovery tail, with intensity-dependent skew
+function evalLdrOmegaNorm(phase: number, intensity: number): number {
+	let p = wrap(phase, 0.0, 1.0);
+	// Skew peak earlier as intensity increases (Fig. 8)
+	let skewP = pow(p, 1.0 - 0.38 * intensity);
+	let wave = 0.5 * (1.0 - cos(2.0 * pi * skewP));
+	// Sharp exponential lamp-on peak (CdS resistance drops by >200x under bright filament)
+	return pow(wave, 1.8 + 1.4 * intensity) * intensity;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let envMod = clamp(in3, 0.0, 1.0);
+let barIn = in4;
+
+// --- 1. LFO & Non-Orthogonal Speed/Intensity Coupling (DAFx-19 Sec 2.1) ---
+let inten = clamp(lamp_intensity + 0.25 * envMod, 0.0, 1.0);
+// Sec 2.1: Regenerative phase-shift oscillator drifts slightly faster at high intensity
+let baseSpeed = clamp(pedal_speed_hz, 0.2, 7.6) * (1.0 + 0.08 * inten);
+
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+
+let phL = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : lampPhasor.next(baseSpeed);
+let spread = clamp(stereo_chamber_spread, 0.0, 1.0) * 0.35;
+let phR = wrap(phL + spread, 0.0, 1.0);
+
+let ldrModL = evalLdrOmegaNorm(phL, inten);
+let ldrModR = evalLdrOmegaNorm(phR, inten);
+
+// --- 2. 4-Stage Uni-Vibe Phasing Cascade with Staggered Cp & Blocking Cap C_DC (Sec 3.1-3.2) ---
+// Table 1 Measured Staggered Capacitor Center-Frequency Ratios:
+// Stage 1 (Cp = 0.015 uF):  f_min = 24 Hz   -> f_max = 1150 Hz
+// Stage 2 (Cp = 0.220 uF):  f_min = 4.5 Hz  -> f_max = 185 Hz  (Deep Sub/Bass Throb Stage!)
+// Stage 3 (Cp = 470 pF):    f_min = 680 Hz  -> f_max = 14500 Hz
+// Stage 4 (Cp = 0.0047 uF): f_min = 75 Hz   -> f_max = 4200 Hz
+let throbAmt = clamp(shelf_throb_cdc, 0.0, 1.0);
+let grit = clamp(emitter_bias_grit, 0.0, 1.0);
+let driveG = 0.35 + 0.85 * grit;
+let biasU = 0.12 * grit;
+let tanhBias = tanh(biasU);
+
+let sigL = xL;
+let sigR = xR;
+
+for (let n: Int = 0; n < 4; n++) {
+	// Stage-specific min/max frequency & Table 1 alpha_n, beta_n, and C_p / C_DC ratios
+	let fMin = 24.0;  let fMax = 1150.0;
+	let alphaN = 1.01; let betaN = 1.11; let kcBase = 0.06;
+	if (n == 1) {
+		fMin = 4.5;   fMax = 185.0;
+		alphaN = 0.98; betaN = 1.09; kcBase = 0.48; // Large Cp = 0.22uF comparable to C_DC!
+	} else if (n == 2) {
+		fMin = 680.0; fMax = 14500.0;
+		alphaN = 0.97; betaN = 1.10; kcBase = 0.003;
+	} else if (n == 3) {
+		fMin = 75.0;  fMax = 4200.0;
+		alphaN = 0.95; betaN = 1.09; kcBase = 0.025;
+	}
+
+	// Eq. 6-7: kappa_cn = Cp / (Cp + C_DC), kappa_en = C_DC / (Cp + C_DC)
+	let kcn = kcBase * throbAmt;
+	let ken = 1.0 - kcn;
+	let effAlpha = linearinterp(throbAmt, 1.0, alphaN);
+	let effBeta  = linearinterp(throbAmt, 1.0, betaN);
+
+	// --- Sec 3.2.1 Fig. 7: Asymmetric Emitter-Follower tanh + DC Blocking Filter ---
+	let nlL = (tanh(sigL * driveG + biasU) - tanhBias) / driveG;
+	let dcOutL = nlL - dcXL[n] + 0.996 * dcYL[n];
+	dcXL[n] = nlL; dcYL[n] = dcOutL;
+
+	let nlR = (tanh(sigR * driveG - biasU) + tanhBias) / driveG;
+	let dcOutR = nlR - dcXR[n] + 0.996 * dcYR[n];
+	dcXR[n] = nlR; dcYR[n] = dcOutR;
+
+	// --- Sec 3.2 Eq. 19-21: Pre-warped Bilinear Transform of H_cn[z] + H_en[z] ---
+	let f0L = clamp(fMin * pow(fMax / fMin, ldrModL), 4.0, sr * 0.44);
+	let W0L = tan(pi * f0L / sr);
+	let normL = 1.0 / (W0L + 1.0);
+	let b0L = (effAlpha * ken * W0L - effBeta * (kcn * W0L + 1.0)) * normL;
+	let b1L = (effAlpha * ken * W0L - effBeta * (kcn * W0L - 1.0)) * normL;
+	let a1L = (W0L - 1.0) * normL;
+
+	let yL = b0L * dcOutL + b1L * stXL[n] - a1L * stYL[n];
+	stXL[n] = dcOutL; stYL[n] = yL;
+	sigL = yL;
+
+	let f0R = clamp(fMin * pow(fMax / fMin, ldrModR), 4.0, sr * 0.44);
+	let W0R = tan(pi * f0R / sr);
+	let normR = 1.0 / (W0R + 1.0);
+	let b0R = (effAlpha * ken * W0R - effBeta * (kcn * W0R + 1.0)) * normR;
+	let b1R = (effAlpha * ken * W0R - effBeta * (kcn * W0R - 1.0)) * normR;
+	let a1R = (W0R - 1.0) * normR;
+
+	let yR = b0R * dcOutR + b1R * stXR[n] - a1R * stYR[n];
+	stXR[n] = dcOutR; stYR[n] = yR;
+	sigR = yR;
+}
+
+// --- 3. Output Mixer Chorus / Vibrato Switch (DAFx-19 Sec 2, Fig. 2) ---
+let vibMode = clamp(chorus_to_vibrato, 0.0, 1.0);
+let chOutL = 0.55 * (xL + sigL);
+let chOutR = 0.55 * (xR + sigR);
+
+out1 = linearinterp(vibMode, chOutL, sigL);
+out2 = linearinterp(vibMode, chOutR, sigR);

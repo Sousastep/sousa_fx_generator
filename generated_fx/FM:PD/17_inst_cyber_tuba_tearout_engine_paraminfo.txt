@@ -1,0 +1,54 @@
+================================================================================
+17_inst_cyber_tuba_tearout_engine — Parameter Information
+================================================================================
+
+OVERVIEW
+An aggressive tearout / machine-gun dubstep instrument combining Rotating Analytic Ring Modulation (Approach 3f: y = Re{s_a * e^(j*psi)}), Feedback FM Delay Modulation (Approach 1c: d(t) = d0 + k*y(t-1)), a 16-stage Allpass Phase Disperser, and a 1-bar-phasor-synced trapezoid machine-gun chopper with per-hit pitch/dispersion drop envelopes.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Tuba Audio Input (Left / Right)
+- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
+- in4: 1-Bar Audio-Rate Phasor [0..1] (drives the machine-gun chop and pitch-drop envelopes; internal 0.5 Hz fallback if unpatched)
+- out1 / out2: Stereo Tearout Engine Output
+
+PARAMETERS (8)
+
+1. joy_x_disperse_freq (Joystick X-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Exponential frequency sweep (220 * 12^x Hz, spanning 18 Hz sub-thump dispersion to 2,640 Hz laser transient smear).
+   - Function: Sweeps the corner frequency of the 16-stage allpass disperser cascade.
+
+2. joy_y_fb_tearout (Joystick Y-Axis)
+   - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
+   - Taper: Power curve (x^1.3) on Feedback FM index k in [0.0, 0.85] plus stereo phase rotation spread.
+   - Function: Controls the self-modulating Feedback FM loop (d(t) = d0 + k*y(t-1)). Low values give a tight sawtooth brass edge; pushing forward unleashes "torn" metallic tearout growls.
+
+3. rot_harmonic
+   - Range: -1.0 to +2.0 (Analytic Phase Rotation Multiplier in Re{s_a * e^(j * rot * theta)})
+   - Taper: Continuous linear harmonic slider (-0.5 = locked sub-octave; 0.0 = fundamental; +1.0 = locked 2nd harmonic; fractional values sweep smoothly through the harmonic series without classic RM dual-sideband clash).
+   - Function: Slides the entire harmonic series of the tuba up or down in the analytic phase domain.
+
+4. gun_subdiv
+   - Range: 1 to 16 hits per bar (Quantized in 16 integer steps)
+   - Taper: Stepped integer multiplier of the 1-bar phasor (8 = eighth-note chops, 12 = triplet machine-gun, 16 = 16th-note tearout).
+   - Function: Sets the repetition rate of the synced machine-gun gate and transient punch envelope.
+
+5. gun_chop_depth
+   - Range: 0.0 to 1.0 (0% Sustained to 100% Hard Trapezoid Chop)
+   - Taper: Linear depth blending between continuous sustain (0.0) and crisp trapezoid-gated machine-gun repeats (1.0).
+   - Function: Controls the rhythmic gating depth of each subdivision hit.
+
+6. pitch_drop_env
+   - Range: 0.0 to 1.0
+   - Taper: Decaying power envelope ((1 - phase)^2.2) applied to both the analytic phase rotation and the FM waveguide delay time.
+   - Function: Adds a percussive pitch-and-phase downward "laser drop" at the attack of every machine-gun hit.
+
+7. disperse_q
+   - Range: 1.0 to 10.0 (Allpass Cascade Q / Pinch)
+   - Taper: Linear Q factor across all 16 allpass biquad stages per channel.
+   - Function: Controls the resonance of the group-delay spike in the 16-stage disperser before the final clipper.
+
+8. post_slam_db
+   - Range: 0.0 to 24.0 dB
+   - Taper: Logarithmic dB-to-linear gain (dbtoa) into a final tanh output clipper (Mackity / ZOutputStage style slam).
+   - Function: Slams the dispersed tearout transients into a hard ceiling so the dispersive pre-ringing and tail pump with maximum dubstep loudness.

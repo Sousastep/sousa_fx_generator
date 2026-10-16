@@ -1,0 +1,104 @@
+// ============================================================================
+// 12_adaa_chebyshev_wavefolder.txt
+// Unix-Style Effect 12: ADAA Lockhart Wavefolder & Chebyshev Harmonic Shaper
+// Implements Approach 2.1, 2.3, 4.1, 4.3, 4.4 from the research docs &
+// Bilbao, Esqueda, Parker & Valimaki (IEEE SPL 2017):
+// First-order Antiderivative Antialiased (ADAA1) Sine/Lockhart Wavefolder
+// blended with deterministic Chebyshev polynomial harmonic synthesis (T2..T5)
+// and asymmetric tube bias for alias-suppressed West-Coast / dubstep growl.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (works great on both raw tuba and 01_harmonic_isolator)
+//   in2: Right Audio Input
+// Outlets:
+//   out1: Left Wavefolded / Chebyshev Output
+//   out2: Right Wavefolded / Chebyshev Output
+
+@param({ min: 0.0, max: 30.0 }) drive_db = 12.0;
+@param({ min: 0.0, max: 1.0 }) fold_cheby = 0.35;
+@param({ min: -0.6, max: 0.6 }) asym_bias = 0.15;
+@param({ min: 0.0, max: 1.0 }) sub_preserve = 0.45;
+
+// ADAA1 state memory (x[n-1] and antiderivative F1(x[n-1]))
+@state prevXL = 0.0;
+@state prevF1L = 0.0;
+@state prevXR = 0.0;
+@state prevF1R = 0.0;
+
+// Clean low-octave preservation filter & DC blockers
+@state lowLpL = new onepole();
+@state lowLpR = new onepole();
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+// Antiderivative F1(x) of the wavefolder f(x) = sin(pi * x) + 0.5 * tanh(x)
+// F1(x) = -cos(pi * x) / pi + 0.5 * log(cosh(x))
+// Stable log(cosh(x)) = |x| + log(1 + exp(-2*|x|)) - log(2)
+function folderAntideriv(x: number): number {
+	let ax = abs(x);
+	let logCosh = ax + log(1.0 + exp(-2.0 * ax)) - 0.69314718056;
+	return (-cos(pi * x) / pi) + 0.5 * logCosh;
+}
+
+function folderDirect(x: number): number {
+	return sin(pi * x) + 0.5 * tanh(x);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+
+// --- 1. Extract Clean Sub-Bass Fundamental Path (UnBox / Focus concept) ---
+let subL = lowLpL.next(xL, 95.0);
+let subR = lowLpR.next(xR, 95.0);
+
+// --- 2. Input Drive (dB to Linear) & Asymmetric Even-Harmonic Bias ---
+let gain = dbtoa(clamp(drive_db, 0.0, 30.0));
+let bias = clamp(asym_bias, -0.6, 0.6);
+
+let uL = clamp(xL * gain + bias, -8.0, 8.0);
+let uR = clamp(xR * gain - bias, -8.0, 8.0); // Opposite bias polarity on R for stereo width
+
+// --- 3. First-Order Antiderivative Antialiased (ADAA1) Wavefolder ---
+let diffL = uL - prevXL;
+let f1L = folderAntideriv(uL);
+let foldOutL = (abs(diffL) > 0.00001) ? ((f1L - prevF1L) / diffL) : folderDirect(0.5 * (uL + prevXL));
+prevXL = uL;
+prevF1L = f1L;
+
+let diffR = uR - prevXR;
+let f1R = folderAntideriv(uR);
+let foldOutR = (abs(diffR) > 0.00001) ? ((f1R - prevF1R) / diffR) : folderDirect(0.5 * (uR + prevXR));
+prevXR = uR;
+prevF1R = f1R;
+
+// --- 4. Chebyshev Polynomial Harmonic Generator (Pafnuty2 / Arfib 1979) ---
+// Normalize input to [-1, 1] via tanh(u * 0.5) so Chebyshev polynomials stay bounded
+let cInL = tanh(uL * 0.45);
+let cInR = tanh(uR * 0.45);
+
+let l2 = cInL * cInL;
+let l3 = l2 * cInL;
+let l4 = l2 * l2;
+let l5 = l4 * cInL;
+// T2 = 2x^2 - 1, T3 = 4x^3 - 3x, T4 = 8x^4 - 8x^2 + 1, T5 = 16x^5 - 20x^3 + 5x
+let chebL = 0.45 * cInL + 0.25 * (2.0 * l2 - 1.0) + 0.35 * (4.0 * l3 - 3.0 * cInL) + 0.18 * (8.0 * l4 - 8.0 * l2 + 1.0) + 0.22 * (16.0 * l5 - 20.0 * l3 + 5.0 * cInL);
+
+let r2 = cInR * cInR;
+let r3 = r2 * cInR;
+let r4 = r2 * r2;
+let r5 = r4 * cInR;
+let chebR = 0.45 * cInR + 0.25 * (2.0 * r2 - 1.0) + 0.35 * (4.0 * r3 - 3.0 * cInR) + 0.18 * (8.0 * r4 - 8.0 * r2 + 1.0) + 0.22 * (16.0 * r5 - 20.0 * r3 + 5.0 * cInR);
+
+// Morph between ADAA Wavefolder (0.0) and Chebyshev Polynomial Harmonics (1.0)
+let distL = linearinterp(clamp(fold_cheby, 0.0, 1.0), foldOutL * 0.7, chebL);
+let distR = linearinterp(clamp(fold_cheby, 0.0, 1.0), foldOutR * 0.7, chebR);
+
+// --- 5. DC Blocker & Clean Low-End Re-Injection ---
+let dcCoeff = 1.0 - (2.0 * pi * 15.0 / sr);
+let cleanL = distL - dcXL + dcCoeff * dcYL; dcXL = distL; dcYL = cleanL;
+let cleanR = distR - dcXR + dcCoeff * dcYR; dcXR = distR; dcYR = cleanR;
+
+let subMix = pow(clamp(sub_preserve, 0.0, 1.0), 1.2);
+out1 = cleanL * (1.0 - 0.35 * subMix) + subL * subMix * 1.4;
+out2 = cleanR * (1.0 - 0.35 * subMix) + subR * subMix * 1.4;

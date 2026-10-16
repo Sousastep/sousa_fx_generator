@@ -1,0 +1,125 @@
+// ============================================================================
+// 09_pitch_tracked_comb_resonator.txt
+// Unix-Style Effect 9: Pitch-Tracked Stereo Metallic Comb Filter
+// Tunes a stereo pair of interpolated feedback/feedforward comb filters to an
+// exact harmonic/sub-harmonic ratio of the tuba's pitch (or a fixed frequency)
+// with internal damping and tanh saturation in the feedback loop.
+// Produces the hollow, metallic "pipe / flange / robot" timbre essential to
+// modern riddim and tearout dubstep.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input
+//   in2: Right Audio Input
+//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+// Outlets:
+//   out1: Left Comb-Filtered Audio Output
+//   out2: Right Comb-Filtered Audio Output
+
+@param({ min: 0.5, max: 16.0 }) tune_ratio = 2.0;
+@param({ min: -0.98, max: 0.98 }) feedback = 0.82;
+@param({ min: 0.0, max: 1.0 }) damp_bright = 0.7;
+@param({ min: 0.0, max: 1.0 }) stereo_detune = 0.25;
+
+// Circular delay buffers (4096 samples -> down to ~11 Hz at 44.1 kHz)
+@state combBufL = new FixedSampleArray(4096);
+@state combBufR = new FixedSampleArray(4096);
+@state writeIdx: Int = 0;
+
+// Feedback damping one-pole lowpass states & DC blockers
+@state dampL = new onepole();
+@state dampR = new onepole();
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+// Fallback ZC pitch tracker & smoothing
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothDelayL = 200.0;
+@state smoothDelayR = 200.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+
+// --- 1. Pitch Conditioning ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 180.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let f0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+let baseCombHz = clamp(f0 * clamp(tune_ratio, 0.5, 16.0), 18.0, 4000.0);
+
+// Stereo detune up to +/- 7 semitones (fifth) at max, concentrated in fine cents at low values
+let detSemis = pow(clamp(stereo_detune, 0.0, 1.0), 1.8) * 7.0;
+let detFactor = pow(2.0, detSemis / 12.0);
+
+let targetDelL = clamp(sr / (baseCombHz / detFactor), 4.0, 4090.0);
+let targetDelR = clamp(sr / (baseCombHz * detFactor), 4.0, 4090.0);
+
+// Smooth delay times to produce musical pitch-glide waveguides without clicks
+let delSlew = 1.0 - exp(-1.0 / (0.012 * sr));
+smoothDelayL += (targetDelL - smoothDelayL) * delSlew;
+smoothDelayR += (targetDelR - smoothDelayR) * delSlew;
+
+// --- 2. Cubic Interpolated Comb Delay Read ---
+let rPosL = writeIdx - smoothDelayL;
+while (rPosL < 0.0) { rPosL += 4096.0; }
+let iL0: Int = floor(rPosL);
+let fracL = rPosL - iL0;
+let delOutL = cubicinterp(fracL,
+	combBufL[(iL0 - 1 + 4096) % 4096],
+	combBufL[iL0 % 4096],
+	combBufL[(iL0 + 1) % 4096],
+	combBufL[(iL0 + 2) % 4096]
+);
+
+let rPosR = writeIdx - smoothDelayR;
+while (rPosR < 0.0) { rPosR += 4096.0; }
+let iR0: Int = floor(rPosR);
+let fracR = rPosR - iR0;
+let delOutR = cubicinterp(fracR,
+	combBufR[(iR0 - 1 + 4096) % 4096],
+	combBufR[iR0 % 4096],
+	combBufR[(iR0 + 1) % 4096],
+	combBufR[(iR0 + 2) % 4096]
+);
+
+// --- 3. Feedback Loop Damping & Soft Clipping ---
+// damp_bright (0..1) maps exponentially from 400 Hz (dark tube) to 18 kHz (icy metallic riddim)
+let dampHz = 400.0 * pow(45.0, clamp(damp_bright, 0.0, 1.0));
+let filtFbL = dampL.next(delOutL, dampHz);
+let filtFbR = dampR.next(delOutR, dampHz);
+
+// Musical taper on feedback so resolution near +/- 0.98 is finer
+let fbSign = (feedback >= 0.0) ? 1.0 : -1.0;
+let fbMag = 1.0 - pow(1.0 - abs(clamp(feedback, -0.98, 0.98)), 1.4);
+let fbGain = fbSign * clamp(fbMag, 0.0, 0.985);
+
+// Write back with soft saturation and DC block in loop
+let loopInL = tanh(xL + fbGain * filtFbL);
+let loopInR = tanh(xR + fbGain * filtFbR);
+
+let dcCoeff = 1.0 - (2.0 * pi * 15.0 / sr);
+let cleanLoopL = loopInL - dcXL + dcCoeff * dcYL;
+dcXL = loopInL; dcYL = cleanLoopL;
+
+let cleanLoopR = loopInR - dcXR + dcCoeff * dcYR;
+dcXR = loopInR; dcYR = cleanLoopR;
+
+combBufL[writeIdx] = cleanLoopL;
+combBufR[writeIdx] = cleanLoopR;
+writeIdx = (writeIdx + 1) % 4096;
+
+// Output combines input + resonant comb tail with automatic headroom trim
+let outGain = 1.0 / (1.0 + 0.5 * abs(fbGain));
+out1 = (xL + fbGain * delOutL) * outGain;
+out2 = (xR + fbGain * delOutR) * outGain;

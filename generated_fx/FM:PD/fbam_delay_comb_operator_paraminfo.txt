@@ -1,0 +1,47 @@
+================================================================================
+fbam_delay_comb_operator — Parameter Information
+================================================================================
+
+OVERVIEW
+Implements the Variable-Delay Feedback Amplitude Modulation (FBAM) Operator and its Variations III, IV, and V from Lazzarini, Timoney, Kleimola, and Välimäki (DAFx-09 Paper 31, Sections 2, 3.3–3.6 & 4.2, Eq. 6, 10–14, Fig. 8–11). Unlike standard additive comb filters (`y = x + g*y(n-D)`), Variation V multiplies the input by its own delayed feedback (`y(n) = x(n) * [1 + beta * y(n-D)]`), acting as a time-varying coefficient-modulated comb filter whose phase and magnitude responses distort simultaneously! Includes the Section 3.6 "Coda" feedback lowpass filter so beta can safely exceed 1.0 on live acoustic tuba inputs.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps the feedback delay D for DAFx-09 Section 4.2 "Phase Difference Modulation")
+- out1 / out2: Stereo Feedback-AM Comb Operator Output
+
+PARAMETERS (6)
+
+1. fbam_beta
+   - Range: 0.0 to 1.80 (Feedback AM Index beta, Default: 0.95)
+   - Taper: Linear feedback index (thanks to the Section 3.6 feedback lowpass filter, beta can be pushed up to 1.8 for extreme harmonic expansion).
+   - Function: Controls the amplitude-modulated feedback depth (DAFx-09 Eq. 6 & 12), acting like a resonant lowpass/comb cutoff control.
+
+2. delay_harmonic_d
+   - Range: 0.25 to 4.00 (Feedback Delay Ratio fs / (f0 * delay_harmonic_d), Default: 1.00)
+   - Taper: Linear harmonic multiplier.
+   - Function: At 1.00, sets the feedback delay D = fs / f0 (DAFx-09 Section 3.5, Fig. 9), aligning all recursive cosine products in phase to transform a soft brass wave into a razor-sharp pulse-comb wave.
+
+3. variation_morph
+   - Range: 0.0 to 1.0 (Default: 0.25)
+   - Taper: Three-point continuous morph across the DAFx-09 Section 3 variations:
+     * 0.00: Variation V (Eq. 12: Linear Comb Feedback AM `x * [1 + beta*y(n-D)]`, all harmonics)
+     * 0.50: Variation IV (Eq. 11: Cosine-Waveshaped Feedback AM `x * [1 + cos(beta*pi*y(n-D))]`, odd-harmonic partial feedback FM spectrum, Fig. 8)
+     * 1.00: Variation III (Eq. 10: Heterodyne Feedback AM `cos(N*w0*n) * x * [1 + beta*y(n-D)]`, Fig. 7)
+   - Function: Morphs the nonlinear feedback topology in real time.
+
+4. het_ratio_n
+   - Range: 1.0 to 8.0 (Variation III Auxiliary Heterodyne Carrier Ratio N, Default: 2.0)
+   - Taper: Continuous harmonic multiplier.
+   - Function: Sets the pitch-tracked frequency N * f0 of the secondary heterodyne oscillator when variation_morph > 0.5 (DAFx-09 Eq. 10).
+
+5. loop_lp_hz
+   - Range: 200.0 to 10000.0 Hz (Section 3.6 Feedback Loop Damping Lowpass Cutoff, Default: 2800.0 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Attenuates high frequencies inside the multiplicative feedback loop so arbitrary complex tuba signals can be driven at high beta without high-frequency instability.
+
+6. phase_diff_sweep
+   - Range: 0.0 to 1.0 (Section 4.2 "Phase Difference Modulation" Depth, Default: 0.30)
+   - Taper: Exponential octave delay sweep driven by the 1-bar phasor on in4.
+   - Function: Modulates the feedback delay length D in counter-phase stereo, causing harmonics to dynamically appear and disappear as delayed phase relationships rotate.

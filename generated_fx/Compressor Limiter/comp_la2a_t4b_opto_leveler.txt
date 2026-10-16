@@ -1,0 +1,150 @@
+// ============================================================================
+// comp_la2a_t4b_opto_leveler.txt
+// Stereo Teletronix LA-2A / CL-1B Electro-Optical T4B Leveling Amplifier
+// Based on Wright & Valimaki (DAFx-2022, "Grey-Box Modelling of Dynamic Range
+// Compression", Eqs. 2, 6, 9) and Simionato & Fasciani (DAFx-2023, Sec. 2.1, 2.3)
+// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// ============================================================================
+
+@param({ min: 0.0, max: 100.0 }) peak_reduction = 58.0;
+@param({ min: 0.0, max: 1.0 }) limit_mode = 0.25;
+@param({ min: 0.0, max: 1.0 }) r37_hf_emph = 0.35;
+@param({ min: 0.0, max: 1.0 }) cell_memory = 0.65;
+@param({ min: 0.0, max: 1.0 }) tube_warmth = 0.45;
+@param({ min: -12.0, max: 24.0 }) makeup_db = 6.0;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// Sidechain R37 high-frequency pre-emphasis shelf state
+@state sc_lp_L = 0.0;
+@state sc_lp_R = 0.0;
+
+// T4B CdS Photocell dual-stage state (fast initial decay + slow luminescent memory)
+@state env_fast = 0.0;
+@state env_slow = 0.0;
+@state cell_exposure = 0.0;
+
+// Output 12AX7 / 12BH7 cathode-follower DC block & HF rolloff
+@state dc_x_L = 0.0;
+@state dc_y_L = 0.0;
+@state dc_x_R = 0.0;
+@state dc_y_R = 0.0;
+@state tube_lp_L = 0.0;
+@state tube_lp_R = 0.0;
+
+// Helper: Soft-knee static gain computer in dB (Wright & Valimaki DAFx-2022 Eq. 2)
+function soft_knee_gr_db(x_db: number, thresh_db: number, ratio: number, knee_w: number): number {
+    let diff = x_db - thresh_db;
+    let slope = (1.0 / max(ratio, 1.0)) - 1.0;
+    if (2.0 * diff < -knee_w) {
+        return 0.0;
+    } else if (2.0 * abs(diff) <= knee_w) {
+        let t = diff + 0.5 * knee_w;
+        return slope * (t * t) / max(2.0 * knee_w, 0.001);
+    } else {
+        return slope * diff;
+    }
+}
+
+// Helper: Asymmetric 12AX7/12BH7 vacuum-tube make-up stage
+function la2a_tube_stage(x: number, warmth: number): number {
+    let w = clamp(warmth, 0.0, 1.0);
+    if (w <= 0.0001) {
+        return x;
+    }
+    let bias = 0.12 * w;
+    let u = x + bias;
+    // Asymmetric triode saturation (2nd + 3rd harmonic)
+    let sat = u / (1.0 + 0.35 * w * abs(u) + 0.15 * w * u * u);
+    let sat0 = bias / (1.0 + 0.35 * w * abs(bias) + 0.15 * w * bias * bias);
+    return (sat - sat0) * (1.0 + 0.28 * w);
+}
+
+let sr_safe = max(samplerate(), 8000.0);
+let dryL = in1;
+let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+
+// Sidechain R37 HF pre-emphasis filter (boosts > 1.2 kHz into the EL panel)
+let g_sc_hp = 1.0 - exp(-2.0 * PI * 1250.0 / sr_safe);
+sc_lp_L = sc_lp_L + g_sc_hp * (dryL - sc_lp_L);
+sc_lp_R = sc_lp_R + g_sc_hp * (dryR - sc_lp_R);
+let hp_L = dryL - sc_lp_L;
+let hp_R = dryR - sc_lp_R;
+
+let emph = clamp(r37_hf_emph, 0.0, 1.0) * 3.5;
+let sc_L = dryL + emph * hp_L;
+let sc_R = dryR + emph * hp_R;
+
+// Linked stereo optical electro-luminescent panel excitation
+let peak_link = max(abs(sc_L), abs(sc_R));
+let x_db = atodb(max(peak_link, 1e-6));
+
+// Peak Reduction dial (0..100) maps threshold from 0 dB down to -42 dB
+let pr = clamp(peak_reduction, 0.0, 100.0) * 0.01;
+let thresh_db = -42.0 * pr;
+// Compress (3.2:1) vs Limit (18:1) mode switch, with wide optical soft knee
+let lim = clamp(limit_mode, 0.0, 1.0);
+let ratio = 3.2 + 14.8 * lim;
+let knee_w = 18.0 - 6.0 * lim;
+
+let target_gr_db = (pr > 0.001) ? soft_knee_gr_db(x_db, thresh_db, ratio, knee_w) : 0.0;
+let target_atten = -target_gr_db; // positive dB of attenuation
+
+// T4B CdS Photocell two-stage ballistics (Simionato & Fasciani DAFx-2023 Sec. 2.3):
+// - Program-dependent attack (~10 ms, faster on larger transients)
+// - Two-stage release: 60 ms initial release + 0.6s..4.5s slow memory tail
+let mem_ctrl = clamp(cell_memory, 0.0, 1.0);
+let g_exp_charge = 1.0 - exp(-1.0 / (0.35 * sr_safe));
+let g_exp_decay = 1.0 - exp(-1.0 / (2.80 * sr_safe));
+if (target_atten > cell_exposure) {
+    cell_exposure = cell_exposure + g_exp_charge * (target_atten - cell_exposure);
+} else {
+    cell_exposure = cell_exposure + g_exp_decay * (target_atten - cell_exposure);
+}
+let norm_exposure = clamp(cell_exposure / 18.0, 0.0, 1.0);
+
+// Attack time (~10 ms nominal, accelerates to 2.5 ms on sudden bursts)
+let overdrive = clamp((target_atten - env_fast) / 15.0, 0.0, 1.0);
+let tau_att = 0.010 - 0.0075 * overdrive;
+let alpha_att = 1.0 - exp(-1.0 / (max(tau_att, 0.001) * sr_safe));
+
+// Dual release time constants: Stage 1 = 60 ms, Stage 2 = 0.6s to 4.5s
+let alpha_rel_fast = 1.0 - exp(-1.0 / (0.060 * sr_safe));
+let tau_rel_slow = 0.55 + (1.2 + 3.2 * mem_ctrl) * norm_exposure;
+let alpha_rel_slow = 1.0 - exp(-1.0 / (tau_rel_slow * sr_safe));
+
+if (target_atten > env_fast) {
+    env_fast = env_fast + alpha_att * (target_atten - env_fast);
+} else {
+    env_fast = env_fast + alpha_rel_fast * (target_atten - env_fast);
+}
+
+if (target_atten > env_slow) {
+    let alpha_att_slow = 1.0 - exp(-1.0 / (0.045 * sr_safe));
+    env_slow = env_slow + alpha_att_slow * (target_atten - env_slow);
+} else {
+    env_slow = env_slow + alpha_rel_slow * (target_atten - env_slow);
+}
+
+// Blend fast and slow photocell recovery weighted by exposure memory
+let slow_weight = mem_ctrl * (0.22 + 0.53 * norm_exposure);
+let smooth_atten_db = (1.0 - slow_weight) * env_fast + slow_weight * env_slow;
+let gain_lin = dbtoa(-smooth_atten_db);
+
+// Apply optical gain reduction + 12AX7/12BH7 tube make-up amplifier
+let makeup_lin = dbtoa(clamp(makeup_db, -12.0, 24.0));
+let wL = la2a_tube_stage(dryL * gain_lin * makeup_lin, tube_warmth);
+let wR = la2a_tube_stage(dryR * gain_lin * makeup_lin, tube_warmth);
+
+// Subtle output transformer HF smoothing & DC blocker
+let g_tlp = 1.0 - exp(-2.0 * PI * 16500.0 / sr_safe);
+tube_lp_L = tube_lp_L + g_tlp * (wL - tube_lp_L);
+tube_lp_R = tube_lp_R + g_tlp * (wR - tube_lp_R);
+
+dc_y_L = tube_lp_L - dc_x_L + 0.9993 * dc_y_L;
+dc_x_L = tube_lp_L;
+dc_y_R = tube_lp_R - dc_x_R + 0.9993 * dc_y_R;
+dc_x_R = tube_lp_R;
+
+let m = clamp(mix, 0.0, 1.0);
+out1 = (1.0 - m) * dryL + m * dc_y_L;
+out2 = (1.0 - m) * dryR + m * dc_y_R;

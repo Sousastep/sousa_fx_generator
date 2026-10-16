@@ -1,0 +1,121 @@
+// ============================================================================
+// 03_coef_mod_allpass_pd.txt
+// Unix-Style Effect 3: Coefficient-Modulated Allpass Phase Distortion
+// Implements Timoney, Lazzarini, Pekonen & Valimaki (ICASSP 2009):
+// "Spectrally Rich Phase Distortion Sound Synthesis Using an Allpass Filter".
+// Modulates a first-order allpass filter coefficient a(t) in [0, 1] at the
+// tuba's fundamental rate using the tanh-smoothed sawtooth phase-deviation
+// mapping to impart rich sawtooth-like phase distortion to arbitrary brass audio.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input
+//   in2: Right Audio Input
+//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
+// Outlets:
+//   out1: Left Phase-Distorted Output
+//   out2: Right Phase-Distorted Output
+
+@param({ min: 0.0, max: 1.0 }) pd_depth = 0.75;
+@param({ min: 0.05, max: 0.95 }) knee_p = 0.25;
+@param({ min: 0.0, max: 1.0 }) smooth_beta = 0.5;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// Modulator phasor locked to tracked pitch
+@state modPhasor = new phasor();
+
+// 2-stage cascaded 1st-order allpass filters per channel for deeper PD
+@state apX1L = 0.0;
+@state apY1L = 0.0;
+@state apX2L = 0.0;
+@state apY2L = 0.0;
+
+@state apX1R = 0.0;
+@state apY1R = 0.0;
+@state apX2R = 0.0;
+@state apY2R = 0.0;
+
+// Fallback ZC pitch tracker
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+
+// --- 1. Pitch Tracking Conditioning ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 180.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+smoothF0 += (rawF0 - smoothF0) * (1.0 - exp(-1.0 / (0.006 * sr)));
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 2. Paper Eq. (6)-(9): Sawtooth Phase Deviation to Allpass Coefficient ---
+// P in (0.05, 0.95) is the inflection point of the piecewise PD sawtooth (0.25 in paper)
+let P = clamp(knee_p, 0.05, 0.95);
+let depth = pow(clamp(pd_depth, 0.0, 1.0), 1.3);
+
+// Generate cyclical phase ramp at f0, stereo-offset by 90 deg on Right for width
+let phL = modPhasor.next(f0);
+let phR = wrap(phL + 0.12 * depth, 0.0, 1.0);
+
+// Piecewise saw(t, P) in [0, 1]: rises from 0 to 1 over [0, P], falls 1 to 0 over [P, 1]
+let sawL = (phL < P) ? (phL / P) : (1.0 - (phL - P) / (1.0 - P));
+let sawR = (phR < P) ? (phR / P) : (1.0 - (phR - P) / (1.0 - P));
+
+// Paper Eq. (7)-(8): scale phase deviation phi(w, t) between -w and -pi
+let w = 2.0 * pi * f0 / sr;
+let phiModL = (1.0 - 2.0 * P) * pi * sawL * depth;
+let phiModR = (1.0 - 2.0 * P) * pi * sawR * depth;
+
+let denom = maximum(abs((1.0 - 2.0 * P) * pi), 0.001);
+let phiL = -w - (phiModL / denom) * (pi - w) * depth;
+let phiR = -w - (phiModR / denom) * (pi - w) * depth;
+
+// Paper Eq. (6): m(t) = (phi(w,t) + w) / (2*sin(w) - (phi(w,t) - w)*cos(w))
+let halfPhiW_L = 0.5 * (phiL + w);
+let halfPhiW_R = 0.5 * (phiR + w);
+let mRawL = clamp(abs(halfPhiW_L) / (sin(w) + abs(halfPhiW_L) * cos(w) + 0.0001), 0.0, 0.98);
+let mRawR = clamp(abs(halfPhiW_R) / (sin(w) + abs(halfPhiW_R) * cos(w) + 0.0001), 0.0, 0.98);
+
+// Paper Eq. (9): Glitch-free smoothing m'(t) = tanh(alpha * m(t) - beta)
+// smooth_beta controls alpha & beta in [1.0, 2.0] (paper uses alpha=1.45, beta=1.5)
+let beta = 1.0 + clamp(smooth_beta, 0.0, 1.0) * 0.85;
+let alpha = beta - 0.05;
+let mSmoothL = clamp(0.5 + 0.48 * tanh(alpha * mRawL * 2.5 - beta), 0.01, 0.96);
+let mSmoothR = clamp(0.5 + 0.48 * tanh(alpha * mRawR * 2.5 - beta), 0.01, 0.96);
+
+let mL = linearinterp(depth, 0.15, mSmoothL);
+let mR = linearinterp(depth, 0.15, mSmoothR);
+
+// --- 3. Time-Varying 1st-Order Allpass Filter H(z) = (-a + z^-1) / (1 - a*z^-1) ---
+let y1L = -mL * xL + apX1L + mL * apY1L;
+apX1L = xL;
+apY1L = y1L;
+
+let y2L = -mL * y1L + apX2L + mL * apY2L;
+apX2L = y1L;
+apY2L = y2L;
+
+let y1R = -mR * xR + apX1R + mR * apY1R;
+apX1R = xR;
+apY1R = y1R;
+
+let y2R = -mR * y1R + apX2R + mR * apY2R;
+apX2R = y1R;
+apY2R = y2R;
+
+let wetMix = clamp(mix, 0.0, 1.0);
+out1 = linearinterp(wetMix, xL, y2L);
+out2 = linearinterp(wetMix, xR, y2R);

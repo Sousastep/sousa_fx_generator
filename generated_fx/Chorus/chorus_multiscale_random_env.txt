@@ -1,0 +1,202 @@
+// ============================================================================
+// chorus_multiscale_random_env.txt
+// Standalone Stereo Chorus Effect: 3-Band Multiscale Chorus with Raised-Cosine
+// Narrowband Random Modulation & Per-Band Envelope-Driven Mix/Randomness
+// Implements P. Fernandez-Cid & F.J. Casajus-Quiros (DAFx-98, Paper FER09):
+// "Enhanced Quality and Variety for Chorus/Flange Units" (Sections 5, 6, 7 & 8).
+// Combines all three innovations from the paper:
+//   1. Section 5 (Laws for Delay Modulation): Generates a click-free, infinitely
+//      differentiable narrowband random process at sub-audio rate f_sm using
+//      raised-cosine (Hann) interpolation between random targets multiplied by a
+//      central cosine LFO, blending smoothly from periodic sine to organic random drift!
+//   2. Section 7 (Multiscale vs. Multivoice Chorus): Splits the stereo signal into
+//      3 dyadic octave scales (Low, Mid, High) and applies independent modulated
+//      delays to each band, continuously morphing from a "shared modulation law"
+//      (tonal/metallic) to "independent per-scale modulation laws" (non-tonal ensemble).
+//   3. Sections 6 & 8 (Per-Scale Envelope Applications): Each band's envelope follower
+//      dynamically controls its own dry/wet chorus ratio (hiding noise during quiet
+//      passages without gate pumping) AND increases modulation randomness on loud attacks!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Optional External Envelope Override [0..1]
+//   in4: Optional 1-Bar Phasor [0..1] (syncs central LFO carrier when patched)
+// Outlets:
+//   out1: Left Multiscale Envelope-Adaptive Chorus Output
+//   out2: Right Multiscale Envelope-Adaptive Chorus Output
+
+@param({ min: 0.15, max: 5.0 }) central_rate_hz = 0.85;
+@param({ min: 0.0, max: 1.0 }) randomness_bw = 0.55;
+@param({ min: 2.0, max: 25.0 }) delay_depth_ms = 8.5;
+@param({ min: 0.0, max: 1.0 }) scale_independence = 0.75;
+@param({ min: 0.0, max: 1.0 }) env_mix_duck_noise = 0.45;
+@param({ min: 0.0, max: 1.0 }) env_color_shift = 0.35;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.55;
+
+// 3-Band Dyadic Crossover Filter States (Low < 250 Hz, Mid 250..1200 Hz, High > 1200 Hz)
+@state lpLowL = new onepole(); @state lpLowR = new onepole();
+@state lpMidL = new onepole(); @state lpMidR = new onepole();
+
+// 3 Multiscale Delay Buffers per stereo channel (2048 samples each)
+@state bufLowL = new FixedSampleArray(2048); @state bufLowR = new FixedSampleArray(2048);
+@state bufMidL = new FixedSampleArray(2048); @state bufMidR = new FixedSampleArray(2048);
+@state bufHiL  = new FixedSampleArray(2048); @state bufHiR  = new FixedSampleArray(2048);
+@state writeIdx: Int = 0;
+
+// Raised-Cosine Interpolated Random Generators for the 3 scales (DAFx-98 Sec 5)
+@state rndPh = new FixedSampleArray(3);
+@state rndPrevL = new FixedSampleArray(3); @state rndNextL = new FixedSampleArray(3);
+@state rndPrevR = new FixedSampleArray(3); @state rndNextR = new FixedSampleArray(3);
+@state rngSeed: Int = 2463534242;
+
+// Central cosine carrier phasors for the 3 scales
+@state lfoPh0 = new phasor();
+@state lfoPh1 = new phasor();
+@state lfoPh2 = new phasor();
+@state prevBarIn = 0.0;
+
+// Per-Scale Envelope Followers (DAFx-98 Sec 6 & 7)
+@state envLow = 0.0;
+@state envMid = 0.0;
+@state envHi  = 0.0;
+
+function nextRandBipolar(seedIn: Int): number {
+	let s: Int = seedIn * 1664525 + 1013904223;
+	return ((s & 65535) / 32768.0) - 1.0;
+}
+
+function readDelay2k(buf: FixedSampleArray, wIdx: Int, delSamps: number): number {
+	let d = clamp(delSamps, 2.0, 2042.0);
+	let readPos = wIdx - d;
+	while (readPos < 0.0) {
+		readPos += 2048.0;
+	}
+	let idx0: Int = floor(readPos);
+	let frac = readPos - idx0;
+	let i_m1: Int = (idx0 - 1 + 2048) & 2047;
+	let i_0: Int  = idx0 & 2047;
+	let i_1: Int  = (idx0 + 1) & 2047;
+	let i_2: Int  = (idx0 + 2) & 2047;
+	return cubicinterp(frac, buf[i_m1], buf[i_0], buf[i_1], buf[i_2]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let barIn = in4;
+
+// --- 1. Dyadic Multiscale Filterbank Split (Low, Mid, High, DAFx-98 Sec 7) ---
+let lowL = lpLowL.next(xL, 250.0);
+let lowR = lpLowR.next(xR, 250.0);
+
+let remL = xL - lowL;
+let remR = xR - lowR;
+
+let midL = lpMidL.next(remL, 1250.0);
+let midR = lpMidR.next(remR, 1250.0);
+
+let hiL = remL - midL;
+let hiR = remR - midR;
+
+bufLowL[writeIdx] = lowL; bufLowR[writeIdx] = lowR;
+bufMidL[writeIdx] = midL; bufMidR[writeIdx] = midR;
+bufHiL[writeIdx]  = hiL;  bufHiR[writeIdx]  = hiR;
+
+// --- 2. Per-Scale Envelope Followers (DAFx-98 Sec 6 & 8) ---
+let envAlpha = 1.0 - exp(-1.0 / (0.018 * sr));
+envLow += (0.5 * (abs(lowL) + abs(lowR)) - envLow) * envAlpha;
+envMid += (0.5 * (abs(midL) + abs(midR)) - envMid) * envAlpha;
+envHi  += (0.5 * (abs(hiL)  + abs(hiR))  - envHi)  * envAlpha;
+
+let totalEnv = clamp((envLow + envMid + envHi) * 2.5, 0.0, 1.0);
+
+// --- 3. Raised-Cosine Interpolated Narrowband Random LFOs (DAFx-98 Sec 5 & 8) ---
+// Sec 8: Changing f_sm according to the envelope increases randomness on loud signals!
+let baseRate = clamp(central_rate_hz, 0.15, 5.0);
+let rndAmt = clamp(randomness_bw, 0.0, 1.0);
+let fsmHz = baseRate * (0.6 + 2.4 * rndAmt) * (1.0 + 1.5 * totalEnv * rndAmt);
+let fsmInc = clamp(fsmHz / sr, 0.000001, 0.05);
+
+for (let b: Int = 0; b < 3; b++) {
+	let p = rndPh[b] + fsmInc * (1.0 + 0.25 * b);
+	if (p >= 1.0) {
+		p -= 1.0;
+		rndPrevL[b] = rndNextL[b];
+		rngSeed = rngSeed * 1664525 + 1013904223;
+		rndNextL[b] = ((rngSeed & 65535) / 32768.0) - 1.0;
+
+		rndPrevR[b] = rndNextR[b];
+		rngSeed = rngSeed * 1664525 + 1013904223;
+		rndNextR[b] = ((rngSeed & 65535) / 32768.0) - 1.0;
+	}
+	rndPh[b] = p;
+}
+
+// Raised-cosine (Hann) C^infinity interpolation between random targets (DAFx-98 Sec 5)
+let w0 = 0.5 * (1.0 - cos(pi * rndPh[0]));
+let w1 = 0.5 * (1.0 - cos(pi * rndPh[1]));
+let w2 = 0.5 * (1.0 - cos(pi * rndPh[2]));
+
+let noise0L = linearinterp(w0, rndPrevL[0], rndNextL[0]);
+let noise0R = linearinterp(w0, rndPrevR[0], rndNextR[0]);
+let noise1L = linearinterp(w1, rndPrevL[1], rndNextL[1]);
+let noise1R = linearinterp(w1, rndPrevR[1], rndNextR[1]);
+let noise2L = linearinterp(w2, rndPrevL[2], rndNextL[2]);
+let noise2R = linearinterp(w2, rndPrevR[2], rndNextR[2]);
+
+// Central frequency cosine carriers
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let cPh0 = barActive ? wrap(barIn, 0.0, 1.0) : lfoPh0.next(baseRate * 0.75);
+let cPh1 = lfoPh1.next(baseRate);
+let cPh2 = lfoPh2.next(baseRate * 1.33);
+
+// Point-to-point multiplication of DC raised-cosine noise with cosine carrier (Sec 5)
+let mod0L = cos(2.0 * pi * cPh0) * linearinterp(rndAmt, 1.0, noise0L * 1.4);
+let mod0R = sin(2.0 * pi * cPh0) * linearinterp(rndAmt, 1.0, noise0R * 1.4);
+let mod1L = cos(2.0 * pi * cPh1) * linearinterp(rndAmt, 1.0, noise1L * 1.4);
+let mod1R = sin(2.0 * pi * cPh1) * linearinterp(rndAmt, 1.0, noise1R * 1.4);
+let mod2L = cos(2.0 * pi * cPh2) * linearinterp(rndAmt, 1.0, noise2L * 1.4);
+let mod2R = sin(2.0 * pi * cPh2) * linearinterp(rndAmt, 1.0, noise2R * 1.4);
+
+// Sec 7: Blend between shared modulation law (0.0) and independent multiscale laws (1.0)
+let indep = clamp(scale_independence, 0.0, 1.0);
+let lawLowL = linearinterp(indep, mod1L, mod0L);
+let lawLowR = linearinterp(indep, mod1R, mod0R);
+let lawMidL = mod1L;
+let lawMidR = mod1R;
+let lawHiL  = linearinterp(indep, mod1L, mod2L);
+let lawHiR  = linearinterp(indep, mod1R, mod2R);
+
+// --- 4. Multiscale Delay Evaluation & Envelope Color Shift (Sec 8) ---
+let baseMs = clamp(delay_depth_ms, 2.0, 25.0);
+let colShift = clamp(env_color_shift, 0.0, 1.0);
+
+// Sec 8: Envelope applied to main delay (not variable part) shifts tonal center dynamically
+let mainLowSamps = mstosamps(baseMs * 1.15 * (1.0 - 0.35 * colShift * clamp(envLow * 4.0, 0.0, 1.0)));
+let mainMidSamps = mstosamps(baseMs * (1.0 - 0.40 * colShift * clamp(envMid * 5.0, 0.0, 1.0)));
+let mainHiSamps  = mstosamps(baseMs * 0.75 * (1.0 - 0.45 * colShift * clamp(envHi * 6.0, 0.0, 1.0)));
+
+let modSpan = mstosamps(baseMs * 0.42);
+
+let wetLowL = readDelay2k(bufLowL, writeIdx, mainLowSamps + modSpan * 0.45 * lawLowL);
+let wetLowR = readDelay2k(bufLowR, writeIdx, mainLowSamps + modSpan * 0.45 * lawLowR);
+let wetMidL = readDelay2k(bufMidL, writeIdx, mainMidSamps + modSpan * lawMidL);
+let wetMidR = readDelay2k(bufMidR, writeIdx, mainMidSamps + modSpan * lawMidR);
+let wetHiL  = readDelay2k(bufHiL,  writeIdx, mainHiSamps  + modSpan * 1.15 * lawHiL);
+let wetHiR  = readDelay2k(bufHiR,  writeIdx, mainHiSamps  + modSpan * 1.15 * lawHiR);
+
+writeIdx = (writeIdx + 1) & 2047;
+
+// --- 5. Per-Scale Envelope-Automated Dry/Wet Ratio (DAFx-98 Sec 6 & 7) ---
+// Bands with little energy remain unprocessed (hiding modulated noise); active bands chorus!
+let duckAmt = clamp(env_mix_duck_noise, 0.0, 1.0);
+let baseWet = clamp(dry_wet_mix, 0.0, 1.0);
+
+let wLow = baseWet * linearinterp(duckAmt, 1.0, clamp(envLow * 12.0, 0.0, 1.0));
+let wMid = baseWet * linearinterp(duckAmt, 1.0, clamp(envMid * 16.0, 0.0, 1.0));
+let wHi  = baseWet * linearinterp(duckAmt, 1.0, clamp(envHi  * 24.0, 0.0, 1.0));
+
+out1 = (lowL + wLow * wetLowL) + (midL + wMid * wetMidL) + (hiL + wHi * wetHiL);
+out2 = (lowR + wLow * wetLowR) + (midR + wMid * wetMidR) + (hiR + wHi * wetHiR);
