@@ -6,6 +6,8 @@
 /DAFx-proceedings/papers
 /docs/
 /tools/__pycache__/
+sousa_mic.aif
+generated_maxpat/
 
 # General
 .DS_Store 
