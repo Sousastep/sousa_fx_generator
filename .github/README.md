@@ -58,6 +58,7 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 
 - comp_crest_flux_autoballistic.maxpat 			** excellent compressor, needs gain staging
 - comp_ssl_g384_bus_vca.maxpat 					** classic glue buss compressor?
+- comp_fairchild_6386_varimu.maxpat 			** sounds great and auto-gain stages well
 
 - even_odd_harmonic_comb_splitter.maxpat 		* very good, does it well
 
@@ -86,7 +87,6 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 - fbam_delay_comb_operator.maxpat 				ok
 - cm_allpass_chain_synth.maxpat 				hmm
 - chorus_supersaw_waveform_animator.maxpat 		meh
-
 - chorus_amfm_hilbert_chorifer.maxpat 			badly gurgly
 - deformed_circle_map_fbfm.maxpat 				still sounds broken
 - modfm_pulse_saw_formant.maxpat 				still sounds broken
@@ -94,7 +94,6 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 - heterodyne_fof_resonator.maxpat 				useless dirt
 - limiter_hamalainen_orderstat_peak.maxpat 		sounds good but ceiling does nothing when drive is 0? 
 
-- comp_fairchild_6386_varimu.maxpat 			broken: doesn't pass audio when mix is 1
 
 ## Day 3 - vowel, formant, vocal, lowpass 
 - filter_crybaby_fasel_inductor_wah.txt 		* good old fashoned wah
