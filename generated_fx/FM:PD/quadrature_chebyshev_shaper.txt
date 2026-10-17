@@ -40,66 +40,95 @@
 @state rImX = new FixedSampleArray(4); @state rImY = new FixedSampleArray(4);
 @state rDelRe = 0.0;
 
+// Warm lowpass pre-conditioning so Chebyshev polynomials shape the fundamental + low brass body cleanly
+@state preLpL = new onepole();
+@state preLpR = new onepole();
+
+// Glitch-free bar phasor hold & smoothers
 @state barFallback = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
+@state smoothEnvMod = 0.0;
 @state dcXL = 0.0; @state dcYL = 0.0;
 @state dcXR = 0.0; @state dcYR = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = (abs(in2) > 0.0000001) ? in2 : xL;
-let envMod = in3;
+let envMod = (in3 > -2.0 && in3 < 2.0) ? in3 : 0.0;
 let barIn = in4;
 
+// Smooth in3 modulation to prevent clicks
+let modSlew = 1.0 - exp(-1.0 / (0.005 * sr));
+smoothEnvMod += (envMod - smoothEnvMod) * modSlew;
+
 // --- 1. Stereo 4-Stage Hilbert Quadrature Extraction (x_I = cos, x_Q = sin) ---
+// Pre-condition high brass fizz slightly so 6th-order Chebyshev recurrences don't intermodulate harshly
+let cleanL = 0.75 * preLpL.next(xL, 450.0) + 0.25 * xL;
+let cleanR = 0.75 * preLpR.next(xR, 450.0) + 0.25 * xR;
+
 let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
 let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
 
-let reL = xL;
-let t = cR0 * (reL + lReY[0]) - lReX[0]; lReX[0] = reL; lReY[0] = t; reL = t;
-t = cR1 * (reL + lReY[1]) - lReX[1]; lReX[1] = reL; lReY[1] = t; reL = t;
-t = cR2 * (reL + lReY[2]) - lReX[2]; lReX[2] = reL; lReY[2] = t; reL = t;
-t = cR3 * (reL + lReY[3]) - lReX[3]; lReX[3] = reL; lReY[3] = t; reL = t;
+// Correct negative-feedback allpass Hilbert network: y[n] = c * (x[n] - y[n-1]) + x[n-1]
+let reL = cleanL;
+let t = cR0 * (reL - lReY[0]) + lReX[0]; lReX[0] = reL; lReY[0] = t; reL = t;
+t = cR1 * (reL - lReY[1]) + lReX[1]; lReX[1] = reL; lReY[1] = t; reL = t;
+t = cR2 * (reL - lReY[2]) + lReX[2]; lReX[2] = reL; lReY[2] = t; reL = t;
+t = cR3 * (reL - lReY[3]) + lReX[3]; lReX[3] = reL; lReY[3] = t; reL = t;
 let rawIL = lDelRe; lDelRe = reL;
 
-let imL = xL;
-t = cI0 * (imL + lImY[0]) - lImX[0]; lImX[0] = imL; lImY[0] = t; imL = t;
-t = cI1 * (imL + lImY[1]) - lImX[1]; lImX[1] = imL; lImY[1] = t; imL = t;
-t = cI2 * (imL + lImY[2]) - lImX[2]; lImX[2] = imL; lImY[2] = t; imL = t;
-t = cI3 * (imL + lImY[3]) - lImX[3]; lImX[3] = imL; lImY[3] = t; imL = t;
+let imL = cleanL;
+t = cI0 * (imL - lImY[0]) + lImX[0]; lImX[0] = imL; lImY[0] = t; imL = t;
+t = cI1 * (imL - lImY[1]) + lImX[1]; lImX[1] = imL; lImY[1] = t; imL = t;
+t = cI2 * (imL - lImY[2]) + lImX[2]; lImX[2] = imL; lImY[2] = t; imL = t;
+t = cI3 * (imL - lImY[3]) + lImX[3]; lImX[3] = imL; lImY[3] = t; imL = t;
 let rawQL = imL;
 
-let reR = xR;
-t = cR0 * (reR + rReY[0]) - rReX[0]; rReX[0] = reR; rReY[0] = t; reR = t;
-t = cR1 * (reR + rReY[1]) - rReX[1]; rReX[1] = reR; rReY[1] = t; reR = t;
-t = cR2 * (reR + rReY[2]) - rReX[2]; rReX[2] = reR; rReY[2] = t; reR = t;
-t = cR3 * (reR + rReY[3]) - rReX[3]; rReX[3] = reR; rReY[3] = t; reR = t;
+let reR = cleanR;
+t = cR0 * (reR - rReY[0]) + rReX[0]; rReX[0] = reR; rReY[0] = t; reR = t;
+t = cR1 * (reR - rReY[1]) + rReX[1]; rReX[1] = reR; rReY[1] = t; reR = t;
+t = cR2 * (reR - rReY[2]) + rReX[2]; rReX[2] = reR; rReY[2] = t; reR = t;
+t = cR3 * (reR - rReY[3]) + rReX[3]; rReX[3] = reR; rReY[3] = t; reR = t;
 let rawIR = rDelRe; rDelRe = reR;
 
-let imR = xR;
-t = cI0 * (imR + rImY[0]) - rImX[0]; rImX[0] = imR; rImY[0] = t; imR = t;
-t = cI1 * (imR + rImY[1]) - rImX[1]; rImX[1] = imR; rImY[1] = t; imR = t;
-t = cI2 * (imR + rImY[2]) - rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
-t = cI3 * (imR + rImY[3]) - rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
+let imR = cleanR;
+t = cI0 * (imR - rImY[0]) + rImX[0]; rImX[0] = imR; rImY[0] = t; imR = t;
+t = cI1 * (imR - rImY[1]) + rImX[1]; rImX[1] = imR; rImY[1] = t; imR = t;
+t = cI2 * (imR - rImY[2]) + rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
+t = cI3 * (imR - rImY[3]) + rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
 let rawQR = imR;
 
-// Bound input to [-1, 1] unit disk so Chebyshev recursions stay strictly within [-1, 1]
+// Radial unit-disk saturation: preserves exact quadrature angle (cos(theta), sin(theta))
+// while bounding radius r_sat in [0, 1) so Chebyshev T_k and U_k never blow up or clip!
 let drive = dbtoa(clamp(drive_db, 0.0, 18.0));
-let xIL = tanh(rawIL * drive);
-let xQL = tanh(rawQL * drive);
-let xIR = tanh(rawIR * drive);
-let xQR = tanh(rawQR * drive);
+let magL = sqrt(rawIL * rawIL + rawQL * rawQL + 0.00000001);
+let satMagL = tanh(magL * drive);
+let scaleL = satMagL / magL;
+let xIL = rawIL * scaleL;
+let xQL = rawQL * scaleL;
+
+let magR = sqrt(rawIR * rawIR + rawQR * rawQR + 0.00000001);
+let satMagR = tanh(magR * drive);
+let scaleR = satMagR / magR;
+let xIR = rawIR * scaleR;
+let xQR = rawQR * scaleR;
+
+// Dynamic envelope window (r_sat^2) for even-order T_2, T_4, T_6 so their constant terms
+// (-1, +1, -1) vanish smoothly at zero signal and never cause gate/breath thumps!
+let envWinL = satMagL * satMagL;
+let envWinR = satMagR * satMagR;
 
 // --- 2. Compute Chebyshev Polynomials of 1st Kind (T_1..T_6) & 2nd Kind (U_0..U_5) ---
 // Recurrences: T_k(x) = 2*x*T_{k-1}(x) - T_{k-2}(x)
 //              U_k(x) = 2*x*U_{k-1}(x) - U_{k-2}(x), where sin(k*w*t) = sin(w*t) * U_{k-1}(cos(w*t))
 // Left Channel:
 let T1L = xIL;
-let T2L = 2.0 * xIL * T1L - 1.0;
-let T3L = 2.0 * xIL * T2L - T1L;
-let T4L = 2.0 * xIL * T3L - T2L;
-let T5L = 2.0 * xIL * T4L - T3L;
-let T6L = 2.0 * xIL * T5L - T4L;
+let T2L = (2.0 * xIL * T1L - 1.0) * envWinL;
+let T3L = 2.0 * xIL * (2.0 * xIL * T1L - 1.0) - T1L;
+let T4L = (2.0 * xIL * T3L - (2.0 * xIL * T1L - 1.0)) * envWinL;
+let T5L = 2.0 * xIL * (2.0 * xIL * T3L - (2.0 * xIL * T1L - 1.0)) - T3L;
+let T6L = (2.0 * xIL * T5L - (2.0 * xIL * T3L - (2.0 * xIL * T1L - 1.0))) * envWinL;
 
 let U0L = 1.0;
 let U1L = 2.0 * xIL;
@@ -110,11 +139,11 @@ let U5L = 2.0 * xIL * U4L - U3L;
 
 // Right Channel:
 let T1R = xIR;
-let T2R = 2.0 * xIR * T1R - 1.0;
-let T3R = 2.0 * xIR * T2R - T1R;
-let T4R = 2.0 * xIR * T3R - T2R;
-let T5R = 2.0 * xIR * T4R - T3R;
-let T6R = 2.0 * xIR * T5R - T4R;
+let T2R = (2.0 * xIR * T1R - 1.0) * envWinR;
+let T3R = 2.0 * xIR * (2.0 * xIR * T1R - 1.0) - T1R;
+let T4R = (2.0 * xIR * T3R - (2.0 * xIR * T1R - 1.0)) * envWinR;
+let T5R = 2.0 * xIR * (2.0 * xIR * T3R - (2.0 * xIR * T1R - 1.0)) - T3R;
+let T6R = (2.0 * xIR * T5R - (2.0 * xIR * T3R - (2.0 * xIR * T1R - 1.0))) * envWinR;
 
 let U0R = 1.0;
 let U1R = 2.0 * xIR;
@@ -124,15 +153,21 @@ let U4R = 2.0 * xIR * U3R - U2R;
 let U5R = 2.0 * xIR * U4R - U3R;
 
 // --- 3. Harmonic Phase Angle Rotation phi_k (Paper Eq. 10-15) ---
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// Glitch-free bar phasor detection (100 ms hold prevents wrap-around dropout clicks every 2 seconds!)
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let spinPh = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : barFallback.next(0.5);
+let fbPh = barFallback.next(0.5);
+let spinPh = (barHold > 0.0) ? wrap(barIn * 2.0, 0.0, 1.0) : fbPh;
 let spinAngle = 2.0 * pi * spinPh * clamp(phase_spin, 0.0, 1.0);
 
-let basePhi = clamp(quad_phase_angle, -3.14159, 3.14159) + envMod * pi;
+let baseAngle = clamp(quad_phase_angle, -3.14159, 3.14159) + smoothEnvMod * pi;
 let stOffset = clamp(stereo_quad_spread, 0.0, 1.0) * 0.5 * pi;
 
-// Progressive harmonic phase dispersion: phi_k = k * basePhi + spinAngle
+// Progressive harmonic phase dispersion: phi_k = k * baseAngle + spinAngle
 let evAmt = pow(clamp(even_harmonics, 0.0, 1.0), 1.2);
 let odAmt = pow(clamp(odd_harmonics, 0.0, 1.0), 1.2);
 let hiTilt = clamp(high_order_tilt, 0.0, 1.0);
@@ -143,36 +178,36 @@ let a4 = evAmt * (0.25 + 0.55 * hiTilt);
 let a5 = odAmt * (0.25 + 0.55 * hiTilt);
 let a6 = evAmt * (0.15 + 0.50 * hiTilt);
 
-let p2L = 2.0 * basePhi + spinAngle;       let p2R = 2.0 * (basePhi + stOffset) - spinAngle;
-let p3L = 3.0 * basePhi + spinAngle * 2.0; let p3R = 3.0 * (basePhi + stOffset) - spinAngle * 2.0;
-let p4L = 4.0 * basePhi + spinAngle * 3.0; let p4R = 4.0 * (basePhi + stOffset) - spinAngle * 3.0;
-let p5L = 5.0 * basePhi + spinAngle * 4.0; let p5R = 5.0 * (basePhi + stOffset) - spinAngle * 4.0;
-let p6L = 6.0 * basePhi + spinAngle * 5.0; let p6R = 6.0 * (basePhi + stOffset) - spinAngle * 5.0;
+let p2L = 2.0 * baseAngle + spinAngle;       let p2R = 2.0 * (baseAngle + stOffset) - spinAngle;
+let p3L = 3.0 * baseAngle + spinAngle * 2.0; let p3R = 3.0 * (baseAngle + stOffset) - spinAngle * 2.0;
+let p4L = 4.0 * baseAngle + spinAngle * 3.0; let p4R = 4.0 * (baseAngle + stOffset) - spinAngle * 3.0;
+let p5L = 5.0 * baseAngle + spinAngle * 4.0; let p5R = 5.0 * (baseAngle + stOffset) - spinAngle * 4.0;
+let p6L = 6.0 * baseAngle + spinAngle * 5.0; let p6R = 6.0 * (baseAngle + stOffset) - spinAngle * 5.0;
 
 // Paper Eq. 15: y(t) = sum_k a_k * [ cos(phi_k)*T_k(x_I) + sin(phi_k)*x_Q*U_{k-1}(x_I) ]
 let sumL = T1L
-	+ a2 * (cos(p2L) * T2L + sin(p2L) * xQL * U1L)
+	+ a2 * (cos(p2L) * T2L + sin(p2L) * xQL * U1L * envWinL)
 	+ a3 * (cos(p3L) * T3L + sin(p3L) * xQL * U2L)
-	+ a4 * (cos(p4L) * T4L + sin(p4L) * xQL * U3L)
+	+ a4 * (cos(p4L) * T4L + sin(p4L) * xQL * U3L * envWinL)
 	+ a5 * (cos(p5L) * T5L + sin(p5L) * xQL * U4L)
-	+ a6 * (cos(p6L) * T6L + sin(p6L) * xQL * U5L);
+	+ a6 * (cos(p6L) * T6L + sin(p6L) * xQL * U5L * envWinL);
 
 let sumR = T1R
-	+ a2 * (cos(p2R) * T2R + sin(p2R) * xQR * U1R)
+	+ a2 * (cos(p2R) * T2R + sin(p2R) * xQR * U1R * envWinR)
 	+ a3 * (cos(p3R) * T3R + sin(p3R) * xQR * U2R)
-	+ a4 * (cos(p4R) * T4R + sin(p4R) * xQR * U3R)
+	+ a4 * (cos(p4R) * T4R + sin(p4R) * xQR * U3R * envWinR)
 	+ a5 * (cos(p5R) * T5R + sin(p5R) * xQR * U4R)
-	+ a6 * (cos(p6R) * T6R + sin(p6R) * xQR * U5R);
+	+ a6 * (cos(p6R) * T6R + sin(p6R) * xQR * U5R * envWinR);
 
-let norm = 1.0 / (1.0 + 0.55 * (a2 + a3 + a4 + a5 + a6));
+let norm = 1.0 / (1.0 + 0.50 * (a2 + a3 + a4 + a5 + a6));
 let yL = sumL * norm;
 let yR = sumR * norm;
 
-// DC blocker (T2, T4, T6 contain constant terms at 0 input)
+// DC blocker
 let outL = yL - dcXL + 0.995 * dcYL;
 dcXL = yL; dcYL = outL;
 let outR = yR - dcXR + 0.995 * dcYR;
 dcXR = yR; dcYR = outR;
 
-out1 = outL;
-out2 = outR;
+out1 = tanh(outL * 1.15);
+out2 = tanh(outR * 1.15);

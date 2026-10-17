@@ -3,15 +3,15 @@
 // Unix-Style Stereo Effect: Sine Circle Map (Feedback FM) & Deformed Loop Projection
 // Implements Georg Essl (DAFx-22, Paper 23):
 // "Deforming the Oscillator: Iterative Phases Over Parametrizable Closed Paths"
-// (Sections 3.1-3.4, 4.1-4.4 & 6.2, Eq. 2, 5-6, 12-16, Fig. 6-14).
+// (Sections 3.1-3.4, 4.1-4.4, 6.2 & 7, Eq. 2, 5-6, 9-11, 13-14, Fig. 3-8).
 // Formulates Feedback FM as the discrete dynamical Sine Circle Map on S^1:
-//   x_n = (x_{n-1} + Omega + (k / 2*pi) * sin(2*pi * x_{n-1})) mod 1   (Eq. 5)
-// Synchronized to the tuba's analytic phase (or pitch increment Omega = f0 / fs),
-// where k = 1.0 marks the exact Arnold-tongue invertibility boundary between smooth
-// harmonic feedback FM and subharmonic period-doubling / tearout chaos!
-// Then projects the deformed phase x_n onto a continuously morphable 2D closed
-// geometric path in R^2 (Euclidean Circle <-> 4-Point Diamond <-> Concave L-Loop,
-// Sec 4.3 & 4.4) with stereo orthogonal viewing angles!
+//   x_n = (x_{n-1} + Omega + (k / 2*pi) * p_1(x_{n-1})) mod 1   (Eq. 5 & 13)
+// Synchronized to the tuba's phase-locked fundamental (with k = 1.0 marking the
+// exact Arnold-tongue invertibility boundary between smooth harmonic Feedback FM
+// and subharmonic period-doubling / tearout growls!), and projects the deformed
+// phase x_n onto a continuously morphable 2D closed Catmull-Rom spline path in R^2
+// (Euclidean Circle <-> Tensioned 4-Point Diamond <-> Concave L-Loop, Sec 4.1-4.4)
+// with stereo orthogonal viewing angles!
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (Tuba or 01_harmonic_isolator)
@@ -29,18 +29,26 @@
 @param({ min: 0.0, max: 1.0 }) angle_spin = 0.25;
 @param({ min: 0.0, max: 1.0 }) env_follow = 0.85;
 
-// 4-stage Quadrature IIR Hilbert network for analytic phase & envelope extraction
+// Fundamental isolation SVF + 4-stage Quadrature IIR Hilbert network for PLL phase lock
+@state fundSvf = new svf();
 @state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
 @state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
 @state hDelRe = 0.0;
+@state pllPhase = 0.0;
+@state prevPllPh = 0.0;
 
-// Iterative Sine Circle Map state x_{n-1} in [0, 1) (Paper Eq. 5)
+// Iterative Sine Circle Map state x_{n-1} & 1-sample averaged feedback state (Tomisawa anti-hunt filter)
 @state mapX_L = 0.0;
 @state mapX_R = 0.0;
+@state fbPrevL = 0.0;
+@state fbPrevR = 0.0;
+@state periodCountL: Int = 0;
+@state periodCountR: Int = 0;
 
 // Fallback trackers & DC blockers
 @state barFallback = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
 @state lpTrack = new onepole();
 @state prevSig = 0.0;
 @state zcCount = 0.0;
@@ -49,6 +57,17 @@
 @state smoothEnv = 0.0;
 @state dcXL = 0.0; @state dcYL = 0.0;
 @state dcXR = 0.0; @state dcYR = 0.0;
+
+// Tensioned Catmull-Rom Cardinal Spline basis evaluation (Paper Sec 4.1, Eq. 9)
+function evalCatmullRom(u: number, s: number, p0: number, p1: number, p2: number, p3: number): number {
+	let u2 = u * u;
+	let u3 = u2 * u;
+	let b0 = -s * u + 2.0 * s * u2 - s * u3;
+	let b1 = 1.0 + (s - 3.0) * u2 + (2.0 - s) * u3;
+	let b2 = s * u + (3.0 - 2.0 * s) * u2 + (s - 2.0) * u3;
+	let b3 = -s * u2 + s * u3;
+	return b0 * p0 + b1 * p1 + b2 * p2 + b3 * p3;
+}
 
 // Evaluate 2D Closed-Loop Geometric Projection (Paper Sec 4.1-4.4: Circle -> Diamond -> Concave L-Loop)
 function evalDeformedLoop(phaseIn: number, deform: number, rotAngle: number): number {
@@ -59,51 +78,51 @@ function evalDeformedLoop(phaseIn: number, deform: number, rotAngle: number): nu
 	let cirX = cos(rad);
 	let cirY = sin(rad);
 
-	// 2) 4-Point Diamond P_D = [(0,1), (1,0), (0,-1), (-1,0)] with corner tension (Sec 4.3)
+	// 4-segment closed loop parametrization (Sec 4.2: i = floor(4*t) mod 4, u = 4*t mod 1)
 	let segFloat = t * 4.0;
 	let segIdx: Int = floor(segFloat);
 	let u = segFloat - segIdx;
-	// Smooth cubic Hermite / spline tensioning along segment
-	let uSmooth = u * u * (3.0 - 2.0 * u);
 
-	let dX0 = 0.0; let dY0 = 1.0;
-	let dX1 = 1.0; let dY1 = 0.0;
-	if (segIdx == 1) {
-		dX0 = 1.0;  dY0 = 0.0;
-		dX1 = 0.0;  dY1 = -1.0;
-	} else if (segIdx == 2) {
-		dX0 = 0.0;  dY0 = -1.0;
-		dX1 = -1.0; dY1 = 0.0;
-	} else if (segIdx >= 3) {
-		dX0 = -1.0; dY0 = 0.0;
-		dX1 = 0.0;  dY1 = 1.0;
-	}
-	let diaX = linearinterp(u, dX0, dX1);
-	let diaY = linearinterp(u, dY0, dY1);
-
-	// 3) 4-Point Irregular Concave L-Shaped Loop (Sec 4.4: P_L = [(0.65,0.65), (0.75,-0.7), (-0.8,-0.85), (0.6,-0.6)])
-	let lX0 = 0.65;  let lY0 = 0.65;
-	let lX1 = 0.75;  let lY1 = -0.70;
-	if (segIdx == 1) {
-		lX0 = 0.75;  lY0 = -0.70;
-		lX1 = -0.80; lY1 = -0.85;
-	} else if (segIdx == 2) {
-		lX0 = -0.80; lY0 = -0.85;
-		lX1 = 0.60;  lY1 = -0.60;
-	} else if (segIdx >= 3) {
-		lX0 = 0.60;  lY0 = -0.60;
-		lX1 = 0.65;  lY1 = 0.65;
-	}
-	// Add spline curvature harmonic to Concave L-Loop
-	let lX = linearinterp(uSmooth, lX0, lX1) + 0.25 * sin(4.0 * rad);
-	let lY = linearinterp(uSmooth, lY0, lY1) - 0.25 * cos(4.0 * rad);
-
-	// Morph continuously across Circle (0.0) -> Diamond (0.5) -> Concave L-Loop (1.0)
 	let def = clamp(deform, 0.0, 1.0);
+	// Catmull-Rom cardinal parameter s = (1 - tau)/2: increases tension as deform grows (Fig. 3 & 4)
+	let sDia = 0.65 + 0.85 * def;
+	let sL   = 0.55 + 0.95 * def;
+
+	// 2) 4-Point Diamond P_D = [(0,1), (1,0), (0,-1), (-1,0)] (Sec 4.3, Eq. 10)
+	// Control points (P_{i-1}, P_i, P_{i+1}, P_{i+2}) for each segment i in 0..3:
+	let d0X = -1.0; let d0Y =  0.0;
+	let d1X =  0.0; let d1Y =  1.0;
+	let d2X =  1.0; let d2Y =  0.0;
+	let d3X =  0.0; let d3Y = -1.0;
+
+	// 3) 4-Point Irregular Concave L-Loop P_L = [(0.65,0.65), (0.75,-0.7), (-0.8,-0.85), (0.6,-0.6)] (Sec 4.4, Eq. 11)
+	let l0X =  0.60; let l0Y = -0.60;
+	let l1X =  0.65; let l1Y =  0.65;
+	let l2X =  0.75; let l2Y = -0.70;
+	let l3X = -0.80; let l3Y = -0.85;
+
+	if (segIdx == 1) {
+		d0X =  0.0; d0Y =  1.0; d1X =  1.0; d1Y =  0.0; d2X =  0.0; d2Y = -1.0; d3X = -1.0; d3Y =  0.0;
+		l0X =  0.65; l0Y = 0.65; l1X = 0.75; l1Y = -0.70; l2X = -0.80; l2Y = -0.85; l3X = 0.60; l3Y = -0.60;
+	} else if (segIdx == 2) {
+		d0X =  1.0; d0Y =  0.0; d1X =  0.0; d1Y = -1.0; d2X = -1.0; d2Y =  0.0; d3X =  0.0; d3Y =  1.0;
+		l0X =  0.75; l0Y = -0.70; l1X = -0.80; l1Y = -0.85; l2X = 0.60; l2Y = -0.60; l3X = 0.65; l3Y = 0.65;
+	} else if (segIdx >= 3) {
+		d0X =  0.0; d0Y = -1.0; d1X = -1.0; d1Y =  0.0; d2X =  0.0; d2Y =  1.0; d3X =  1.0; d3Y =  0.0;
+		l0X = -0.80; l0Y = -0.85; l1X = 0.60; l1Y = -0.60; l2X = 0.65; l2Y = 0.65; l3X = 0.75; l3Y = -0.70;
+	}
+
+	let diaX = evalCatmullRom(u, sDia, d0X, d1X, d2X, d3X);
+	let diaY = evalCatmullRom(u, sDia, d0Y, d1Y, d2Y, d3Y);
+
+	let lX = evalCatmullRom(u, sL, l0X, l1X, l2X, l3X);
+	let lY = evalCatmullRom(u, sL, l0Y, l1Y, l2Y, l3Y);
+
+	// Morph continuously across Circle (0.0) -> Tensioned Diamond (0.5) -> Concave L-Loop (1.0)
 	let px = (def <= 0.5) ? linearinterp(def * 2.0, cirX, diaX) : linearinterp((def - 0.5) * 2.0, diaX, lX);
 	let py = (def <= 0.5) ? linearinterp(def * 2.0, cirY, diaY) : linearinterp((def - 0.5) * 2.0, diaY, lY);
 
-	// Orthogonal planar projection at angle rotAngle (Sec 3.4)
+	// Orthogonal planar projection at angle rotAngle (Sec 3.4 & 5)
 	return px * cos(rotAngle) + py * sin(rotAngle);
 }
 
@@ -130,51 +149,105 @@ let slew = 1.0 - exp(-1.0 / (0.006 * sr));
 smoothF0 += (rawF0 - smoothF0) * slew;
 let f0 = clamp(smoothF0, 24.0, 1000.0);
 
-// --- 2. Extract Tuba Analytic Phase & Amplitude ---
+// --- 2. Extract Phase-Locked Tuba Fundamental Phasor & Amplitude ---
+let isoFund = fundSvf.next(mono, f0, 0.80)[2];
+
 let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
 let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
 
-let re = mono;
-let t = cR0 * (re + hReY[0]) - hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
-t = cR1 * (re + hReY[1]) - hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
-t = cR2 * (re + hReY[2]) - hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
-t = cR3 * (re + hReY[3]) - hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
+// Correct negative-feedback allpass Hilbert network: y[n] = c * (x[n] - y[n-1]) + x[n-1]
+let re = isoFund;
+let t = cR0 * (re - hReY[0]) + hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
+t = cR1 * (re - hReY[1]) + hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
+t = cR2 * (re - hReY[2]) + hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
+t = cR3 * (re - hReY[3]) + hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
 let sigRe = hDelRe; hDelRe = re;
 
-let im = mono;
-t = cI0 * (im + hImY[0]) - hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
-t = cI1 * (im + hImY[1]) - hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
-t = cI2 * (im + hImY[2]) - hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
-t = cI3 * (im + hImY[3]) - hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
+let im = isoFund;
+t = cI0 * (im - hImY[0]) + hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
+t = cI1 * (im - hImY[1]) + hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
+t = cI2 * (im - hImY[2]) + hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
+t = cI3 * (im - hImY[3]) + hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
 let sigIm = im;
 
-let instAmp = sqrt(sigRe * sigRe + sigIm * sigIm);
-smoothEnv += (instAmp - smoothEnv) * (1.0 - exp(-1.0 / (0.004 * sr)));
-let tubaPhi = wrap((atan2(sigIm, sigRe) + pi) / (2.0 * pi), 0.0, 1.0);
+let fullAmp = maximum(abs(xL), abs(xR));
+let envAtk = 1.0 - exp(-1.0 / (0.0025 * sr));
+let envRel = 1.0 - exp(-1.0 / (0.025 * sr));
+smoothEnv = (fullAmp > smoothEnv) ? (smoothEnv + (fullAmp - smoothEnv) * envAtk) : (smoothEnv + (fullAmp - smoothEnv) * envRel);
 
-// --- 3. Iterative Sine Circle Map (Feedback FM, Paper Sec 3.3, Eq. 5) ---
-// x_n = (x_{n-1} + Omega + (k / 2*pi) * sin(2*pi * x_{n-1})) mod 1
-let omega = f0 / sr;
+let hilbPh = wrap((atan2(sigIm, sigRe) + pi) / (2.0 * pi), 0.0, 1.0);
+let phErr = wrap(hilbPh - pllPhase + 0.5, 0.0, 1.0) - 0.5;
+let lockGain = (smoothEnv > 0.002) ? 0.035 : 0.0;
+pllPhase = wrap(pllPhase + (f0 / sr) + lockGain * phErr, 0.0, 1.0);
+let tubaPh = pllPhase;
+
+// Detect fundamental period wrap-around (for subharmonic 1:1 / 2:1 Arnold-tongue sync!)
+let periodReset = (tubaPh < prevPllPh - 0.5) ? 1 : 0;
+prevPllPh = tubaPh;
+
+// --- 3. Iterative Sine Circle Map & Deformed Feedback Projection (Paper Sec 3.3 & 7, Eq. 5 & 13) ---
 let kVal = clamp(circle_map_k, 0.0, 3.5);
-let lockAmt = clamp(phase_lock_strength, 0.0, 1.0) * 0.15;
+let lockStrength = clamp(phase_lock_strength, 0.0, 1.0);
+let defAmt = clamp(loop_deformation, 0.0, 1.0);
 
-// Couple circle map phase softly to tuba's analytic phase so Arnold-tongue subharmonics
-// stay locked to the live horn
-let errL = wrap(tubaPhi - mapX_L + 0.5, 0.0, 1.0) - 0.5;
-let errR = wrap(tubaPhi - mapX_R + 0.5, 0.0, 1.0) - 0.5;
+// In the Sine Circle Map x_n = x_{n-1} + Omega + (k / 2*pi)*sin(2*pi*x_{n-1}),
+// positive feedback accelerates the average rotation number W(Omega, k) above Omega!
+// Compensate Omega slightly as k grows so the perceived pitch stays locked to f0,
+// and use a 2-point Tomisawa anti-hunting filter on the feedback projection at high k.
+let omegaBase = f0 / sr;
+let errL = wrap(tubaPh - mapX_L + 0.5, 0.0, 1.0) - 0.5;
+let errR = wrap(tubaPh - mapX_R + 0.5, 0.0, 1.0) - 0.5;
 
-mapX_L = wrap(mapX_L + omega + (kVal / (2.0 * pi)) * sin(2.0 * pi * mapX_L) + lockAmt * errL, 0.0, 1.0);
-mapX_R = wrap(mapX_R + omega + ((kVal * 1.04) / (2.0 * pi)) * sin(2.0 * pi * mapX_R) + lockAmt * errR, 0.0, 1.0);
+// Section 7 (Eq. 13): Deform both the carrier loop AND the feedback perturbation p_1(x_{n-1})!
+let fbRawL = (1.0 - 0.35 * defAmt) * sin(2.0 * pi * mapX_L) + 0.35 * defAmt * evalDeformedLoop(mapX_L, defAmt, 0.5 * pi);
+let fbRawR = (1.0 - 0.35 * defAmt) * sin(2.0 * pi * mapX_R) + 0.35 * defAmt * evalDeformedLoop(mapX_R, defAmt, 0.0);
 
-// --- 4. 2D Closed-Loop Geometric Projection (Paper Sec 4 & 6) ---
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+let fbSmoothL = 0.65 * fbRawL + 0.35 * fbPrevL;
+let fbSmoothR = 0.65 * fbRawR + 0.35 * fbPrevR;
+fbPrevL = fbRawL;
+fbPrevR = fbRawR;
+
+// Scale perturbation per sample so k=0..1 sweeps smooth Tomisawa Feedback FM sawtooths,
+// while k=1..3.5 enters mode-locked subharmonic period-doubling & chaotic growls!
+let stepPertL = (kVal / (2.0 * pi)) * omegaBase * 6.5 * fbSmoothL;
+let stepPertR = ((kVal * 1.03) / (2.0 * pi)) * omegaBase * 6.5 * fbSmoothR;
+
+let contLock = lockStrength * 0.08;
+mapX_L = wrap(mapX_L + omegaBase + stepPertL + contLock * errL, 0.0, 1.0);
+mapX_R = wrap(mapX_R + omegaBase + stepPertR + contLock * errR, 0.0, 1.0);
+
+// Period-synchronous Arnold-tongue lock: when k <= 1.2, sync every period (1:1 fundamental lock);
+// when k > 1.2 and lockStrength < 0.75, sync every 2nd period so 2:1 octave subharmonics roar cleanly!
+if (periodReset > 0) {
+	periodCountL = (periodCountL + 1) % 2;
+	periodCountR = (periodCountR + 1) % 2;
+	let subDivide = (kVal > 1.15 && lockStrength < 0.8) ? 1 : 0;
+	if (subDivide == 0 || periodCountL == 0) {
+		mapX_L = wrap(mapX_L + lockStrength * 0.65 * (wrap(tubaPh - mapX_L + 0.5, 0.0, 1.0) - 0.5), 0.0, 1.0);
+	}
+	if (subDivide == 0 || periodCountR == 0) {
+		mapX_R = wrap(mapX_R + lockStrength * 0.65 * (wrap(tubaPh - mapX_R + 0.5, 0.0, 1.0) - 0.5), 0.0, 1.0);
+	}
+}
+
+// Also blend in direct phase-modulated deformed loop so low lockStrength still tracks tuba pitch
+let evalPhL = linearinterp(0.35 * lockStrength, mapX_L, wrap(tubaPh + (kVal / (2.0 * pi)) * 1.25 * fbSmoothL, 0.0, 1.0));
+let evalPhR = linearinterp(0.35 * lockStrength, mapX_R, wrap(tubaPh + ((kVal * 1.03) / (2.0 * pi)) * 1.25 * fbSmoothR, 0.0, 1.0));
+
+// --- 4. 2D Closed-Loop Geometric Projection (Paper Sec 4, 5 & 6) ---
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let barPh = barActive ? wrap(barIn, 0.0, 1.0) : barFallback.next(0.4);
+let fbBar = barFallback.next(0.4);
+let barPh = (barHold > 0.0) ? wrap(barIn, 0.0, 1.0) : fbBar;
 let rotAngle = clamp(proj_angle_rad, -3.14159, 3.14159) + 2.0 * pi * barPh * clamp(angle_spin, 0.0, 1.0);
 
 // Left channel projects onto rotAngle (X-axis), Right channel onto rotAngle + pi/2 (Y-axis)
-let rawOutL = evalDeformedLoop(mapX_L, loop_deformation, rotAngle);
-let rawOutR = evalDeformedLoop(mapX_R, loop_deformation, rotAngle + 0.5 * pi);
+let rawOutL = evalDeformedLoop(evalPhL, defAmt, rotAngle);
+let rawOutR = evalDeformedLoop(evalPhR, defAmt, rotAngle + 0.5 * pi);
 
 // DC blocker (Concave L-Loop is intentionally asymmetric around origin!)
 let dcOutL = rawOutL - dcXL + 0.995 * dcYL;
@@ -183,7 +256,7 @@ let dcOutR = rawOutR - dcXR + 0.995 * dcYR;
 dcXR = rawOutR; dcYR = dcOutR;
 
 let gate = clamp((smoothEnv - 0.002) * 200.0, 0.0, 1.0);
-let ampScale = linearinterp(clamp(env_follow, 0.0, 1.0), gate * 0.75, clamp(smoothEnv * 1.6, 0.0, 1.5));
+let ampScale = linearinterp(clamp(env_follow, 0.0, 1.0), gate * 0.75, clamp(smoothEnv * 1.5, 0.0, 1.3));
 
-out1 = dcOutL * ampScale;
-out2 = dcOutR * ampScale;
+out1 = tanh(dcOutL * ampScale);
+out2 = tanh(dcOutR * ampScale);

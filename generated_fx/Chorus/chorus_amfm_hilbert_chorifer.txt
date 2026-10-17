@@ -3,8 +3,10 @@
 // Standalone Stereo Chorus Effect: Analytic AM/FM "ChorIFer" & Harmonic-Interval
 // "TransColorIFer" Choir Ensemble (Zero Delay-Line Comb Filtering!)
 // Implements Antonio Jose Homsi Goulart, Victor Lazzarini & Joseph Timoney
-// (DAFx-15, Paper 30): "AM/FM DAFx" (Sections 2, 3.1, 3.2 & 3.4, Eq. 3-10,
-// Listings 1-2, Fig. 2, 3, 6).
+// (DAFx-15, Paper 30): "AM/FM DAFx" (Sections 2, 3.1, 3.2 & 3.4, Eq. 3-10, 12,
+// Listings 1-2, Fig. 2, 3, 6) and Goulart, Timoney, Queiroz & Lazzarini
+// (DAFx-18, Paper 28): "Interpretation and Control in AM/FM-Based Audio Effects"
+// (Sections 2.3 & 3.1-3.3, Eq. 8-11, Fig. 4-6).
 // Unlike delay-line choruses (which smear sharp tuba tongue transients across
 // 10-30 ms and introduce comb-filtering notches), the ChorIFer decomposes the
 // input signal into its exact Instantaneous Amplitude a(t) = |z(t)| and
@@ -12,12 +14,12 @@
 // Hilbert transform (Listing 1), synthesizes 4 independent detuned & FM-shimmered
 // phase trajectories theta_v(t) = integral(2*pi * r_v(t) * f(tau) dtau), and
 // multiplies the summed oscillator choir by the UN-SMEARED instantaneous
-// amplitude envelope a(t) (Listing 2, Eq. 8 & 10)!
+// amplitude envelope a(t) (Listing 2, Eq. 8, 10 & 12)!
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Envelope / Detune Boost [0..1]
+//   in3: Optional Tracked Pitch f0 in Hz (if >20 Hz) OR Envelope/Detune Boost [0..1]
 //   in4: Optional 1-Bar Phasor [0..1]
 // Outlets:
 //   out1: Left AM/FM ChorIFer & TransColorIFer Output
@@ -34,98 +36,166 @@
 @state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
 @state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
 @state hDelRe = 0.0;
-@state prevTheta = 0.0;
+@state prevRe = 0.0;
+@state prevIm = 0.0;
 
-// Instantaneous Frequency (IF) & Instantaneous Amplitude (IA) smoothers (Sec 1 & 2)
-@state ifLp = new onepole();
+// Fundamental & Warmth Pre-Conditioners for clean IF tracking + zero-latency IA
+@state fundLp = new onepole();
+@state ifLp1 = new onepole();
+@state ifLp2 = new onepole();
 @state iaLp = new onepole();
 
-// 4 Resynthesis Phase Integrators for the ChorIFer & TransColorIFer Choir (Listing 2, Eq. 8 & 10)
+// Fallback ZC pitch anchor so IF never spikes when envelope a(t) approaches zero (DAFx-18 Fig. 5-6)
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state heldIF = 58.27;
+
+// 6 Resynthesis Phase Integrators for the Stereo ChorIFer, OctIFer & TransColorIFer Choir (Eq. 8, 10, 12)
 @state synPh1L = 0.0; @state synPh2R = 0.0;
+@state synPh3L = 0.0; @state synPh4R = 0.0;
 @state synPhSub = 0.0; @state synPhFifth = 0.0;
 
 // Quadrature LFOs for ChorIFer IF modulation
 @state lfo1 = new phasor();
 @state lfo2 = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = (abs(in2) > 0.0000001) ? in2 : xL;
-let envBoost = clamp(in3, 0.0, 1.0);
+let in3Val = in3;
 let barIn = in4;
 
-// --- 1. Hilbert Analytic Signal Decomposition z(t) = a(t) * e^(j*theta(t)) (Listing 1) ---
+// Smart in3 auto-detection: in main_test_patcher, in3 can carry either tracked pitch Hz (>20 Hz)
+// OR an envelope / macro modulator in [0..1]!
+let hasPitchIn = (in3Val > 20.0 && in3Val < 1200.0) ? 1.0 : 0.0;
+let envBoost = (hasPitchIn > 0.5) ? 0.0 : clamp(in3Val, 0.0, 1.0);
+
 let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (hasPitchIn > 0.5) ? in3Val : zcHz;
+let f0Slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * f0Slew;
+let anchorF0 = clamp(smoothF0, 24.0, 1000.0);
+
+// --- 1. Hilbert Analytic Signal Decomposition z(t) = a(t) * e^(j*theta(t)) (Listing 1, DAFx-18 Eq. 8-11) ---
 let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
 let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
 
+// Correct negative-feedback allpass Hilbert network: y[n] = c * (x[n] - y[n-1]) + x[n-1]
 let re = mono;
-let t = cR0 * (re + hReY[0]) - hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
-t = cR1 * (re + hReY[1]) - hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
-t = cR2 * (re + hReY[2]) - hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
-t = cR3 * (re + hReY[3]) - hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
+let t = cR0 * (re - hReY[0]) + hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
+t = cR1 * (re - hReY[1]) + hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
+t = cR2 * (re - hReY[2]) + hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
+t = cR3 * (re - hReY[3]) + hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
 let sigRe = hDelRe;
 hDelRe = re;
 
 let im = mono;
-t = cI0 * (im + hImY[0]) - hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
-t = cI1 * (im + hImY[1]) - hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
-t = cI2 * (im + hImY[2]) - hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
-t = cI3 * (im + hImY[3]) - hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
+t = cI0 * (im - hImY[0]) + hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
+t = cI1 * (im - hImY[1]) + hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
+t = cI2 * (im - hImY[2]) + hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
+t = cI3 * (im - hImY[3]) + hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
 let sigIm = im;
 
-// Instantaneous Amplitude a(t) = sqrt(re^2 + im^2) (Eq. 5)
+// Instantaneous Amplitude a(t) = sqrt(re^2 + im^2) (DAFx-15 Eq. 5, DAFx-18 Eq. 9)
+// Notice: Keeping the high-bandwidth envelope a(t) preserves all the tuba's harmonic
+// amplitude modulations so ring-modulating with the FM carrier convolves their spectra (Sec 3.1)!
 let rawIA = sqrt(sigRe * sigRe + sigIm * sigIm);
-let ia = iaLp.next(rawIA, 2500.0);
+let ia = iaLp.next(rawIA, 3200.0);
 
-// Unwrapped Phase Differentiation Udiff(aph) * sr / (2*pi) (Listing 1)
-let theta = atan2(sigIm, sigRe);
-let dTheta = theta - prevTheta;
-prevTheta = theta;
-if (dTheta >= pi) {
-	dTheta -= 2.0 * pi;
-} else if (dTheta < -pi) {
-	dTheta += 2.0 * pi;
-}
+// Cross-product Instantaneous Frequency (DAFx-18 Eq. 11) with envelope-squared gating:
+// Avoids atan2 branch-cut jumps and suppresses the 1/a^2 IF spikes when a(t) fades out (DAFx-18 Fig. 5-6)
+let crossIm = sigRe * prevIm - sigIm * prevRe;
+let dotRe   = sigRe * prevRe + sigIm * prevIm;
+prevRe = sigRe;
+prevIm = sigIm;
 
-let rawIF = clamp((dTheta * sr) / (2.0 * pi), 15.0, 4000.0);
-let smoothIF = ifLp.next(rawIF, clamp(if_smoother_hz, 80.0, 3000.0));
+let dTheta = 0.0 - atan2(crossIm, dotRe + 0.00000001);
+let instHz = (dTheta * sr) / (2.0 * pi);
 
-// --- 2. ChorIFer Detuned & Modulated IF Voices (Sec 3.4, Fig. 6) ---
-// Sec 3.4: Clean chorusing up to ~1% of IF; dramatic FM sideband animation up to 3.5% of IF!
+// Weight instantaneous frequency by envelope confidence so zero-crossings of a(t) never spike to 4 kHz
+let envWeight = clamp((rawIA - 0.003) * 80.0, 0.0, 1.0);
+let clampedInstHz = clamp(instHz, anchorF0 * 0.45, anchorF0 * 3.5);
+heldIF = linearinterp(envWeight, anchorF0, clampedInstHz);
+
+// 2-pole IF smoother (DAFx-15 Sec 1 & DAFx-18 Sec 3.1 Fig. 7):
+// Lower cutoffs (80-250 Hz) yield silky unison chorusing; higher cutoffs (600-3000 Hz) preserve brass FM growl
+let cutHz = clamp(if_smoother_hz, 80.0, 3000.0);
+let smoothIF = ifLp2.next(ifLp1.next(heldIF, cutHz), cutHz);
+
+// --- 2. ChorIFer Detuned & Modulated IF Voices (DAFx-15 Sec 3.4, Eq. 12, Fig. 6) ---
+// Sec 3.4: Clean chorusing/vibrato up to ~1% of IF; dramatic FM sideband animation up to 3.5% of IF!
 let detPct = clamp(chorifer_detune_pct + envBoost * 1.0, 0.0, 3.5) * 0.01;
 let rate = clamp(shimmer_rate_hz, 0.15, 6.0);
 
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// Glitch-free bar phasor detection (100 ms hold prevents wrap-around dropout clicks)
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let p1 = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : lfo1.next(rate);
+let fbLfo1 = lfo1.next(rate);
+let p1 = (barHold > 0.0) ? wrap(barIn * 2.0, 0.0, 1.0) : fbLfo1;
 let p2 = lfo2.next(rate * 1.27);
 
-let modL = 1.0 + detPct * (0.45 + 0.55 * sin(2.0 * pi * p1));
-let modR = 1.0 - detPct * (0.45 + 0.55 * cos(2.0 * pi * p2));
+// 4-voice symmetric ChorIFer ensemble (Eq. 12: k = -2, -1, +1, +2) with bipolar LFO animation
+let lfoSin1 = sin(2.0 * pi * p1);
+let lfoCos1 = cos(2.0 * pi * p1);
+let lfoSin2 = sin(2.0 * pi * p2);
+let lfoCos2 = cos(2.0 * pi * p2);
 
-synPh1L = wrap(synPh1L + (smoothIF * modL) / sr, 0.0, 1.0);
-synPh2R = wrap(synPh2R + (smoothIF * modR) / sr, 0.0, 1.0);
+let mod1L = 1.0 + detPct * (0.35 + 0.65 * lfoSin1);
+let mod2R = 1.0 - detPct * (0.35 + 0.65 * lfoCos2);
+let mod3L = 1.0 - detPct * (0.70 + 0.45 * lfoCos1);
+let mod4R = 1.0 + detPct * (0.70 + 0.45 * lfoSin2);
+
+synPh1L = wrap(synPh1L + (smoothIF * mod1L) / sr, 0.0, 1.0);
+synPh2R = wrap(synPh2R + (smoothIF * mod2R) / sr, 0.0, 1.0);
+synPh3L = wrap(synPh3L + (smoothIF * mod3L) / sr, 0.0, 1.0);
+synPh4R = wrap(synPh4R + (smoothIF * mod4R) / sr, 0.0, 1.0);
 
 // --- 3. OctIFer (0.5x / 2.0x, Sec 3.1) & TransColorIFer (3:2 Fifth, Sec 3.2, Eq. 10) ---
-synPhSub   = wrap(synPhSub   + (smoothIF * 0.5) / sr, 0.0, 1.0);
-synPhFifth = wrap(synPhFifth + (smoothIF * 1.5 * (1.0 + 0.3 * detPct * sin(2.0 * pi * p2))) / sr, 0.0, 1.0);
+// Anchor sub-octave & fifth phase integrators to a smoother pitch trajectory so intervals stay rock-solid
+let subPitch = 0.65 * anchorF0 + 0.35 * smoothIF;
+synPhSub   = wrap(synPhSub   + (subPitch * 0.5) / sr, 0.0, 1.0);
+synPhFifth = wrap(synPhFifth + (smoothIF * 1.5 * (1.0 + 0.25 * detPct * lfoSin2)) / sr, 0.0, 1.0);
 
 let octAmt = clamp(octifer_sub_up_blend, 0.0, 1.0);
 let fifthAmt = clamp(transcolor_fifth, 0.0, 1.0);
 
-// Multiply resynthesized FM carriers by the exact un-delayed Instantaneous Amplitude a(t)! (Eq. 8 & 10)
+// Multiply resynthesized FM carriers by the exact un-delayed Instantaneous Amplitude a(t)! (Eq. 8, 10 & 12)
 // Notice: synPhSub * 4.0 gives the 2x Up-OctIFer (slide-guitar harmonic sheen, Fig. 3),
 // while synPhSub gives the 0.5x Down-OctIFer (clean sub-bass boost, Fig. 2)!
-let octWaveL = 0.65 * cos(2.0 * pi * synPhSub) + 0.35 * cos(2.0 * pi * wrap(synPhSub * 4.0, 0.0, 1.0));
-let octWaveR = 0.65 * sin(2.0 * pi * synPhSub) + 0.35 * sin(2.0 * pi * wrap(synPhSub * 4.0, 0.0, 1.0));
+let octWaveL = 0.68 * cos(2.0 * pi * synPhSub) + 0.32 * cos(2.0 * pi * wrap(synPhSub * 4.0, 0.0, 1.0));
+let octWaveR = 0.68 * sin(2.0 * pi * synPhSub) + 0.32 * sin(2.0 * pi * wrap(synPhSub * 4.0, 0.0, 1.0));
 
-let wetL = ia * (cos(2.0 * pi * synPh1L) + 0.35 * cos(2.0 * pi * synPh2R) + octAmt * octWaveL + fifthAmt * cos(2.0 * pi * synPhFifth));
-let wetR = ia * (cos(2.0 * pi * synPh2R) + 0.35 * cos(2.0 * pi * synPh1L) + octAmt * octWaveR + fifthAmt * sin(2.0 * pi * synPhFifth));
+let choirL = 0.55 * cos(2.0 * pi * synPh1L) + 0.45 * cos(2.0 * pi * synPh3L) + 0.30 * cos(2.0 * pi * synPh2R);
+let choirR = 0.55 * cos(2.0 * pi * synPh2R) + 0.45 * cos(2.0 * pi * synPh4R) + 0.30 * cos(2.0 * pi * synPh1L);
 
-let norm = 1.0 / (1.35 + 0.7 * (octAmt + fifthAmt));
+let wetL = ia * (choirL + octAmt * octWaveL + fifthAmt * cos(2.0 * pi * synPhFifth));
+let wetR = ia * (choirR + octAmt * octWaveR + fifthAmt * sin(2.0 * pi * synPhFifth));
+
+let norm = 1.0 / (1.15 + 0.65 * (octAmt + fifthAmt));
 let mix = clamp(dry_wet_mix, 0.0, 1.0);
 
-out1 = cos(mix * 0.5 * pi) * xL + sin(mix * 0.5 * pi) * wetL * norm * 1.35;
-out2 = cos(mix * 0.5 * pi) * xR + sin(mix * 0.5 * pi) * wetR * norm * 1.35;
+// Use phase-aligned Hilbert real signal sigRe for the dry path so dry + wet blend has zero phase cancellation!
+let dryAlignedL = (abs(in2) > 0.0000001) ? xL : sigRe;
+let dryAlignedR = (abs(in2) > 0.0000001) ? xR : sigRe;
+
+out1 = tanh(cos(mix * 0.5 * pi) * dryAlignedL + sin(mix * 0.5 * pi) * wetL * norm * 1.35);
+out2 = tanh(cos(mix * 0.5 * pi) * dryAlignedR + sin(mix * 0.5 * pi) * wetR * norm * 1.35);

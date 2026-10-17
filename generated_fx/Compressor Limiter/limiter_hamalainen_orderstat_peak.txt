@@ -21,21 +21,18 @@
 // Sidechain delay line for recursive M-point moving average (Eq. 21)
 @state emax_dly = new delay(128);
 
-// Running-max 4-stage cascaded peak-hold buckets covering N lookahead samples
-@state hold_val_0 = 0.0;
-@state hold_val_1 = 0.0;
-@state hold_val_2 = 0.0;
-@state hold_val_3 = 0.0;
-@state hold_cnt = 0;
+// Running-max 8-stage cascaded peak-hold buckets covering N lookahead samples
+@state hold_val = new FixedSampleArray(8);
+@state hold_cnt: Int = 0;
 
 // Envelope states e_max(n-1) and recursive moving average e_ave(n-1) (Eqs. 7, 19, 21)
 @state e_max_state = 0.0;
 @state e_ave_state = 0.0;
 @state pump_LP = 0.0;
 
-let sr_safe = max(samplerate(), 8000.0);
+let sr_safe = maximum(samplerate(), 8000.0);
 let dryL = in1;
-let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+let dryR = (abs(in2) > 0.0000001) ? in2 : in1;
 
 // Input drive & ceiling threshold
 let drv = dbtoa(clamp(drive_db, 0.0, 30.0));
@@ -43,44 +40,58 @@ let xL = dryL * drv;
 let xR = dryR * drv;
 
 let thresh = dbtoa(clamp(ceiling_db, -18.0, -0.05));
-let N = floor(clamp(lookahead_samp, 4.0, 128.0));
-let M = floor(clamp(boxcar_smooth, 1.0, 64.0));
+let N: Int = floor(clamp(lookahead_samp, 4.0, 128.0));
+let M: Int = floor(clamp(boxcar_smooth, 1.0, 64.0));
 
-// Delay audio signals by N samples: y(n) = x(n - N) * g(n) (Eq. 5)
-dly_L.write(xL);
-dly_R.write(xR);
-let xL_delayed = dly_L.read(N, { interp: "none" });
-let xR_delayed = dly_R.read(N, { interp: "none" });
+// Delay audio signals by N samples using .next(v, N) so RNBO delay reader steps every sample!
+// y(n) = x(n - N) * g(n) (Eq. 5)
+let xL_delayed = dly_L.next(xL, N);
+let xR_delayed = dly_R.next(xR, N);
 
 // Instantaneous stereo peak |x(n)|
-let abs_x = max(abs(xL), abs(xR));
+let abs_x = maximum(abs(xL), abs(xR));
 
 // Hamalainen Eq. 16: Choose attack coefficient a for N lookahead samples
-// with max overshoot alpha_max = 1.02 so e(n+N) >= |x(n)| without clipping
-let a_att = 1.0 - pow(0.0196, 1.0 / max(N + 1.0, 2.0));
-let beta = pow(1.0 - a_att, N + 1.0);
+// with max overshoot alpha_max = 1.015 so e(n+N) >= |x(n)| without clipping
+let n_plus_1 = maximum(N + 1.0, 2.0);
+let a_att = 1.0 - pow(0.0148, 1.0 / n_plus_1);
+
+// Hamalainen Eq. 20: Average beta over M-point moving average filter
+let m_safe = maximum(M, 1.0);
+let beta_N = pow(1.0 - a_att, n_plus_1);
+let beta_avg = pow(1.0 - a_att, maximum(n_plus_1 - 0.5 * (m_safe - 1.0), 1.0));
+let beta = clamp(0.5 * (beta_N + beta_avg), 0.0, 0.96);
 
 // Clipping control block c(n) (Hamalainen Eq. 14 & Eq. 19):
 // Aims slightly higher than |x(n)| so the 1-pole + boxcar envelope is guaranteed
 // to reach |x(n)| within N samples without overshooting into clipping
-let denom = max(1.0 - beta, 0.001);
+let denom = maximum(1.0 - beta, 0.02);
 let c_target = (abs_x - beta * e_ave_state) / denom;
-let c_n = max(abs_x, c_target);
+let c_n = maximum(abs_x, c_target);
 
 // Order-Statistics Running Max Filter x_max(n) = max[c(n-N), ..., c(n)] (Eq. 6)
-// Implemented via 4 rotating sub-window max buckets of length ceil(N/4)
-let sub_len = max(1.0, floor(N * 0.25));
+// Implemented via 8 rotating sub-window max buckets covering N samples
+let sub_len: Int = maximum(1, floor(N * 0.125 + 0.875));
 hold_cnt = hold_cnt + 1;
 if (hold_cnt >= sub_len) {
-    hold_cnt = 0;
-    hold_val_3 = hold_val_2;
-    hold_val_2 = hold_val_1;
-    hold_val_1 = hold_val_0;
-    hold_val_0 = c_n;
+	hold_cnt = 0;
+	hold_val[7] = hold_val[6];
+	hold_val[6] = hold_val[5];
+	hold_val[5] = hold_val[4];
+	hold_val[4] = hold_val[3];
+	hold_val[3] = hold_val[2];
+	hold_val[2] = hold_val[1];
+	hold_val[1] = hold_val[0];
+	hold_val[0] = c_n;
 } else {
-    hold_val_0 = max(hold_val_0, c_n);
+	hold_val[0] = maximum(hold_val[0], c_n);
 }
-let x_max = max(max(hold_val_0, hold_val_1), max(hold_val_2, hold_val_3));
+
+let max01 = maximum(hold_val[0], hold_val[1]);
+let max23 = maximum(hold_val[2], hold_val[3]);
+let max45 = maximum(hold_val[4], hold_val[5]);
+let max67 = maximum(hold_val[6], hold_val[7]);
+let x_max = maximum(maximum(max01, max23), maximum(max45, max67));
 
 // Level Detection 1-pole filter (Eq. 7): attack uses a_att, release uses release_ms
 let tau_rel = clamp(release_ms, 10.0, 1000.0) * 0.001;
@@ -89,27 +100,31 @@ let a_coeff = (x_max > e_max_state) ? a_att : a_rel;
 e_max_state = a_coeff * x_max + (1.0 - a_coeff) * e_max_state;
 
 // M-point Averaging Filter after level detection (Eq. 17 & recursive form Eq. 21)
-emax_dly.write(e_max_state);
-let emax_old = emax_dly.read(M, { interp: "none" });
+// Use emax_dly.next(v, M) so the delay buffer advances properly!
+let emax_old = emax_dly.next(e_max_state, M);
+let box_step = (e_max_state - emax_old) / m_safe;
 // Leaky recursive boxcar integration (prevents float drift while smoothing corners)
-let box_step = (e_max_state - emax_old) / max(M, 1.0);
-e_ave_state = 0.9995 * (e_ave_state + box_step) + 0.0005 * e_max_state;
+e_ave_state = maximum(0.0, 0.9992 * (e_ave_state + box_step) + 0.0008 * e_max_state);
 
-// Ensure fail-safe non-clipping envelope bound: e_env >= max(e_ave, |x(n-N)|)
-let e_env = max(e_ave_state, max(abs(xL_delayed), abs(xR_delayed)));
+// Ensure fail-safe non-clipping envelope bound: e_env >= max(e_ave, |x(n-N)|) (Eq. 5)
+let abs_delayed = maximum(abs(xL_delayed), abs(xR_delayed));
+let e_env = maximum(e_ave_state, abs_delayed);
 
 // Optional musical "pump_character" resonant envelope under-swing on release
 let p_amt = clamp(pump_character, 0.0, 1.0);
 let g_pump = 1.0 - exp(-1.0 / (0.045 * sr_safe));
 pump_LP = pump_LP + g_pump * (e_env - pump_LP);
-let e_shaped = max(e_env + 0.45 * p_amt * (pump_LP - e_env), max(abs(xL_delayed), abs(xR_delayed)));
+let e_shaped = maximum(e_env + 0.45 * p_amt * (pump_LP - e_env), abs_delayed);
 
 // Gain processor g(n) = min(1, threshold / e(n)) (Hamalainen Eq. 3)
-let g_n = (e_shaped > thresh) ? (thresh / max(e_shaped, 1e-9)) : 1.0;
+let g_n = (e_shaped > thresh) ? (thresh / maximum(e_shaped, 0.000001)) : 1.0;
 
 let wetL = xL_delayed * g_n;
 let wetR = xR_delayed * g_n;
 
+// Blend with lookahead-aligned dry signal (x_delayed / drv) to avoid comb-filtering at mix < 1
+let dryDelayedL = xL_delayed / drv;
+let dryDelayedR = xR_delayed / drv;
 let mx = clamp(mix, 0.0, 1.0);
-out1 = (1.0 - mx) * dryL + mx * wetL;
-out2 = (1.0 - mx) * dryR + mx * wetR;
+out1 = (1.0 - mx) * dryDelayedL + mx * wetL;
+out2 = (1.0 - mx) * dryDelayedR + mx * wetR;

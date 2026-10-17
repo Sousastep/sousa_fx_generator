@@ -18,7 +18,7 @@
 @state y_prev_L = 0.0;
 @state y_prev_R = 0.0;
 
-// 3-Capacitor sidechain network states (CT fast, CU medium, CV slow memory)
+// 3-Capacitor sidechain network states (CT fast, CU medium, CV slow memory, Fig. 8)
 // Channel 1 (Left or Mid/Lateral)
 @state v_ct_1 = 0.0;
 @state v_cu_1 = 0.0;
@@ -39,31 +39,37 @@
 
 // Helper: Raffensperger Eq. 10 Class-B sidechain crossover nonlinearity
 function fairchild_stage1(vpot: number, phi_dc_prime: number): number {
-    let a = clamp(vpot - phi_dc_prime, -40.0, 40.0);
-    let b = clamp(-vpot - phi_dc_prime, -40.0, 40.0);
-    let num = log(1.0 + exp(a));
-    let den = log(1.0 + exp(b));
-    return num - den;
+	let a = clamp(vpot - phi_dc_prime, -40.0, 40.0);
+	let b = clamp(-vpot - phi_dc_prime, -40.0, 40.0);
+	let num = log(1.0 + exp(a));
+	let den = log(1.0 + exp(b));
+	return num - den;
 }
 
-// Helper: Push-Pull 6386 remote-cutoff variable-mu triode amplifier
-// Models balanced odd-order harmonic saturation that increases with V_sc
+// Helper: Push-Pull 6386 remote-cutoff variable-mu triode amplifier (Raffensperger Sec. 2 & 6)
+// Models remote-cutoff variable transconductance and balanced odd-order harmonic saturation
+// that increases with gain reduction (Fig. 2, Fig. 12, Fig. 13)
 function varimu_6386_amp(x: number, v_sc: number, harm_amt: number): number {
-    // Control grid bias shifts more negative as sidechain voltage v_sc grows
-    let gr_gain = 1.0 / (1.0 + 0.38 * v_sc + 0.045 * v_sc * v_sc);
-    // Raffensperger Sec. 6 Fig. 13: 3rd-harmonic distortion rises with gain reduction
-    let gr_depth = 1.0 - gr_gain;
-    let k3 = harm_amt * (0.14 + 0.55 * gr_depth);
-    let u = x * gr_gain;
-    let u_sat = u + k3 * (u * u * u);
-    return u_sat / (1.0 + 0.35 * k3 + 0.18 * u_sat * u_sat);
+	// Remote-cutoff 6386 transconductance curve: smooth variable-mu attenuation as grid bias goes negative
+	let gr_gain = pow(1.0 + 0.14 * v_sc + 0.008 * v_sc * v_sc, -1.35);
+	// Raffensperger Sec. 6 Fig. 13: balanced push-pull cancels even harmonics, while 3rd-harmonic
+	// distortion rises from -21 dB at light GR to -14 dB under heavy GR
+	let gr_depth = clamp(1.0 - gr_gain, 0.0, 1.0);
+	let u = x * gr_gain;
+	let drive_sat = 1.0 + harm_amt * (0.45 + 1.85 * gr_depth);
+	let u_driven = u * drive_sat;
+	// Balanced push-pull soft-saturation (pure odd harmonics) normalized for unity small-signal gain
+	let sat_wave = tanh(u_driven) / drive_sat;
+	// Add subtle 3rd-order triode curvature before transformer ceiling
+	let k3 = harm_amt * (0.08 + 0.22 * gr_depth);
+	return tanh(sat_wave + k3 * sat_wave * sat_wave * sat_wave);
 }
 
-let sr_safe = max(samplerate(), 8000.0);
+let sr_safe = maximum(samplerate(), 8000.0);
 let dt = 1.0 / sr_safe;
 
 let dryL = in1;
-let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+let dryR = (abs(in2) > 0.0000001) ? in2 : in1;
 
 // Input transformer step gain
 let in_gain = dbtoa(clamp(drive_db, 0.0, 24.0));
@@ -85,60 +91,80 @@ let side_prev = (y_prev_L - y_prev_R) * inv_sqrt2;
 let fb1 = (1.0 - lv) * y_prev_L + lv * mid_prev;
 let fb2 = (1.0 - lv) * y_prev_R + lv * side_prev;
 
-// Sidechain AC and DC threshold controls (Raffensperger Eq. 10)
+// Sidechain AC and DC threshold controls (Raffensperger Eq. 10, Fig. 9 & 12)
+// phi_dc sets Class-B crossover bias (soft vari-mu knee at 0 -> hard limiting knee at 1)
+// phi_ac scales the sidechain input potentiometer V_pot
 let phi_ac = clamp(ac_thresh, 0.0, 1.0);
 let phi_dc = clamp(dc_knee, 0.0, 1.0);
-let phi_dc_prime = 12.2 * (phi_dc + 0.08);
-let sc_scale = 18.0 * (0.08 + 0.92 * phi_ac);
+let phi_dc_prime = 1.2 + 9.5 * phi_dc;
+let sc_scale = (1.5 + 22.0 * pow(phi_ac, 1.25)) * (1.0 + 0.55 * phi_dc);
 
-// Stage 1-3 sidechain voltage and diode-bridge current for Channel 1 & Channel 2
+// Stage 1-3 sidechain voltage and germanium diode-bridge current (Raffensperger Eqs. 10-14)
+// Channel 1:
 let v_st1_1 = fairchild_stage1(fb1 * sc_scale, phi_dc_prime);
 let v_st3_1 = clamp(8.4 * v_st1_1, -100.0, 100.0);
-let v_diff_1 = max(0.0, abs(v_st3_1) - v_ct_1);
-let i_sc_1 = 0.45 * log(1.0 + exp(clamp(2.5 * v_diff_1 - 1.2, -20.0, 25.0)));
+let v_diff_1 = abs(v_st3_1) - v_ct_1;
+let i_nom_1 = 0.008 * log(1.0 + exp(clamp(4.0 * v_diff_1 - 1.2, -20.0, 30.0)));
+let i_sc_1 = clamp(i_nom_1, 0.0, 0.5);
 
+// Channel 2:
 let v_st1_2 = fairchild_stage1(fb2 * sc_scale, phi_dc_prime);
 let v_st3_2 = clamp(8.4 * v_st1_2, -100.0, 100.0);
-let v_diff_2 = max(0.0, abs(v_st3_2) - v_ct_2);
-let i_sc_2 = 0.45 * log(1.0 + exp(clamp(2.5 * v_diff_2 - 1.2, -20.0, 25.0)));
+let v_diff_2 = abs(v_st3_2) - v_ct_2;
+let i_nom_2 = 0.008 * log(1.0 + exp(clamp(4.0 * v_diff_2 - 1.2, -20.0, 30.0)));
+let i_sc_2 = clamp(i_nom_2, 0.0, 0.5);
 
-// Fairchild 670 6-position Time Constant network (Table 3)
-// Positions 1-4: single RC release (0.3s, 0.8s, 2.0s, 5.0s)
-// Position 5: dual RC program-dependent release (CT + CU)
-// Position 6: triple RC dual-program memory release (CT + CU + CV)
+// Fairchild 670 6-position Time Constant network (Fig. 8 & Table 3)
+// Exact RC values from Table 3:
+//   Pos 1: CT=2uF, RT=51.9k  (tau_att=0.2ms, tau_rel=104ms)
+//   Pos 2: CT=2uF, RT=149.9k (tau_att=0.2ms, tau_rel=300ms)
+//   Pos 3: CT=4uF, RT=220k   (tau_att=0.4ms, tau_rel=880ms)
+//   Pos 4: CT=8uF, RT=220k   (tau_att=0.8ms, tau_rel=1760ms)
+//   Pos 5: CT=4uF, RT=220k, CU=8uF, RU=100k (dual program-dependent release)
+//   Pos 6: CT=2uF, RT=220k, CU=8uF, RU=100k, CV=20uF, RV=100k (triple program-dependent release)
 let sel = clamp(tc_mode, 1.0, 6.0);
-let tau_att = 0.00025 + 0.00015 * clamp(sel - 1.0, 0.0, 3.0);
-let tau_rel_fast = 0.12;
+let c_t = 2.0;
+let tau_rel_fast = 0.104;
 if (sel < 1.5) {
-    tau_rel_fast = 0.10;
+	c_t = 2.0;
+	tau_rel_fast = 0.104;
 } else if (sel < 2.5) {
-    tau_rel_fast = 0.30;
+	c_t = 2.0;
+	tau_rel_fast = 0.300;
 } else if (sel < 3.5) {
-    tau_rel_fast = 0.88;
+	c_t = 4.0;
+	tau_rel_fast = 0.880;
 } else if (sel < 4.5) {
-    tau_rel_fast = 1.76;
+	c_t = 8.0;
+	tau_rel_fast = 1.760;
 } else if (sel < 5.5) {
-    tau_rel_fast = 0.40;
+	c_t = 4.0;
+	tau_rel_fast = 0.450;
 } else {
-    tau_rel_fast = 0.20;
+	c_t = 2.0;
+	tau_rel_fast = 0.250;
 }
 
-let g_cu = (sel >= 4.5) ? (1.0 / 0.80) : 0.0;
-let g_cv = (sel >= 5.5) ? (1.0 / 2.50) : 0.0;
+// Fast attack charging rate (scaled by 1 / CT)
+let charge_scale = 2800.0 / c_t;
+let g_cu = (sel >= 4.5) ? (1.0 / (0.10 * c_t)) : 0.0;
+let g_cv = (sel >= 5.5) ? (1.0 / (0.10 * c_t)) : 0.0;
 
-// Update 3-capacitor network for Channel 1
-let charge_1 = (i_sc_1 > 0.02) ? (i_sc_1 / tau_att) : 0.0;
-let d_ct_1 = charge_1 - (v_ct_1 / tau_rel_fast) - g_cu * (v_ct_1 - v_cu_1) - g_cv * (v_ct_1 - v_cv_1);
+// Update 3-capacitor network for Channel 1 (Fig. 8)
+let d_ct_1 = i_sc_1 * charge_scale - (v_ct_1 / tau_rel_fast) - g_cu * (v_ct_1 - v_cu_1) - g_cv * (v_ct_1 - v_cv_1);
 v_ct_1 = clamp(v_ct_1 + dt * d_ct_1, 0.0, 60.0);
-v_cu_1 = clamp(v_cu_1 + dt * (g_cu * 0.25 * (v_ct_1 - v_cu_1) - v_cu_1 / 2.2), 0.0, 60.0);
-v_cv_1 = clamp(v_cv_1 + dt * (g_cv * 0.10 * (v_ct_1 - v_cv_1) - v_cv_1 / 6.5), 0.0, 60.0);
+let d_cu_1 = (sel >= 4.5) ? ((v_ct_1 - v_cu_1) / 0.80) : (0.0 - v_cu_1 / 1.50);
+v_cu_1 = clamp(v_cu_1 + dt * d_cu_1, 0.0, 60.0);
+let d_cv_1 = (sel >= 5.5) ? ((v_ct_1 - v_cv_1) / 2.00) : (0.0 - v_cv_1 / 3.00);
+v_cv_1 = clamp(v_cv_1 + dt * d_cv_1, 0.0, 60.0);
 
-// Update 3-capacitor network for Channel 2
-let charge_2 = (i_sc_2 > 0.02) ? (i_sc_2 / tau_att) : 0.0;
-let d_ct_2 = charge_2 - (v_ct_2 / tau_rel_fast) - g_cu * (v_ct_2 - v_cu_2) - g_cv * (v_ct_2 - v_cv_2);
+// Update 3-capacitor network for Channel 2 (Fig. 8)
+let d_ct_2 = i_sc_2 * charge_scale - (v_ct_2 / tau_rel_fast) - g_cu * (v_ct_2 - v_cu_2) - g_cv * (v_ct_2 - v_cv_2);
 v_ct_2 = clamp(v_ct_2 + dt * d_ct_2, 0.0, 60.0);
-v_cu_2 = clamp(v_cu_2 + dt * (g_cu * 0.25 * (v_ct_2 - v_cu_2) - v_cu_2 / 2.2), 0.0, 60.0);
-v_cv_2 = clamp(v_cv_2 + dt * (g_cv * 0.10 * (v_ct_2 - v_cv_2) - v_cv_2 / 6.5), 0.0, 60.0);
+let d_cu_2 = (sel >= 4.5) ? ((v_ct_2 - v_cu_2) / 0.80) : (0.0 - v_cu_2 / 1.50);
+v_cu_2 = clamp(v_cu_2 + dt * d_cu_2, 0.0, 60.0);
+let d_cv_2 = (sel >= 5.5) ? ((v_ct_2 - v_cv_2) / 2.00) : (0.0 - v_cv_2 / 3.00);
+v_cv_2 = clamp(v_cv_2 + dt * d_cv_2, 0.0, 60.0);
 
 // Apply 6386 Push-Pull Variable-Mu Amplifier to Ch1 & Ch2
 let harm = clamp(tube_harmonics, 0.0, 1.0);
@@ -155,12 +181,13 @@ let wetR = (1.0 - lv) * y_ch2 + lv * ms_out_R;
 y_prev_L = wetL;
 y_prev_R = wetR;
 
-// Output transformer gentle high-frequency silk & DC block
-let g_hf = 1.0 - exp(-2.0 * PI * 15500.0 / sr_safe);
+// Output transformer gentle high-frequency silk & DC block (using lowercase pi!)
+let g_hf = 1.0 - exp(-2.0 * pi * 16500.0 / sr_safe);
 hf_lp_L = hf_lp_L + g_hf * (wetL - hf_lp_L);
 hf_lp_R = hf_lp_R + g_hf * (wetR - hf_lp_R);
 
-let out_comp = 1.0 / (1.0 + 0.18 * (in_gain - 1.0) * (1.0 - 0.55 * phi_ac));
+// Automatic makeup / output level trim so output stays controlled across drive & threshold
+let out_comp = (1.0 + 0.55 * phi_ac) / pow(in_gain, 0.45 + 0.35 * (1.0 - phi_ac));
 let procL = hf_lp_L * out_comp;
 let procR = hf_lp_R * out_comp;
 
