@@ -4,7 +4,10 @@
 /DAFx-proceedings/index
 /DAFx-proceedings/originals
 /DAFx-proceedings/papers
-/docs/
+# docs/ is local scratch space, except the codebox examples
+/docs/*
+!/docs/rnbo_codebox/
+/docs/rnbo_codebox/Codebox_Reference.md
 /tools/__pycache__/
 sousa_mic.aif
 generated_maxpat/
