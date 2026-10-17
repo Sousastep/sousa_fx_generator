@@ -1,0 +1,176 @@
+// ============================================================================
+// filter_edp_wasp_cmos_ota_svf.txt
+// Stereo Virtual Analog EDP Wasp CMOS-Inverter & CA3080 OTA State-Variable Filter
+// Implements Lasse Koper, Martin Holters, Fabian Esqueda & Julian D. Parker
+// (DAFx-22, Paper 34): "A Virtual Analog Model of the EDP Wasp VCF"
+// (Sections 2.1, 2.2, 3.1-3.3 & Table 1, Eq. 2-18, Fig. 1-4).
+// Captures the notoriously dirty, erratic British 1978 Chris Huggett Wasp VCF:
+//   1. Two CA3080 OTA integrators (IC2, IC4) whose bias current sets cutoff
+//      w_c, with emitter-coupled differential pair tanh saturation (Eq. 2).
+//   2. Three CD4069 CMOS inverters (IC1 summing stage, IC3 & IC5 integrator
+//      amplifiers) powered by a unipolar supply, exhibiting asymmetric
+//      push-pull MOSFET saturation and high-frequency C2=100pF parasitic feedback.
+//   3. A 1N4148 anti-parallel diode clipper (D1, D2) in parallel with R13=1MOhm
+//      in the bandpass resonance feedback path (Fig. 2), producing gritty,
+//      self-limiting distortion at high resonance without losing low-end punch!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (scales Wasp OTA cutoff frequency in Hz)
+//   in4: Modulation Signal in Hz (modulates OTA bias frequency in Hz)
+// Outlets:
+//   out1: Left EDP Wasp CMOS VCF Output
+//   out2: Right EDP Wasp CMOS VCF Output
+
+@param({ min: 35.0, max: 12000.0 }) cutoff_hz = 340.0;
+@param({ min: 0.0, max: 1.25 }) resonance_diodes = 0.82;
+@param({ min: 0.0, max: 1.0 }) cmos_asymmetry = 0.55;
+@param({ min: 0.0, max: 24.0 }) ota_input_drive_db = 10.0;
+@param({ min: 0.0, max: 1.0 }) mode_lp_bp_hp = 0.0;
+@param({ min: 0.0, max: 4.0 }) pitch_track_amt = 1.5;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.95;
+
+// 2x-oversampled trapezoidal OTA integrator states (s1 = BP IC3, s2 = LP IC5)
+@state s1L = 0.0; @state s2L = 0.0;
+@state s1R = 0.0; @state s2R = 0.0;
+
+// Input AC-coupling highpass filter Hin(s) (Eq. 18, ~22 Hz) & DC blockers
+@state acHpL = new svf();
+@state acHpR = new svf();
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+// Fallback ZC pitch tracker & parameter slews
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothCut = 340.0;
+@state smoothRes = 0.82;
+
+// Helper: CD4069 Unipolar CMOS Inverter Nonlinear Transfer Curve (DAFx-22 Sec 3.1)
+// Models unipolar +12V/+5V rail asymmetry where PMOS and NMOS threshold voltages differ
+function cmosInverterSat(v: number, asym: number): number {
+	let bias = 0.22 * asym;
+	let u = v + bias;
+	let sat = tanh(u * (1.15 + 0.65 * asym)) - tanh(bias * (1.15 + 0.65 * asym));
+	// Subtle cubic crossover inflection characteristic of CMOS Class-AB inverter region
+	return sat + 0.08 * asym * (u / (1.0 + u * u));
+}
+
+// Helper: 1N4148 Anti-Parallel Diode + R13 Bandpass Feedback Network H1 (Fig. 2 & Sec 3.3)
+// At high resonance, D1 & D2 conduct via sinh/asinh law while R13/Rres sets linear damping
+function waspDiodeFeedback(vBp: number, resPot: number): number {
+	// Linear damping term 2*R decreases as resPot -> 1, while diode conduction clamps peaks
+	let linDamp = maximum(1.85 * (1.0 - 0.92 * clamp(resPot, 0.0, 1.05)), 0.06);
+	let diodeClip = 0.38 * resPot * (vBp - 0.62 * tanh(vBp * 1.6));
+	return linDamp * vBp + diodeClip;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Modulation (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothCut += (clamp(cutoff_hz, 35.0, 12000.0) - smoothCut) * slew;
+smoothRes += (clamp(resonance_diodes, 0.0, 1.25) - smoothRes) * slew;
+
+let pHz = clamp(pitch_track_amt, 0.0, 4.0) * smoothF0;
+let mHz = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+
+let fcL = clamp(smoothCut + pHz + mHz, 25.0, sr * 0.42);
+let fcR = clamp(smoothCut * 1.018 + pHz + mHz * 0.94, 25.0, sr * 0.42);
+
+// --- 2. Input AC Coupling Hin(s) (DAFx-22 Eq. 18, ~22 Hz Highpass) ---
+let drv = dbtoa(clamp(ota_input_drive_db, 0.0, 24.0));
+let vinL = acHpL.next(xL, 22.0, 0.707)[1] * drv;
+let vinR = acHpR.next(xR, 22.0, 0.707)[1] * drv;
+
+// 2x Oversampled TPT / ZDF SVF with CMOS & CA3080 OTA Nonlinearities (Eq. 6-17)
+let osSr = 2.0 * sr;
+let gL = tan(pi * fcL / osSr);
+let gR = tan(pi * fcR / osSr);
+let asym = clamp(cmos_asymmetry, 0.0, 1.0);
+
+let vHpL = 0.0; let vBpL = 0.0; let vLpL = 0.0;
+let vHpR = 0.0; let vBpR = 0.0; let vLpR = 0.0;
+
+for (let step: Int = 0; step < 2; step++) {
+	// Left Channel Wasp SVF
+	let bpEstL = s1L / (1.0 + gL);
+	let fbH1L = waspDiodeFeedback(bpEstL, smoothRes);
+	let kEffL = maximum(1.85 * (1.0 - 0.92 * clamp(smoothRes, 0.0, 1.05)), 0.08);
+	let diodeExtraL = fbH1L - kEffL * bpEstL;
+
+	// Resolve zero-delay loop for IC1 CMOS summing inverter output (vIC1 = HP)
+	let rawHpL = (vinL - kEffL * s1L - diodeExtraL - gL * s1L - s2L) / (1.0 + gL * (kEffL + gL));
+	vHpL = cmosInverterSat(rawHpL, asym);
+
+	// First CA3080 OTA + IC3 CMOS Inverter Integrator (Bandpass vIC3)
+	let ota1L = gL * tanh(vHpL * 0.85) * 1.18;
+	let rawBpL = ota1L + s1L;
+	vBpL = cmosInverterSat(rawBpL, asym * 0.75);
+	s1L = ota1L + vBpL;
+
+	// Second CA3080 OTA + IC5 CMOS Inverter Integrator (Lowpass vIC5)
+	let ota2L = gL * tanh(vBpL * 0.85) * 1.18;
+	let rawLpL = ota2L + s2L;
+	vLpL = cmosInverterSat(rawLpL, asym * 0.75);
+	s2L = ota2L + vLpL;
+
+	// Right Channel Wasp SVF
+	let bpEstR = s1R / (1.0 + gR);
+	let fbH1R = waspDiodeFeedback(bpEstR, smoothRes);
+	let kEffR = maximum(1.85 * (1.0 - 0.92 * clamp(smoothRes, 0.0, 1.05)), 0.08);
+	let diodeExtraR = fbH1R - kEffR * bpEstR;
+
+	let rawHpR = (vinR - kEffR * s1R - diodeExtraR - gR * s1R - s2R) / (1.0 + gR * (kEffR + gR));
+	vHpR = cmosInverterSat(rawHpR, asym);
+
+	let ota1R = gR * tanh(vHpR * 0.85) * 1.18;
+	let rawBpR = ota1R + s1R;
+	vBpR = cmosInverterSat(rawBpR, asym * 0.75);
+	s1R = ota1R + vBpR;
+
+	let ota2R = gR * tanh(vBpR * 0.85) * 1.18;
+	let rawLpR = ota2R + s2R;
+	vLpR = cmosInverterSat(rawLpR, asym * 0.75);
+	s2R = ota2R + vLpR;
+}
+
+// --- 3. Multimode Output Morph (LP -> BP -> HP / Notch) & DC Blocking ---
+let mode = clamp(mode_lp_bp_hp, 0.0, 1.0);
+let rawOutL = (mode <= 0.5)
+	? linearinterp(mode * 2.0, vLpL, vBpL * 1.35)
+	: linearinterp((mode - 0.5) * 2.0, vBpL * 1.35, vHpL + 0.5 * vLpL);
+let rawOutR = (mode <= 0.5)
+	? linearinterp(mode * 2.0, vLpR, vBpR * 1.35)
+	: linearinterp((mode - 0.5) * 2.0, vBpR * 1.35, vHpR + 0.5 * vLpR);
+
+let normGain = 1.0 / sqrt(maximum(drv * 0.45, 1.0));
+let cleanL = (rawOutL * normGain) - dcXL + 0.995 * dcYL;
+dcXL = rawOutL * normGain; dcYL = cleanL;
+let cleanR = (rawOutR * normGain) - dcXR + 0.995 * dcYR;
+dcXR = rawOutR * normGain; dcYR = cleanR;
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, tanh(cleanL * 1.2));
+out2 = linearinterp(mix, xR, tanh(cleanR * 1.2));

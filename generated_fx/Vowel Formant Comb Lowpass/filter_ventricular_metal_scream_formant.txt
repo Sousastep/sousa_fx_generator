@@ -1,0 +1,154 @@
+// ============================================================================
+// filter_ventricular_metal_scream_formant.txt
+// Stereo Extreme-Metal Ventricular-Fold & Dynamic Formant Roar/Screech Filter
+// Implements Eric Smialek, Philippe Depalle & David Brackett (DAFx-12, Paper 55):
+// "Musical Aspects of Vowel Formants in the Extreme Metal Voice" (Sections 1.1,
+// 1.2, 1.3 & 2.1, Fig. 1, Table 1) and Julian Neri & Philippe Depalle (DAFx-17,
+// Paper 66: "REDS: A New Asymmetric Atom for Sparse Audio Decomposition and
+// Sound Synthesis", Section 3 & 4).
+// Models the physiological and acoustic mechanisms of extreme metal & tearout
+// dubstep vocal screams on the live tuba:
+//   1. Ventricular Folds ("False Vocal Chords", Sec 1.1): Mucous-membrane
+//      subharmonic/chaotic amplitude-and-phase modulation above the true glottis
+//      that spreads harmonic energy into a beastly growl.
+//   2. Exhaled vs. Inhaled Scream Trajectory (Sec 1.1 & 2.1, Table 1):
+//      - Low "Beast" Death-Metal Growl (0.0): Head tilted forward, lowered jaw
+//        & larynx, rounded lips (Fig. 1 left), shifting vowels down to dark
+//        /u/ and /aw/ formants (F1 ~ 320 Hz, F2 ~ 780 Hz).
+//      - High Inhaled Black-Metal Screech (1.0): Shortened vocal tract, spread
+//        lips (Fig. 1 right), rapid F1 contour fluctuations, and intense
+//        3000-4500 Hz upper formant energy concentration (Sec 1.1, p. 1)!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (locks ventricular subharmonics & formants)
+//   in4: Modulation Signal in Hz (drives rapid F1/F2 emotional contour fluctuations)
+// Outlets:
+//   out1: Left Extreme-Metal Ventricular Formant Output
+//   out2: Right Extreme-Metal Ventricular Formant Output
+
+@param({ min: 0.0, max: 1.0 }) growl_to_screech_vowel = 0.35;
+@param({ min: 0.0, max: 1.0 }) ventricular_fold_chaos = 0.68;
+@param({ min: 0.5, max: 1.8 }) tract_length_jaw = 1.15;
+@param({ min: 0.0, max: 2.0 }) f1_emotional_tremor = 0.70;
+@param({ min: 0.0, max: 1.0 }) inhale_4khz_pierce = 0.55;
+@param({ min: 0.0, max: 3.0 }) pitch_track_amt = 1.0;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.92;
+
+// Ventricular fold ("false vocal chord") subharmonic & chaotic turbulence states
+@state ventPhasor = new phasor();
+@state turbNoiseL = new pink();
+@state turbNoiseR = new pink();
+@state envFol = 0.0;
+
+// 4-Band Extreme Vocal Tract Resonator Bank (F1, F2, F3, and 4 kHz Inhale Pierce Band)
+@state svfF1L = new svf(); @state svfF2L = new svf();
+@state svfF3L = new svf(); @state svf4kL = new svf();
+@state svfF1R = new svf(); @state svfF2R = new svf();
+@state svfF3R = new svf(); @state svf4kR = new svf();
+
+// Fallback ZC pitch tracker & parameter slews
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothVowel = 0.35;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Envelope Follower ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+let pk = maximum(abs(xL), abs(xR));
+let attE = 1.0 - exp(-1.0 / (0.002 * sr));
+let relE = 1.0 - exp(-1.0 / (0.050 * sr));
+envFol = (pk > envFol) ? (envFol + attE * (pk - envFol)) : (envFol + relE * (pk - envFol));
+
+// --- 2. Ventricular Folds ("False Vocal Chords", DAFx-12 Sec 1.1) ---
+// Mucous-membrane false vocal folds vibrate at ~f0/3 and ~f0/2 with chaotic pink-noise roughness
+let vChaos = clamp(ventricular_fold_chaos, 0.0, 1.0);
+let vPh = ventPhasor.next(f0 * 0.5);
+let subOsc = sin(2.0 * pi * vPh) + 0.5 * cos(4.0 * pi * vPh);
+
+let pNoiseL = turbNoiseL.next();
+let pNoiseR = turbNoiseR.next();
+
+let ventModL = 1.0 + vChaos * (0.65 * subOsc + 0.85 * pNoiseL);
+let ventModR = 1.0 + vChaos * (0.65 * subOsc + 0.85 * pNoiseR);
+
+let drv = 1.5 + 8.5 * pow(vChaos, 1.3);
+let beastSrcL = tanh(xL * drv * ventModL);
+let beastSrcR = tanh(xR * drv * ventModR);
+
+// --- 3. Expressive Vowel Formant Trajectory & F1 Emotional Fluctuations (Sec 1.2, 1.3 & 2.1) ---
+// Morphs from Utterance 5/blood->/blud/ low beast growl (/u/ -> /ɔ/) to Utterance 4 inhaled screech (/a/ -> /æ/ -> /i/)
+let mDepth = clamp(mod_hz_depth, -2.0, 2.0);
+let modNorm = clamp((modHz * mDepth) / 700.0, -0.6, 0.6);
+smoothVowel += (clamp(growl_to_screech_vowel + modNorm, 0.0, 1.0) - smoothVowel) * slew;
+let v = smoothVowel;
+
+// Williams & Stevens (DAFx-12 Abstract & Sec 3): Rapid fluctuations in F1 envelope under high emotion
+let f1TremorHz = clamp(f1_emotional_tremor, 0.0, 2.0) * (envFol * 340.0 + subOsc * 55.0);
+let pShiftHz = clamp(pitch_track_amt, 0.0, 3.0) * (f0 - 65.0) + mDepth * modHz;
+
+// Vocal tract length / jaw lowering factor (Sec 1.2, Fig. 1): >1.0 = lengthened giant beast vocal tract
+let invTract = 1.0 / clamp(tract_length_jaw, 0.5, 1.8);
+
+let f1Base = (310.0 + 540.0 * pow(v, 1.2)) * invTract;
+let f2Base = (760.0 + 1480.0 * pow(v, 1.4)) * invTract;
+let f3Base = (2150.0 + 950.0 * v) * invTract;
+let f4Pierce = (3650.0 + 650.0 * v) * clamp(invTract, 0.75, 1.3); // Sec 1.1: 4000 Hz inhaled scream energy
+
+let f1L = clamp(f1Base + f1TremorHz + pShiftHz * 0.65, 140.0, 1500.0);
+let f2L = clamp(f2Base + f1TremorHz * 1.4 + pShiftHz * 1.25, 380.0, 4200.0);
+let f3L = clamp(f3Base + pShiftHz * 1.6, 1100.0, 6200.0);
+let f4L = clamp(f4Pierce + pShiftHz * 1.8, 2200.0, 8500.0);
+
+let f1R = clamp(f1L * 1.02, 140.0, 1500.0);
+let f2R = clamp(f2L * 0.98, 380.0, 4200.0);
+let f3R = clamp(f3L * 1.02, 1100.0, 6200.0);
+let f4R = clamp(f4L * 0.98, 2200.0, 8500.0);
+
+// --- 4. 4-Band Formant Filtering with 4 kHz Inhaled Screech Cluster ---
+let qFormant = 0.84 + 0.10 * v;
+let y1L = svfF1L.next(beastSrcL, f1L, qFormant);
+let y2L = svfF2L.next(beastSrcL, f2L, qFormant)[2];
+let y3L = svfF3L.next(beastSrcL, f3L, qFormant)[2];
+let y4L = svf4kL.next(beastSrcL, f4L, 0.90)[2];
+
+let y1R = svfF1R.next(beastSrcR, f1R, qFormant);
+let y2R = svfF2R.next(beastSrcR, f2R, qFormant)[2];
+let y3R = svfF3R.next(beastSrcR, f3R, qFormant)[2];
+let y4R = svf4kR.next(beastSrcR, f4R, 0.90)[2];
+
+// Low beast growl retains F1 lowpass chest weight; high screech boosts F2, F3 & 4 kHz pierce
+let pierceAmt = clamp(inhale_4khz_pierce, 0.0, 1.0) * (0.4 + 1.4 * v);
+let bodyWeight = 1.0 - 0.55 * v;
+
+let wetL = tanh((bodyWeight * (0.55 * y1L[0] + y1L[2]) + 1.15 * y2L + 0.85 * y3L + 1.65 * pierceAmt * y4L) * 0.85);
+let wetR = tanh((bodyWeight * (0.55 * y1R[0] + y1R[2]) + 1.15 * y2R + 0.85 * y3R + 1.65 * pierceAmt * y4R) * 0.85);
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, wetL);
+out2 = linearinterp(mix, xR, wetR);

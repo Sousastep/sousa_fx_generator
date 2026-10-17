@@ -1,0 +1,54 @@
+================================================================================
+filter_edp_wasp_cmos_ota_svf — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Virtual Analog model of the 1978 EDP Wasp CMOS-Inverter & CA3080 OTA State-Variable Filter implementing Lasse Köper, Martin Holters, Fabián Esqueda & Julian D. Parker (DAFx-22 Paper 34, "A Virtual Analog Model of the EDP Wasp VCF", Sections 2.1, 2.2, 3.1–3.3 & Table 1, Eq. 2–18, Fig. 1–4). Chris Huggett's Wasp filter is famous for its dirty, vocal, buzzing character caused by using CD4069 CMOS logic inverters (`IC1`, `IC3`, `IC5`) on a unipolar power supply in place of op-amps, paired with CA3080 OTA integrators (`IC2`, `IC4`) and a 1N4148 anti-parallel diode pair (`D1`, `D2`) + `1 MOhm` resistor (`R13`) in the bandpass feedback path.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (scales the Wasp OTA cutoff frequency in Hz)
+- in4: Modulation Signal in Hz (modulates the OTA bias cutoff frequency in Hz)
+- out1 / out2: Stereo EDP Wasp CMOS VCF Output
+
+PARAMETERS (8)
+
+1. cutoff_hz
+   - Range: 35.0 to 12000.0 Hz (Base OTA Crossover Cutoff Frequency `fb`, Default: 340.0 Hz)
+   - Taper: Direct frequency in Hz mapped to CA3080 bias current `i_bias` (DAFx-22 Eq. 2 & 7).
+   - Function: Sets the base 12 dB/oct state-variable filter cutoff frequency.
+
+2. resonance_diodes
+   - Range: 0.00 to 1.25 (Bandpass Feedback Potentiometer `R_res` + `D1/D2` Diode Conduction, Default: 0.82)
+   - Taper: Linear resonance control; above `0.85`, the 1N4148 diodes (`D1`, `D2`) clip the bandpass feedback path while `R13` triggers gritty CMOS self-oscillation.
+   - Function: Controls the resonant scream of the Wasp filter without sacrificing low-end bass weight.
+
+3. cmos_asymmetry
+   - Range: 0.00 to 1.00 (CD4069 Unipolar Supply PMOS/NMOS Threshold Asymmetry, Default: 0.55)
+   - Taper: Linear unipolar rail bias and Class-AB crossover inflection (DAFx-22 Section 3.1).
+   - Function: Injects the Wasp's signature even-order harmonics and "raspy/talking" CMOS inverter grit.
+
+4. ota_input_drive_db
+   - Range: 0.0 to 24.0 dB (Input Level & CA3080 Differential Pair Drive, Default: 10.0 dB)
+   - Taper: Logarithmic dB gain after the 22 Hz AC-coupling highpass filter `H_in(s)` (Eq. 18), with automatic output level compensation.
+   - Function: Overdrives the summing CMOS inverter (`IC1`) and the two CA3080 OTA inputs (`2*V_T` tanh law).
+
+5. mode_lp_bp_hp
+   - Range: 0.00 to 1.00 (0.0 = Lowpass `IC5`, 0.5 = Bandpass `IC3`, 1.0 = Highpass/Notch `IC1 + IC5`; Default: 0.00)
+   - Taper: Continuous linear morph across the three CMOS inverter outputs (Eq. 12–17).
+   - Function: Sweeps from a dirty 2-pole dubstep lowpass filter (`0.0`) through a nasal vocal bandpass (`0.5`) to an aggressive notch/highpass (`1.0`).
+
+6. pitch_track_amt
+   - Range: 0.00 to 4.00 Hz/Hz (Cutoff Pitch Tracking Multiplier from in3 in Hz; Default: 1.50)
+   - Taper: Linear harmonic multiplier.
+   - Function: Tracks the Wasp filter cutoff to the tuba's fundamental pitch in Hz.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Cutoff Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Modulates the Wasp OTA cutoff frequency in Hz from an LFO, envelope, or audio-rate modulator on `in4`.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Wasp VCF; Default: 0.95)
+   - Taper: Linear crossfade.
+   - Function: Balances the raw tuba with the EDP Wasp CMOS filter output.

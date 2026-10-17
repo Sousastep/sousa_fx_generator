@@ -1,0 +1,162 @@
+// ============================================================================
+// filter_crybaby_fasel_inductor_wah.txt
+// Stereo Dunlop Crybaby Wah-Wah with Saturating Fröhlich-Kennelly Fasel Red Inductor
+// Implements Martin Holters & Udo Zolzer (DAFx-11, Paper 21_e):
+// "Physical Modelling of a Wah-Wah Effect Pedal as a Case Study for Application
+// of the Nodal DK Method to Circuits with Variable Parts" (Sections 1, 2.1,
+// Fig. 1-2), Giulio Moro & Andrew P. McPherson (DAFx-15, Paper 68):
+// "Approximating Non-Linear Inductors Using Time-Variant Linear Filters"
+// (Sections 2, 3, 6.2, Eq. 1-12, Fig. 1 & 9), and DAFx-20 (Paper 33, Sec 4.1).
+// Combines:
+//   1. The Dunlop Crybaby bridged-T / feedback transistor Q1-Q2 wah loop where
+//      the potentiometer alpha (VR1) simultaneously sweeps the resonant peak
+//      frequency (350 Hz heel to 2200 Hz toe), peak gain, and Q factor!
+//   2. A saturating Fasel Red toroidal ferromagnetic core inductor L1 = 500 mH
+//      governed by the Fröhlich-Kennelly B-H permeability law (DAFx-15 Eq. 5-8):
+//         B(H) = H / (c + b * |H|),   L_eff(i_L) = L_0 / (1 + k_sat * |i_L|)^2
+//      As inductor current i_L rises on loud tuba bass notes, core permeability
+//      mu drops, dynamically shifting the wah resonant frequency upward and
+//      generating authentic magnetic core harmonic distortion!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (scales wah center frequency in Hz)
+//   in4: Modulation Signal in Hz (sweeps wah pedal / cutoff in Hz)
+// Outlets:
+//   out1: Left Crybaby Fasel Inductor Wah Output
+//   out2: Right Crybaby Fasel Inductor Wah Output
+
+@param({ min: 0.0, max: 1.0 }) pedal_position = 0.40;
+@param({ min: 0.0, max: 1.0 }) fasel_core_sat = 0.65;
+@param({ min: 0.5, max: 2.5 }) inductor_q_trim = 1.15;
+@param({ min: -2.0, max: 2.0 }) env_autowah_sens = 0.75;
+@param({ min: 0.0, max: 24.0 }) bjt_q1_drive_db = 8.0;
+@param({ min: 0.0, max: 3.0 }) pitch_track_amt = 1.0;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.95;
+
+// Companion circuit states for inductor L1 (i_L) and capacitor C2/C3 (v_C)
+// (Holters & Zolzer DAFx-11 Sec 2.1, Eq. 4-13, Fig. 2)
+@state iIndL = 0.0; @state vCapL = 0.0;
+@state iIndR = 0.0; @state vCapR = 0.0;
+
+// Input emitter-follower AC-coupling highpass filter (DAFx-11 Sec 1) & envelope follower
+@state inHpL = new svf();
+@state inHpR = new svf();
+@state envState = 0.0;
+
+// Fallback ZC pitch tracker & parameter slews
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothPedal = 0.40;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Envelope Follower + Modulation (in4 in Hz) ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothPedal += (clamp(pedal_position, 0.0, 1.0) - smoothPedal) * slew;
+
+// Envelope follower for dynamic auto-wah / touch-wah response
+let pk = maximum(abs(xL), abs(xR));
+let attC = 1.0 - exp(-1.0 / (0.003 * sr));
+let relC = 1.0 - exp(-1.0 / (0.085 * sr));
+envState = (pk > envState) ? (envState + attC * (pk - envState)) : (envState + relC * (pk - envState));
+
+// --- 2. Crybaby Potentiometer Law VR1 + Tuba Pitch (in3 Hz) + Mod (in4 Hz) ---
+// Standard Crybaby ICAR taper sweeps resonant pole from ~340 Hz (heel) to ~2200 Hz (toe)
+let pedCurve = pow(smoothPedal, 1.6);
+let baseWahHz = 320.0 * pow(7.2, pedCurve);
+let pHz = clamp(pitch_track_amt, 0.0, 3.0) * (smoothF0 - 65.0);
+let mHz = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+let envHz = clamp(env_autowah_sens, -2.0, 2.0) * envState * 1600.0;
+
+let nomHzL = clamp(baseWahHz + pHz + mHz + envHz, 120.0, 5500.0);
+let nomHzR = clamp(baseWahHz * 1.03 + pHz + mHz * 0.92 + envHz, 120.0, 5500.0);
+
+// In the Crybaby circuit (Holters DAFx-11 Fig. 1), Q and passband gain vary with pedal alpha:
+// Heel-down has high Q and deep throat vowel; toe-down has wider bandwidth and brighter boost
+let qTrim = clamp(inductor_q_trim, 0.5, 2.5);
+let qNomL = clamp((9.5 - 5.2 * pedCurve) * qTrim, 1.8, 22.0);
+let qNomR = clamp((9.5 - 5.2 * pedCurve) * qTrim, 1.8, 22.0);
+
+// Input emitter-follower highpass (~65 Hz) + Q1 BJT Ebers-Moll asymmetric soft saturation (Eq. 48-51)
+let drv = dbtoa(clamp(bjt_q1_drive_db, 0.0, 24.0));
+let hpInL = inHpL.next(xL, 55.0, 0.707)[1] * drv;
+let hpInR = inHpR.next(xR, 55.0, 0.707)[1] * drv;
+
+// Ebers-Moll Q1 collector-base asymmetry: slight even-harmonic bias
+let uBjtL = tanh(hpInL + 0.14) - tanh(0.14);
+let uBjtR = tanh(hpInR + 0.14) - tanh(0.14);
+
+// --- 3. Time-Varying Fröhlich-Kennelly Saturating Fasel Inductor Solver (DAFx-15 Eq. 5-8 & Fig. 9) ---
+// As inductor current |iInd| increases, differential inductance L(i_L) = L0 / (1 + b_sat * |iInd|)^2
+// drops, which increases instantaneous resonant frequency w_eff = w_0 / sqrt(L_eff / L_0)!
+let bSat = clamp(fasel_core_sat, 0.0, 1.0) * 1.85;
+let osSr = 2.0 * sr;
+
+let vOutL = 0.0;
+let vOutR = 0.0;
+
+for (let step: Int = 0; step < 2; step++) {
+	// Left Channel: Fröhlich-Kennelly core permeability drop based on inductor current state iIndL
+	// With slew limiting on inductance ratio per Moro & McPherson DAFx-15 Sec 6.1
+	let magH_L = clamp(abs(iIndL), 0.0, 2.5);
+	let permRatioL = 1.0 / ((1.0 + bSat * magH_L) * (1.0 + 0.35 * bSat * magH_L));
+	let fInstL = clamp(nomHzL / sqrt(maximum(permRatioL, 0.18)), 100.0, osSr * 0.42);
+
+	let gL = tan(pi * fInstL / osSr);
+	let dampL = 1.0 / qNomL;
+
+	// Companion circuit trapezoidal update for RLC wah feedback loop (DAFx-11 Eq. 8-13)
+	let vNodeL = (uBjtL - (dampL + gL) * iIndL - vCapL) / (1.0 + gL * (dampL + gL));
+	let vBpL = gL * vNodeL + iIndL;
+	iIndL = gL * vNodeL + vBpL;
+	let vLpL = gL * vBpL + vCapL;
+	vCapL = gL * vBpL + vLpL;
+
+	// Crybaby output mixes amplified resonant bandpass + low-shelf heel bleed + Q2 collector saturation
+	let gainBoostL = (2.2 + 2.4 * pedCurve) / sqrt(maximum(qTrim, 0.7));
+	vOutL = tanh((vBpL * gainBoostL + 0.28 * vLpL + 0.12 * uBjtL) * 0.9);
+
+	// Right Channel
+	let magH_R = clamp(abs(iIndR), 0.0, 2.5);
+	let permRatioR = 1.0 / ((1.0 + bSat * magH_R) * (1.0 + 0.35 * bSat * magH_R));
+	let fInstR = clamp(nomHzR / sqrt(maximum(permRatioR, 0.18)), 100.0, osSr * 0.42);
+
+	let gR = tan(pi * fInstR / osSr);
+	let dampR = 1.0 / qNomR;
+
+	let vNodeR = (uBjtR - (dampR + gR) * iIndR - vCapR) / (1.0 + gR * (dampR + gR));
+	let vBpR = gR * vNodeR + iIndR;
+	iIndR = gR * vNodeR + vBpR;
+	let vLpR = gR * vBpR + vCapR;
+	vCapR = gR * vBpR + vLpR;
+
+	let gainBoostR = (2.2 + 2.4 * pedCurve) / sqrt(maximum(qTrim, 0.7));
+	vOutR = tanh((vBpR * gainBoostR + 0.28 * vLpR + 0.12 * uBjtR) * 0.9);
+}
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, vOutL);
+out2 = linearinterp(mix, xR, vOutR);

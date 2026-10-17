@@ -1,0 +1,54 @@
+================================================================================
+filter_ems_vcs3_diode_ladder — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo 2x-Oversampled EMS VCS3 Coupled Nonlinear Diode Ladder Lowpass Filter implementing Marco Civolani & Federico Fontana (DAFx-08 Paper 06, "A Nonlinear Digital Model of the EMS VCS3 Voltage-Controlled Filter", Sections 1, 3 & 4, Eq. 14–22, Fig. 1–5) and Russell McClellan (DAFx-26 Paper 28, "Stability Analysis of Time-Varying Virtual Analog Filters", Section 4). Unlike the Moog transistor ladder where each RC stage is buffered by a transistor pair, the 1969 EMS VCS3 ladder uses junction diodes (`1N4148`, emission coefficient `eta = 1.836`, `gamma = eta * V_T`) so adjacent capacitors `C1..C4` bilaterally load one another (`tanh((v_C{k+1} - v_Ck)/gamma)`, Eq. 19 & 22). Furthermore, the bottom of the ladder is terminated by three series pull-up diodes per branch (`D9,D11,D13` and `D10,D12,D14`, yielding `3*gamma` in Stage 4, Eq. 16–19) and a high-passed differential op-amp feedback loop (`C7/R7`, Section 1), giving the VCS3 its unmistakable vocal, whistling British sci-fi resonance!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (scales the VCS3 diode control current cutoff in Hz)
+- in4: Modulation Signal in Hz (modulates the VCS3 cutoff frequency in Hz)
+- out1 / out2: Stereo EMS VCS3 Diode Ladder Output
+
+PARAMETERS (8)
+
+1. cutoff_hz
+   - Range: 35.0 to 12000.0 Hz (Base Diode Ladder Cutoff Frequency, Default: 300.0 Hz)
+   - Taper: Direct frequency in Hz mapped to control current `I0 / (2*C)` with automatic compensation for diode-ladder resonance frequency shift.
+   - Function: Sets the base lowpass cutoff frequency.
+
+2. vcs3_response_k
+   - Range: 0.00 to 10.00 (EMS VCS3 Panel "Response" Feedback Dial `R13 / R9`, Default: 6.20)
+   - Taper: Authentic 0-to-10 EMS VCS3 scale (DAFx-08 Section 1 & 4, Eq. 20–21). Self-oscillation begins around `7.5` and turns into a screaming nonlinear whistle toward `10.0`.
+   - Function: Controls the feedback loop gain around the 4 bilaterally coupled diode stages.
+
+3. bjt_input_drive_db
+   - Range: 0.0 to 24.0 dB (Long-Tailed Pair BJT Q1/Q2 Input Drive, Default: 9.0 dB)
+   - Taper: Logarithmic dB gain into the `tanh((v_in - fb) / 2V_T)` Ebers-Moll differential input amplifier (Eq. 14–15 & 22).
+   - Function: Drives the input transistor pair against the diode ladder stages for thick, liquid distortion.
+
+4. diode_gamma_scale
+   - Range: 0.40 to 2.50 (Diode Emission & Thermal Voltage Scaling `gamma = eta * V_T`, Default: 1.00)
+   - Taper: Linear scaling of the internal diode nonlinearity threshold (`1.00` = 1N4148 silicon diode `eta = 1.836`).
+   - Function: Lower values (`0.40`) make the inter-stage diodes saturate early with heavy vocal compression; higher values (`2.50`) increase clean headroom inside the ladder.
+
+5. fb_highpass_hz
+   - Range: 10.0 to 350.0 Hz (Feedback Loop RC Highpass Cutoff `C7/R7`, Default: 45.0 Hz)
+   - Taper: Direct cutoff frequency in Hz (DAFx-08 Section 1, Fig. 1).
+   - Function: Eliminates DC offset in the feedback loop and prevents low-frequency tuba fundamentals from choking high-resonance whistling.
+
+6. pitch_track_amt
+   - Range: 0.00 to 4.00 Hz/Hz (Cutoff Pitch Tracking Multiplier from in3 in Hz; Default: 1.50)
+   - Taper: Linear harmonic ratio.
+   - Function: Tracks the VCS3 diode ladder cutoff to the tuba's pitch in Hz.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Cutoff Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Modulates the diode ladder cutoff frequency directly in Hz from `in4`.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet EMS VCS3 Diode Ladder; Default: 0.95)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba with the EMS VCS3 diode ladder output.

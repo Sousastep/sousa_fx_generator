@@ -1,0 +1,181 @@
+// ============================================================================
+// filter_hilbert_amfm_wahifer_vocal.txt
+// Stereo Analytic AM/FM "WahIFer" Instantaneous-Frequency & Formant Modulator
+// Implements Antonio Jose Homsi Goulart, Victor Lazzarini & Joseph Timoney
+// (DAFx-15, Paper 30): "New Audio Effects Based on Time-Domain AM/FM
+// Decomposition" (Sections 2 & 3.5 "WahIFer", Eq. 2-8 & 13, Fig. 7).
+// Decomposes the stereo tuba signal into Instantaneous Amplitude a(t) = |z(t)|
+// and Instantaneous Frequency f(t) = d(theta)/dt via a 4-stage Quadrature IIR
+// Hilbert Transform (Sec 2, Eq. 4-6), then applies the paper's "WahIFer"
+// transformation (Sec 3.5, Eq. 13):
+//   1. Bandpass / resonant wah-wah filtering h(t) * f(t) is applied directly to
+//      the Instantaneous Frequency trajectory f(t) (anchored to the tuba's pitch
+//      on in3 in Hz and modulated by in4 in Hz), generating vocal FM sideband
+//      clusters when re-integrated via x_wah(t) = a(t) * cos(2*pi * int(h * f dt))!
+//   2. Simultaneously applies a dynamic dual-formant vocal wah filter to the
+//      Instantaneous Amplitude / resynthesized carrier so both AM and FM domains
+//      speak together in stereo!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (anchors the IF carrier & vocal wah cutoff)
+//   in4: Modulation Signal in Hz (modulates the WahIFer bandpass & vocal wah in Hz)
+// Outlets:
+//   out1: Left AM/FM WahIFer Vocal Output
+//   out2: Right AM/FM WahIFer Vocal Output
+
+@param({ min: 1.0, max: 120.0 }) if_wah_center_hz = 14.0;
+@param({ min: 0.5, max: 6.0 }) if_fm_index = 2.2;
+@param({ min: 250.0, max: 3200.0 }) audio_wah_cutoff_hz = 780.0;
+@param({ min: 0.4, max: 0.97 }) wah_resonance_q = 0.84;
+@param({ min: 0.0, max: 1.0 }) amfm_to_hybrid_mode = 0.65;
+@param({ min: 0.0, max: 3.0 }) pitch_track_amt = 1.25;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.90;
+
+// 4-stage Quadrature IIR Allpass Hilbert Transform states (DAFx-15 Sec 2)
+@state hReXL = new FixedSampleArray(4); @state hReYL = new FixedSampleArray(4);
+@state hImXL = new FixedSampleArray(4); @state hImYL = new FixedSampleArray(4);
+@state hDelReL = 0.0; @state prevThetaL = 0.0;
+
+@state hReXR = new FixedSampleArray(4); @state hReYR = new FixedSampleArray(4);
+@state hImXR = new FixedSampleArray(4); @state hImYR = new FixedSampleArray(4);
+@state hDelReR = 0.0; @state prevThetaR = 0.0;
+
+// WahIFer Instantaneous-Frequency (IF) Bandpass Filters h(tau) (Sec 3.5, Eq. 13)
+@state ifWahSvfL = new svf();
+@state ifWahSvfR = new svf();
+@state resynthPhaseL = 0.0;
+@state resynthPhaseR = 0.0;
+
+// Audio-domain Vocal Wah Formant SVFs (F1 & F2)
+@state vocWah1L = new svf(); @state vocWah2L = new svf();
+@state vocWah1R = new svf(); @state vocWah2R = new svf();
+
+// Fallback ZC pitch tracker & parameter slews
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothAudioCut = 780.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Modulation (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+let pHz = clamp(pitch_track_amt, 0.0, 3.0) * f0;
+let mHz = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+
+let targetAudioCut = clamp(audio_wah_cutoff_hz + pHz + mHz, 120.0, 5500.0);
+smoothAudioCut += (targetAudioCut - smoothAudioCut) * slew;
+
+// --- 2. Analytic Signal z(t) = x(t) + j*x_hat(t) via 4-Stage Hilbert Pair (Eq. 4-6) ---
+let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+let reL = xL;
+let t = cR0 * (reL + hReYL[0]) - hReXL[0]; hReXL[0] = reL; hReYL[0] = t; reL = t;
+t = cR1 * (reL + hReYL[1]) - hReXL[1]; hReXL[1] = reL; hReYL[1] = t; reL = t;
+t = cR2 * (reL + hReYL[2]) - hReXL[2]; hReXL[2] = reL; hReYL[2] = t; reL = t;
+t = cR3 * (reL + hReYL[3]) - hReXL[3]; hReXL[3] = reL; hReYL[3] = t; reL = t;
+let aReL = hDelReL; hDelReL = reL;
+
+let imL = xL;
+t = cI0 * (imL + hImYL[0]) - hImXL[0]; hImXL[0] = imL; hImYL[0] = t; imL = t;
+t = cI1 * (imL + hImYL[1]) - hImXL[1]; hImXL[1] = imL; hImYL[1] = t; imL = t;
+t = cI2 * (imL + hImYL[2]) - hImXL[2]; hImXL[2] = imL; hImYL[2] = t; imL = t;
+t = cI3 * (imL + hImYL[3]) - hImXL[3]; hImXL[3] = imL; hImYL[3] = t; imL = t;
+let aImL = imL;
+
+let reR = xR;
+t = cR0 * (reR + hReYR[0]) - hReXR[0]; hReXR[0] = reR; hReYR[0] = t; reR = t;
+t = cR1 * (reR + hReYR[1]) - hReXR[1]; hReXR[1] = reR; hReYR[1] = t; reR = t;
+t = cR2 * (reR + hReYR[2]) - hReXR[2]; hReXR[2] = reR; hReYR[2] = t; reR = t;
+t = cR3 * (reR + hReYR[3]) - hReXR[3]; hReXR[3] = reR; hReYR[3] = t; reR = t;
+let aReR = hDelReR; hDelReR = reR;
+
+let imR = xR;
+t = cI0 * (imR + hImYR[0]) - hImXR[0]; hImXR[0] = imR; hImYR[0] = t; imR = t;
+t = cI1 * (imR + hImYR[1]) - hImXR[1]; hImXR[1] = imR; hImYR[1] = t; imR = t;
+t = cI2 * (imR + hImYR[2]) - hImXR[2]; hImXR[2] = imR; hImYR[2] = t; imR = t;
+t = cI3 * (imR + hImYR[3]) - hImXR[3]; hImXR[3] = imR; hImYR[3] = t; imR = t;
+let aImR = imR;
+
+// Extract Instantaneous Amplitude a(t) (Eq. 5) and Instantaneous Phase derivative f(t) (Eq. 6)
+let polL = cartopol(aReL, aImL);
+let iaL = polL[0];
+let thetaL = polL[1];
+let dThetaL = thetaL - prevThetaL;
+if (dThetaL < -pi) { dThetaL += 2.0 * pi; }
+else if (dThetaL > pi) { dThetaL -= 2.0 * pi; }
+prevThetaL = thetaL;
+let ifRawHzL = clamp((dThetaL / (2.0 * pi)) * sr, -1500.0, 3500.0);
+
+let polR = cartopol(aReR, aImR);
+let iaR = polR[0];
+let thetaR = polR[1];
+let dThetaR = thetaR - prevThetaR;
+if (dThetaR < -pi) { dThetaR += 2.0 * pi; }
+else if (dThetaR > pi) { dThetaR -= 2.0 * pi; }
+prevThetaR = thetaR;
+let ifRawHzR = clamp((dThetaR / (2.0 * pi)) * sr, -1500.0, 3500.0);
+
+// --- 3. "WahIFer" Bandpass Filtering of the Instantaneous Frequency f(t) (Sec 3.5, Eq. 13) ---
+// Filter the IF deviation around f0 with a resonant wah bandpass filter h(t)
+let ifCutL = clamp(if_wah_center_hz + abs(mHz) * 0.08, 1.0, 250.0);
+let ifCutR = clamp(ifCutL * 1.12, 1.0, 250.0);
+let qWah = clamp(wah_resonance_q, 0.4, 0.97);
+
+let ifDevL = ifWahSvfL.next(ifRawHzL - f0, ifCutL, qWah)[2];
+let ifDevR = ifWahSvfR.next(ifRawHzR - f0, ifCutR, qWah)[2];
+
+let fmIdx = clamp(if_fm_index, 0.5, 6.0);
+let fResynthL = clamp(f0 + fmIdx * ifDevL + mHz * 0.5, 20.0, sr * 0.42);
+let fResynthR = clamp(f0 + fmIdx * ifDevR - mHz * 0.5, 20.0, sr * 0.42);
+
+// Eq. 8 & 13: Re-integrate phase and multiply by Instantaneous Amplitude a(t)
+resynthPhaseL = wrap(resynthPhaseL + fResynthL / sr, 0.0, 1.0);
+resynthPhaseR = wrap(resynthPhaseR + fResynthR / sr, 0.0, 1.0);
+
+let wahIFerL = iaL * cos(2.0 * pi * resynthPhaseL) + 0.5 * xL;
+let wahIFerR = iaR * cos(2.0 * pi * resynthPhaseR) + 0.5 * xR;
+
+// --- 4. Coupled Audio-Domain Dual-Formant Vocal Wah Filter ---
+let f1Wah = clamp(smoothAudioCut * 0.65, 140.0, 1800.0);
+let f2Wah = clamp(smoothAudioCut * 1.85, 450.0, 5200.0);
+
+let hybMode = clamp(amfm_to_hybrid_mode, 0.0, 1.0);
+let wahInL = linearinterp(hybMode, xL, wahIFerL);
+let wahInR = linearinterp(hybMode, xR, wahIFerR);
+
+let bp1L = vocWah1L.next(wahInL, f1Wah, qWah)[2];
+let bp2L = vocWah2L.next(wahInL, f2Wah, qWah)[2];
+let bp1R = vocWah1R.next(wahInR, f1Wah * 1.03, qWah)[2];
+let bp2R = vocWah2R.next(wahInR, f2Wah * 0.97, qWah)[2];
+
+let wetL = tanh((0.55 * wahIFerL + 1.35 * hybMode * (bp1L + 0.8 * bp2L)) * 1.1);
+let wetR = tanh((0.55 * wahIFerR + 1.35 * hybMode * (bp1R + 0.8 * bp2R)) * 1.1);
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, wetL);
+out2 = linearinterp(mix, xR, wetR);

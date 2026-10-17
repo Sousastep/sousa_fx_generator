@@ -1,0 +1,56 @@
+================================================================================
+filter_crybaby_fasel_inductor_wah — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Physical Model of the Dunlop Crybaby Wah-Wah Pedal with a Saturating Fröhlich-Kennelly Fasel Red Inductor implementing Martin Holters & Udo Zölzer (DAFx-11 Paper 21_e, "Physical Modelling of a Wah-Wah Effect Pedal as a Case Study for Application of the Nodal DK Method to Circuits with Variable Parts", Sections 1 & 2.1, Fig. 1–2), Giulio Moro & Andrew P. McPherson (DAFx-15 Paper 68, "Approximating Non-Linear Inductors Using Time-Variant Linear Filters", Sections 2, 3 & 6.2, Eq. 1–12, Fig. 1 & 9), and DAFx-20 Paper 33 (Section 4.1 "Fasel Red Inductor Measurements"). Captures:
+1. Coupled Potentiometer `VR1` Trajectory (DAFx-11 Fig. 1): Sweeping `pedal_position` from heel to toe simultaneously sweeps the resonant pole from 320 Hz to 2.3 kHz, widens the inductor Q factor, and tilts the transistor feedback gain just like the real Crybaby circuit.
+2. Fröhlich-Kennelly Ferromagnetic Core Saturation (DAFx-15 Eq. 5–8): Models the progressive drop in relative magnetic permeability `mu(H)` of the 500 mH toroidal Fasel Red inductor core (`B = H / (c + b|H|)`) as coil current `i_L` rises on loud tuba bass peaks, causing audio-rate upward cutoff modulation and warm magnetic core saturation!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (scales the wah resonant frequency in Hz with tuba pitch)
+- in4: Modulation Signal in Hz (sweeps the wah resonant frequency in Hz for LFO/audio-rate wah)
+- out1 / out2: Stereo Crybaby Fasel Inductor Wah Output
+
+PARAMETERS (8)
+
+1. pedal_position
+   - Range: 0.00 to 1.00 (0.0 = Heel Down ~320 Hz "OO", 1.0 = Toe Down ~2300 Hz "AH/EE"; Default: 0.40)
+   - Taper: Vintage ICAR potentiometer curve (`x^1.6`) coupling resonant frequency, Q damping, and passband boost.
+   - Function: Manual foot-pedal sweep across the classic vocal wah-wah range.
+
+2. fasel_core_sat
+   - Range: 0.00 to 1.00 (Fröhlich-Kennelly Ferromagnetic Core Saturation `b / c`, Default: 0.65)
+   - Taper: Linear magnetic flux saturation depth (DAFx-15 Eq. 5 & 8, Fig. 1).
+   - Function: When driven by loud tuba notes, the Fasel inductor core saturates, temporarily lowering inductance `L[n]` and making the wah peak flare upward in frequency with gritty odd/even harmonic bloom.
+
+3. inductor_q_trim
+   - Range: 0.50 to 2.50 (Inductor Parallel Resistance / Q Factor Multiplier, Default: 1.15)
+   - Taper: Linear Q multiplier (`1.00` = stock Dunlop Crybaby Q trajectory).
+   - Function: Pushes the inductor from a smooth vintage vocal wah (`0.80`) to a whistling, hyper-resonant dubstep formant filter (`2.50`).
+
+4. env_autowah_sens
+   - Range: -2.00 to +2.00 (Input Envelope Auto-Wah / Touch-Wah Sensitivity, Default: +0.75)
+   - Taper: Bipolar linear envelope depth (positive sweeps heel-to-toe on loud attacks; negative sweeps toe-to-heel).
+   - Function: Converts tuba dynamics into expressive vocal wah articulation.
+
+5. bjt_q1_drive_db
+   - Range: 0.0 to 24.0 dB (Input Transistor Q1/Q2 Ebers-Moll Saturation Drive, Default: 8.0 dB)
+   - Taper: Logarithmic dB gain after the emitter-follower input highpass filter (DAFx-11 Section 1 & Eq. 48–51).
+   - Function: Drives the internal BJT stages and increases coil current `i_L` into the saturating Fasel inductor.
+
+6. pitch_track_amt
+   - Range: 0.00 to 3.00 Hz/Hz (Wah Frequency Pitch Tracking from in3 in Hz; Default: 1.00)
+   - Taper: Linear Hz tracking ratio.
+   - Function: Keeps the wah formant peak aligned with the tuba's harmonic series across registers.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Modulates the wah center frequency directly in Hz from `in4`.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Crybaby Wah; Default: 0.95)
+   - Taper: Linear crossfade.
+   - Function: Blends the dry tuba with the Crybaby Fasel inductor wah output.

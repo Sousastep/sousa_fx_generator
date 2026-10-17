@@ -1,0 +1,141 @@
+// ============================================================================
+// filter_heterodyne_ephasor_formant.txt
+// Stereo Dual-Formant Heterodyne "ephasor" & FOF Skirt Vocal Resonator
+// Implements Victor Lazzarini & Joseph Timoney (DAFx-12, Paper 58):
+// "Synthesis of Resonant Sounds with a Heterodyne Model" (Sections 2.1, 2.2
+// & 3, Eq. 3-10, Fig. 1-2) and Perry R. Cook (DAFx-98, COO62, Sec 2.4).
+// Generates pitch-locked vocal formant resonances WITHOUT conventional IIR
+// filter phase distortion by:
+//   1. Accumulating an exponential decay modulator M(n) = R^(n mod T0) reset
+//      synchronously at each fundamental period T0 = fs / f0 of the tuba via
+//      the Csound `ephasor` algorithm (Sec 2.1, p. 3), shaped with a subtracted
+//      wide-bandwidth attack skirt borrowed from FOF synthesis (Sec 3, p. 3).
+//   2. Heterodyning the input tuba envelope/audio with two adjacent harmonic
+//      carriers cos(k*w0*n) and cos((k+1)*w0*n) crossfaded by a = (fc/f0) - k
+//      (Eq. 8-10, Sec 2.2) so sweeping the formant center frequency fc produces
+//      ZERO non-harmonic aliasing at period boundaries!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (sets period T0 = fs/f0 and harmonic grid k*f0)
+//   in4: Modulation Signal in Hz (sweeps F1 & F2 formant frequencies in Hz)
+// Outlets:
+//   out1: Left Heterodyne FOF Formant Output
+//   out2: Right Heterodyne FOF Formant Output
+
+@param({ min: 180.0, max: 1400.0 }) formant1_hz = 520.0;
+@param({ min: 650.0, max: 4200.0 }) formant2_hz = 1650.0;
+@param({ min: 20.0, max: 350.0 }) bandwidth_hz = 75.0;
+@param({ min: 0.05, max: 0.95 }) fof_skirt_sharpness = 0.45;
+@param({ min: 0.0, max: 1.0 }) ring_to_synth_mode = 0.55;
+@param({ min: 0.0, max: 2.0 }) pitch_track_amt = 1.0;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.90;
+
+// Csound `ephasor` state variables (DAFx-12 Sec 2.1, p. 3)
+@state ePhase = 0.0;
+@state ephNarrow = 1.0;
+@state ephSkirt = 1.0;
+
+// Envelope follower & fallback ZC pitch tracker
+@state envFolL = 0.0;
+@state envFolR = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothFc1 = 520.0;
+@state smoothFc2 = 1650.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) & Input Envelope ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+let envCoeff = 1.0 - exp(-1.0 / (0.003 * sr));
+envFolL += (abs(xL) - envFolL) * envCoeff;
+envFolR += (abs(xR) - envFolR) * envCoeff;
+
+// --- 2. Formant Target Frequencies (Tracks in3 Hz + Modulated by in4 Hz) ---
+let pTrk = clamp(pitch_track_amt, 0.0, 2.0) * (f0 - 65.0);
+let mShift = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+
+let targetF1 = clamp(formant1_hz + pTrk * 0.75 + mShift * 0.65, f0, 2200.0);
+let targetF2 = clamp(formant2_hz + pTrk * 1.50 + mShift * 1.50, f0 * 2.0, 6000.0);
+smoothFc1 += (targetF1 - smoothFc1) * slew;
+smoothFc2 += (targetF2 - smoothFc2) * slew;
+
+// --- 3. Csound `ephasor` + FOF Dual-Exponential Skirt Modulator M(n) (Sec 2.1 & 3) ---
+// Eq. 4: R = exp(-pi * BW / sr). Second wider-bandwidth modulator R_skirt shapes FOF attack!
+let bw = clamp(bandwidth_hz, 20.0, 350.0);
+let rNarrow = clamp(exp(0.0 - pi * bw / sr), 0.80, 0.9995);
+let skirtMult = 2.5 + 14.0 * clamp(fof_skirt_sharpness, 0.05, 0.95);
+let rSkirt = clamp(exp(0.0 - pi * (bw * skirtMult) / sr), 0.40, 0.995);
+
+let incr = f0 / sr;
+ePhase += incr;
+ephNarrow *= rNarrow;
+ephSkirt *= rSkirt;
+if (ePhase >= 1.0) {
+	ePhase -= 1.0;
+	ephNarrow = pow(rNarrow, 1.0 + ePhase);
+	ephSkirt = pow(rSkirt, 1.0 + ePhase);
+}
+
+// Section 3 (p. 3): Subtract wide-bandwidth modulator from narrow-bandwidth modulator
+// to round the start of the impulse response like a CHANT FOF grain!
+let modEnv = maximum(ephNarrow - 0.85 * ephSkirt, 0.0) * 2.2;
+
+// --- 4. Adjacent-Harmonic Interpolated Heterodyne Carriers (Eq. 8, 9, 10) ---
+// s(n) = M(n) * [(1 - a) * cos(k * w0 * n) + a * cos((k + 1) * w0 * n)]
+let ratio1 = maximum(smoothFc1 / f0, 1.0);
+let k1: Int = floor(ratio1);
+let a1 = ratio1 - k1;
+let w0Phase = 2.0 * pi * ePhase;
+
+let car1L = (1.0 - a1) * cos(k1 * w0Phase) + a1 * cos((k1 + 1) * w0Phase);
+let car1R = (1.0 - a1) * sin(k1 * w0Phase) + a1 * sin((k1 + 1) * w0Phase);
+
+let ratio2 = maximum(smoothFc2 / f0, 1.0);
+let k2: Int = floor(ratio2);
+let a2 = ratio2 - k2;
+
+let car2L = (1.0 - a2) * cos(k2 * w0Phase) + a2 * cos((k2 + 1) * w0Phase);
+let car2R = (1.0 - a2) * sin(k2 * w0Phase) + a2 * sin((k2 + 1) * w0Phase);
+
+// Combine Formant 1 & Formant 2 heterodyne grains
+let hetGrainL = modEnv * (car1L + 0.78 * car2L);
+let hetGrainR = modEnv * (car1R + 0.78 * car2R);
+
+// Morph between Audio Ring-Heterodyning (xL * hetGrain) and Envelope-Driven FOF Resynthesis
+let mode = clamp(ring_to_synth_mode, 0.0, 1.0);
+let ringL = tanh(xL * 2.5) * hetGrainL;
+let ringR = tanh(xR * 2.5) * hetGrainR;
+let synthL = envFolL * 2.4 * hetGrainL;
+let synthR = envFolR * 2.4 * hetGrainR;
+
+let wetL = tanh(linearinterp(mode, ringL, synthL));
+let wetR = tanh(linearinterp(mode, ringR, synthR));
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, wetL);
+out2 = linearinterp(mix, xR, wetR);

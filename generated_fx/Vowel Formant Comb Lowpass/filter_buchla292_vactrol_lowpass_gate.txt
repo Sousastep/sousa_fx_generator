@@ -1,0 +1,189 @@
+// ============================================================================
+// filter_buchla292_vactrol_lowpass_gate.txt
+// Stereo Topology-Preserving Buchla 292 Vactrol Lowpass-Gate (LPG)
+// Implements Julian Parker & Stefano D'Angelo (DAFx-13, Paper 44):
+// "A Digital Model of the Buchla Lowpass-Gate" (Sections 2.1, 2.2.2, 2.2.3,
+// 2.3 & 3, Eq. 5-26, Table 1, Fig. 1-7).
+// Realizes the complete 3-state topology-preserving trapezoidal model of Don
+// Buchla's Model 292 Lowpass Gate with Perkin Elmer VTL5C3 vactrol dynamics:
+//   1. Exact KCL state-space audio path with capacitors C1=1nF, C2=220pF,
+//      variable Sallen-Key feedback capacitor C3 (0 to 4.7nF), and shorting
+//      resistor R_alpha (5 kOhm VCA mode to 5 MOhm Both/Lowpass mode, Table 1).
+//   2. Delay-free loop resolved analytically via Eq. 20-22 with instantaneous
+//      Taylor-linearized tanh diode limiter in the C3 resonance feedback path
+//      (Sec 2.3, Eq. 24-26) and normalized stability bound a_max (Eq. 11 & 23)!
+//   3. Asymmetric Vactrol Opto-Isolator Memory (Sec 3): fast sub-millisecond
+//      LED/photoresistor attack when struck by tuba transients or in4 Hz mod,
+//      paired with a lazy, organic physical-plucked decay!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (scales LPG vactrol cutoff frequency in Hz)
+//   in4: Modulation Signal in Hz (strikes/modulates the vactrol control path in Hz)
+// Outlets:
+//   out1: Left Buchla 292 Lowpass-Gate Output
+//   out2: Right Buchla 292 Lowpass-Gate Output
+
+@param({ min: 30.0, max: 10000.0 }) base_cutoff_hz = 220.0;
+@param({ min: 0.0, max: 1.0 }) mode_both_to_lowpass = 0.75;
+@param({ min: 0.0, max: 0.98 }) resonance_norm = 0.62;
+@param({ min: 0.0, max: 2.5 }) env_vactrol_strike = 0.85;
+@param({ min: 25.0, max: 1200.0 }) vactrol_decay_ms = 240.0;
+@param({ min: 0.0, max: 1.0 }) diode_fb_saturation = 0.55;
+@param({ min: 0.0, max: 3.0 }) pitch_track_amt = 1.0;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+
+// Topology-preserving DF2T integrator & differentiator states (Eq. 14-19, Fig. 4)
+@state sdL = 0.0; @state sxL = 0.0; @state soL = 0.0; @state xoPrevL = 0.0;
+@state sdR = 0.0; @state sxR = 0.0; @state soR = 0.0; @state xoPrevR = 0.0;
+
+// Vactrol VTL5C3 asymmetric memory states (Sec 3, Fig. 7) & fallback pitch tracker
+@state vacFreqL = 220.0;
+@state vacFreqR = 220.0;
+@state envPeak = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Envelope Strike + Modulation (in4 in Hz) ---
+let mono = 0.5 * (xL + xR);
+let monoLow = lpTrack.next(mono, 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+
+// Fast envelope detector for Buchla "bong/pluck" vactrol strike
+let inAbs = maximum(abs(xL), abs(xR));
+let attEnv = 1.0 - exp(-1.0 / (0.0012 * sr));
+let relEnv = 1.0 - exp(-1.0 / (0.045 * sr));
+envPeak = (inAbs > envPeak) ? (envPeak + attEnv * (inAbs - envPeak)) : (envPeak + relEnv * (inAbs - envPeak));
+
+// Target cutoff in Hz combines base_cutoff_hz, tuba pitch (in3 Hz), modulation (in4 Hz), and envelope strike
+let pHz = clamp(pitch_track_amt, 0.0, 3.0) * smoothF0;
+let mHz = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+let strikeHz = clamp(env_vactrol_strike, 0.0, 2.5) * envPeak * 2800.0;
+
+let targetHzL = clamp(base_cutoff_hz + pHz + mHz + strikeHz, 18.0, 12000.0);
+let targetHzR = clamp(base_cutoff_hz * 1.02 + pHz + mHz * 0.92 + strikeHz, 18.0, 12000.0);
+
+// --- 2. VTL5C3 Vactrol Asymmetric Attack/Decay Ballistics (DAFx-13 Sec 3) ---
+// Fast 1.5 ms LED turn-on response; slow frequency-dependent photoresistor decay!
+let vacAtt = 1.0 - exp(-1.0 / (0.0015 * sr));
+let decSec = clamp(vactrol_decay_ms, 25.0, 1200.0) * 0.001;
+let vacRel = 1.0 - exp(-1.0 / (decSec * sr));
+
+vacFreqL = (targetHzL > vacFreqL)
+	? (vacFreqL + vacAtt * (targetHzL - vacFreqL))
+	: (vacFreqL + vacRel * (targetHzL - vacFreqL));
+vacFreqR = (targetHzR > vacFreqR)
+	? (vacFreqR + vacAtt * (targetHzR - vacFreqR))
+	: (vacFreqR + vacRel * (targetHzR - vacFreqR));
+
+// --- 3. Buchla 292 Circuit Parameters (Table 1 & Eq. 5-12, 23) ---
+// C1 = 1e-9 F, C2 = 2.2e-10 F, C3 morphs from 0 ('Both' passive 2-pole) to 4.7e-9 F ('Lowpass' Sallen-Key)
+let C1 = 1.0e-9;
+let C2 = 2.2e-10;
+let lpMode = clamp(mode_both_to_lowpass, 0.0, 1.0);
+let C3 = (0.15 + 4.55 * lpMode) * 1.0e-9;
+// R_alpha: in 'Both' mode (lpMode -> 0), lower R_alpha engages the potential-divider VCA gate at low cutoff (Eq. 12)
+let Ralpha = (250.0 + 4750.0 * lpMode) * 1000.0;
+
+// Map vactrol cutoff frequency vacFreq to vactrol resistance Rf = 1 / (2*pi * vacFreq * sqrt(C1*(C2+C3)))
+let capGeo = sqrt(C1 * (C2 + C3));
+let RfL = clamp(1.0 / (2.0 * pi * clamp(vacFreqL, 18.0, sr * 0.42) * capGeo), 1200.0, 2.5e6);
+let RfR = clamp(1.0 / (2.0 * pi * clamp(vacFreqR, 18.0, sr * 0.42) * capGeo), 1200.0, 2.5e6);
+
+// Eq. 11 & 23: Decoupled maximum stable feedback gain a_max and normalized resonance a = a_norm * a_max
+let aNorm = clamp(resonance_norm, 0.0, 0.98) * lpMode;
+let aMaxL = (2.0 * C1 * Ralpha + (C2 + C3) * (Ralpha + RfL)) / (C3 * Ralpha);
+let aMaxR = (2.0 * C1 * Ralpha + (C2 + C3) * (Ralpha + RfR)) / (C3 * Ralpha);
+let aGainL = aNorm * aMaxL;
+let aGainR = aNorm * aMaxR;
+
+// --- 4. 2x-Oversampled Topology-Preserving Trapezoidal Solver with Taylor Diode Limiter (Eq. 14-26) ---
+let Fs2 = 2.0 * sr; // 2x oversampling rate
+let twoFs = 2.0 * Fs2;
+let fourFs = 4.0 * Fs2;
+let nlAmt = clamp(diode_fb_saturation, 0.0, 1.0);
+
+let b1L = 1.0 / (C2 * RfL);
+let b2L = -2.0 / (C2 * RfL);
+let b3L = 1.0 / (C2 * RfL);
+let b4 = C3 / C2;
+let a1L = 1.0 / (C1 * RfL);
+let a2L = 0.0 - (1.0 / C1) * ((1.0 / RfL) + (1.0 / Ralpha));
+
+let b1R = 1.0 / (C2 * RfR);
+let b2R = -2.0 / (C2 * RfR);
+let b3R = 1.0 / (C2 * RfR);
+let a1R = 1.0 / (C1 * RfR);
+let a2R = 0.0 - (1.0 / C1) * ((1.0 / RfR) + (1.0 / Ralpha));
+
+let yoL = 0.0;
+let yoR = 0.0;
+
+for (let step: Int = 0; step < 2; step++) {
+	// Sec 2.3 Eq. 24-26: Instantaneous Taylor linearization of tanh(xo) in resonance feedback path
+	let driveXoL = xoPrevL * (1.0 + 2.5 * nlAmt);
+	let thL = tanh(driveXoL);
+	let slopeL = 1.0 - thL * thL;
+	let effD1L = aGainL * linearinterp(nlAmt, 1.0, slopeL);
+	let offsetD1L = aGainL * nlAmt * (thL - driveXoL * slopeL) / maximum(1.0 + 2.5 * nlAmt, 1.0);
+
+	let sdEffL = sdL + twoFs * offsetD1L;
+	let denomL = a1L * b3L - a2L * b2L - twoFs * a1L * b4 * effD1L - twoFs * a2L * b4 + twoFs * Fs2 * 0.0;
+	// Exact Eq. 20-22 solution (with d2 = -1)
+	let dDenomL = a1L * b3L - a2L * b2L - twoFs * a1L * b4 * effD1L - twoFs * a2L * b4;
+	let safeDenomL = (abs(dDenomL) < 1.0) ? -1.0 : dDenomL;
+	let yxL = (a2L * b4 * sdEffL + twoFs * (b3L - twoFs * b4 * effD1L) * soL - twoFs * a2L * sxL - a2L * b1L * xL) / safeDenomL;
+	yoL = (soL + (a1L / twoFs) * yxL) / (1.0 - (a2L / twoFs));
+	let fbNonlinL = effD1L * yoL + offsetD1L;
+	let ydL = sdL + twoFs * (fbNonlinL - yxL);
+
+	// Update states (Eq. 17-19 & 26)
+	sdL = 0.0 - sdL - fourFs * (fbNonlinL - yxL);
+	sxL = sxL + (1.0 / Fs2) * (b1L * xL + b2L * yxL + b3L * yoL + b4 * ydL);
+	soL = soL + (1.0 / Fs2) * (a1L * yxL + a2L * yoL);
+	xoPrevL = yoL;
+
+	// Right channel
+	let driveXoR = xoPrevR * (1.0 + 2.5 * nlAmt);
+	let thR = tanh(driveXoR);
+	let slopeR = 1.0 - thR * thR;
+	let effD1R = aGainR * linearinterp(nlAmt, 1.0, slopeR);
+	let offsetD1R = aGainR * nlAmt * (thR - driveXoR * slopeR) / maximum(1.0 + 2.5 * nlAmt, 1.0);
+
+	let sdEffR = sdR + twoFs * offsetD1R;
+	let dDenomR = a1R * b3R - a2R * b2R - twoFs * a1R * b4 * effD1R - twoFs * a2R * b4;
+	let safeDenomR = (abs(dDenomR) < 1.0) ? -1.0 : dDenomR;
+	let yxR = (a2R * b4 * sdEffR + twoFs * (b3R - twoFs * b4 * effD1R) * soR - twoFs * a2R * sxR - a2R * b1R * xR) / safeDenomR;
+	yoR = (soR + (a1R / twoFs) * yxR) / (1.0 - (a2R / twoFs));
+	let fbNonlinR = effD1R * yoR + offsetD1R;
+	let ydR = sdR + twoFs * (fbNonlinR - yxR);
+
+	sdR = 0.0 - sdR - fourFs * (fbNonlinR - yxR);
+	sxR = sxR + (1.0 / Fs2) * (b1R * xR + b2R * yxR + b3R * yoR + b4 * ydR);
+	soR = soR + (1.0 / Fs2) * (a1R * yxR + a2R * yoR);
+	xoPrevR = yoR;
+}
+
+out1 = tanh(yoL * 1.25);
+out2 = tanh(yoR * 1.25);

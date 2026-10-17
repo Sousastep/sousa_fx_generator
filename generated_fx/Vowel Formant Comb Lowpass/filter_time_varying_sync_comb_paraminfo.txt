@@ -1,0 +1,54 @@
+================================================================================
+filter_time_varying_sync_comb — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Hard-Sync Time-Varying Comb Filter & Vocal Formant Screamer implementing Joseph Timoney, Victor Lazzarini, Antti Huovilainen & Vesa Välimäki (DAFx-12 Paper 37, "Virtual Analog Oscillator Hard Synchronisation: Fourier Series and an Efficient Implementation", Section 4, p. 5) and Christopher Mitcheltree et al. (DAFx-23 Paper 63). Classic oscillator hard sync creates unmistakable tearing vocal formants, but normally requires a synthetic oscillator rather than a live acoustic instrument. Following DAFx-12 Section 4, this effect realizes hard synchronization as a pitch-synchronous Time-Varying Comb Filter: a master phasor locked to the tuba's fundamental pitch (`in3`, Hz) resets a sweeping fractional comb delay line at every fundamental period `T0 = fs / f0`, imposing screaming slave-oscillator sync formants (`slave_sync_ratio * f0 + in4`) directly onto the live tuba!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (locks the master hard-sync reset period `T0 = fs / f0`)
+- in4: Modulation Signal in Hz (sweeps the slave sync formant frequency directly in Hz)
+- out1 / out2: Stereo Time-Varying Hard-Sync Comb Output
+
+PARAMETERS (8)
+
+1. slave_sync_ratio
+   - Range: 1.00 to 16.00 (Slave-to-Master Frequency Ratio `f_slave / f0`, Default: 3.50)
+   - Taper: Continuous harmonic sync multiplier.
+   - Function: Sweeps the virtual slave formant frequency across the tuba's overtone series, producing the classic tearing hard-sync vocal cry.
+
+2. sync_comb_feedback
+   - Range: 0.00 to 0.94 (Time-Varying Comb Regeneration Feedback, Default: 0.72)
+   - Taper: Linear feedback gain with internal `tanh` saturation.
+   - Function: Sharpens the comb teeth at the slave sync frequency for metallic tearout dubstep aggression.
+
+3. window_edge_smooth
+   - Range: 0.05 to 1.00 (Master Period Reset Crossfade Smoothing Window, Default: 0.25)
+   - Taper: Linear trapezoidal crossfade slope (`0.05` = razor-sharp hard sync reset edge, `1.00` = smooth triangular crossfade).
+   - Function: Controls the anti-aliasing window at each master period reset boundary.
+
+4. post_filter_morph
+   - Range: 0.00 to 1.00 (0.0 = Lowpass Body Filter, 1.0 = Bandpass Vocal Formant Isolator; Default: 0.35)
+   - Taper: Linear crossfade between SVF lowpass and bandpass modes centered at `f_slave`.
+   - Function: Focuses the post-comb resonant filter from full-bodied lowpass sync growl (0.0) to a tight vocal formant peak (1.0).
+
+5. pitch_track_amt
+   - Range: 0.00 to 1.50 Hz/Hz (Master Sync Pitch Tracking from in3 in Hz; Default: 1.00)
+   - Taper: Linear Hz tracking ratio.
+   - Function: Locks the master hard-sync reset rate to the tuba's fundamental pitch in Hz.
+
+6. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Sweeps the slave sync formant frequency in Hz from an LFO, envelope, or audio-rate modulator on `in4`.
+
+7. sync_bite_drive_db
+   - Range: 0.0 to 24.0 dB (Comb Input Saturation Drive, Default: 9.0 dB)
+   - Taper: Logarithmic dB gain.
+   - Function: Drives the input and feedback loop into soft clipping so high sync ratios scream with rich harmonic density.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Hard-Sync Comb; Default: 0.90)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba with the hard-sync time-varying comb output.

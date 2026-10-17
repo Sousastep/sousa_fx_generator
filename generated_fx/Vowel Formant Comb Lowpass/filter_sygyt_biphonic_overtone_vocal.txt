@@ -1,0 +1,149 @@
+// ============================================================================
+// filter_sygyt_biphonic_overtone_vocal.txt
+// Stereo Tuvan Sygyt Biphonic Overtone Singing & Formant-Merging Vocal Filter
+// Implements Mateo Camara, Maria Pilar Daza-Llin et al. (DAFx-26, Paper 39):
+// "Differentiable Articulatory Copy-Synthesis of Biphonic Singing" (Sections 1,
+// 2.1, 2.2 & 3.2, Fig. 1-2) and Malte Kob et al. (DAFx-99, Paper kob).
+// Models Tuvan sygyt & kargyraa biphonic vocal tract filtering where:
+//   1. A sublingual secondary nonlinear glottal/throat source (kargyraa/laryngeal
+//      subharmonic excitation) enriches the low drone register (Sec 1 & 3.2).
+//   2. The second and third formants converge (F2 ≈ F3, Sec 2.1, Adachi & Yamada /
+//      Bergevin et al.) with extreme pharyngeal constriction narrowing the
+//      bandwidth down to ~15-25 Hz (Klingholz, Sec 2.1) to isolate and whistle
+//      a single harmonic overtone (h3..h16) in the 600-3500 Hz sygyt region!
+//   3. A coupled nasal/pharyngeal antiresonance notch carves out the mid-spectrum
+//      between the fundamental F1 drone and the whistling F2/F3 overtone ridge.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (locks overtone harmonic h_N = N * f0)
+//   in4: Modulation Signal in Hz (sweeps overtone focus frequency in Hz)
+// Outlets:
+//   out1: Left Sygyt Biphonic Vocal Filter Output
+//   out2: Right Sygyt Biphonic Vocal Filter Output
+
+@param({ min: 2.0, max: 16.0 }) overtone_harmonic = 6.0;
+@param({ min: 0.0, max: 1.0 }) formant_merge_focus = 0.82;
+@param({ min: 15.0, max: 250.0 }) sygyt_bandwidth_hz = 32.0;
+@param({ min: 0.0, max: 1.0 }) sublingual_kargyraa = 0.45;
+@param({ min: 0.0, max: 1.0 }) nasal_cavity_notch = 0.65;
+@param({ min: 0.0, max: 1.5 }) pitch_track_amt = 1.0;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 24.0 }) whistle_boost_db = 14.0;
+
+// SVF filter states for F1 drone, converged F2 & F3 sygyt resonators, and nasal notch
+@state svfF1L = new svf();
+@state svfF1R = new svf();
+@state svfF2L = new svf();
+@state svfF2R = new svf();
+@state svfF3L = new svf();
+@state svfF3R = new svf();
+@state svfNasalL = new svf();
+@state svfNasalR = new svf();
+
+// Sublingual / Kargyraa subharmonic flip-flop & throat waveshaper state
+@state subSign = 1.0;
+@state prevSubTrig = 0.0;
+@state subLpL = new onepole();
+@state subLpR = new onepole();
+
+// Fallback ZC pitch tracker & smoothing states
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothFocusHz = 520.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) & Sublingual Kargyraa Source (Sec 3.2) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+	subSign = 0.0 - subSign; // Divide-by-2 kargyraa false-vocal-fold period doubling
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.005 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// Sublingual secondary source (DAFx-26 Sec 1 & 3.2): adds throat pulse + octave-down kargyraa growl
+let kargAmt = clamp(sublingual_kargyraa, 0.0, 1.0);
+let subWaveL = tanh(xL * (1.5 + 6.0 * kargAmt) + 0.55 * kargAmt * subSign * abs(xL));
+let subWaveR = tanh(xR * (1.5 + 6.0 * kargAmt) + 0.55 * kargAmt * subSign * abs(xR));
+let srcL = linearinterp(kargAmt, xL, subWaveL);
+let srcR = linearinterp(kargAmt, xR, subWaveR);
+
+// --- 2. F1 Drone Formant & Converged F2 ≈ F3 Sygyt Overtone Frequency ---
+let trk = clamp(pitch_track_amt, 0.0, 1.5);
+let mDepth = clamp(mod_hz_depth, -2.0, 2.0);
+let basePitchHz = linearinterp(clamp(trk, 0.0, 1.0), 85.0, f0 * maximum(trk, 0.25));
+
+// F1 holds the chest/pharyngeal drone around 2.5 * f0 (or ~220-420 Hz)
+let f1Hz = clamp(basePitchHz * 2.2 + 120.0, 140.0, 750.0);
+
+// Target overtone frequency: harmonic N * basePitchHz + modulation in Hz (in4)
+let harmMult = clamp(overtone_harmonic, 2.0, 16.0);
+let targetOvertoneHz = clamp(basePitchHz * harmMult + mDepth * modHz, 280.0, 5200.0);
+smoothFocusHz += (targetOvertoneHz - smoothFocusHz) * slew;
+
+// Formant Merging (DAFx-26 Sec 2.1: Adachi & Yamada, F2 -> F3 convergence):
+// At formant_merge_focus = 0, F2 and F3 are separated like a normal vowel;
+// at formant_merge_focus = 1, F2 and F3 converge onto smoothFocusHz to create a laser overtone ridge!
+let merge = pow(clamp(formant_merge_focus, 0.0, 1.0), 1.4);
+let spreadRatio = 1.0 + 0.48 * (1.0 - merge);
+let f2HzL = clamp(smoothFocusHz / spreadRatio, 240.0, 5500.0);
+let f3HzL = clamp(smoothFocusHz * spreadRatio, 260.0, 6500.0);
+let f2HzR = clamp(f2HzL * 1.012, 240.0, 5500.0);
+let f3HzR = clamp(f3HzL * 0.988, 260.0, 6500.0);
+
+// Bandwidth narrowing under pharyngeal constriction (Klingholz Sec 2.1: down to ~15-20 Hz)
+// Exponential taper on sygyt_bandwidth_hz mapped to SVF resonance [0..1]
+let bwHz = clamp(sygyt_bandwidth_hz, 15.0, 250.0);
+let qVal = clamp(smoothFocusHz / maximum(bwHz, 10.0), 2.0, 95.0);
+let svfRes = clamp(1.0 - (1.2 / sqrt(qVal)), 0.55, 0.988);
+
+// --- 3. Coupled Nasal Cavity Antiresonance & Cascaded/Parallel Sygyt Filtering ---
+// Nasal branch creates a deep spectral trough between F1 and F2 (around 0.58 * F2)
+let nasalAmt = clamp(nasal_cavity_notch, 0.0, 1.0);
+let nasalHz = clamp(f2HzL * 0.58, 200.0, 2800.0);
+let nOutL = svfNasalL.next(srcL, nasalHz, 0.78);
+let nOutR = svfNasalR.next(srcR, nasalHz * 1.02, 0.78);
+// Band-reject (LP + HP) carves the pharyngeal/nasal spectral valley
+let notchedL = linearinterp(nasalAmt, srcL, nOutL[0] + nOutL[1]);
+let notchedR = linearinterp(nasalAmt, srcR, nOutR[0] + nOutR[1]);
+
+// Drone F1 filter (bandpass + lowpass body)
+let f1OutL = svfF1L.next(notchedL, f1Hz, 0.72);
+let f1OutR = svfF1R.next(notchedR, f1Hz, 0.72);
+let droneL = 0.65 * f1OutL[0] + 0.85 * f1OutL[2];
+let droneR = 0.65 * f1OutR[0] + 0.85 * f1OutR[2];
+
+// Converging F2 & F3 resonator pair: blend parallel + cascaded coupling as merge -> 1.0
+let f2OutL = svfF2L.next(notchedL, f2HzL, svfRes)[2];
+let f2OutR = svfF2R.next(notchedR, f2HzR, svfRes)[2];
+
+let f3InL = linearinterp(merge, notchedL, f2OutL * 2.2);
+let f3InR = linearinterp(merge, notchedR, f3InL * 0.1 + f2OutR * 2.1);
+let f3OutL = svfF3L.next(f3InL, f3HzL, svfRes)[2];
+let f3OutR = svfF3R.next(f3InR, f3HzR, svfRes)[2];
+
+let whistleGain = dbtoa(clamp(whistle_boost_db, 0.0, 24.0));
+let overtoneL = (0.5 * f2OutL + f3OutL) * whistleGain * (1.0 - 0.5 * svfRes);
+let overtoneR = (0.5 * f2OutR + f3OutR) * whistleGain * (1.0 - 0.5 * svfRes);
+
+// Combine fundamental chest drone + whistling sygyt overtone ridge with soft saturation
+out1 = tanh((droneL + overtoneL) * 0.85);
+out2 = tanh((droneR + overtoneR) * 0.85);

@@ -1,0 +1,168 @@
+// ============================================================================
+// filter_time_varying_sync_comb.txt
+// Stereo Hard-Sync Time-Varying Comb Filter & Vocal Formant Sweep
+// Implements Joseph Timoney, Victor Lazzarini, Antti Huovilainen & Vesa Valimaki
+// (DAFx-12, Paper 37): "Virtual Analog Oscillator Hard Synchronisation: Fourier
+// Series and an Efficient Implementation" (Section 4 "Hard Sync as a Time-Varying
+// Comb Filter", p. 5) and Christopher Mitcheltree et al. (DAFx-23, Paper 63).
+// Realizes classic oscillator hard-sync screaming formants on ANY live acoustic
+// input (the tuba!) by modeling hard sync as a pitch-synchronous Time-Varying
+// Comb Filter:
+//   1. A master phasor locked to the tuba's fundamental pitch f0 (in3, Hz)
+//      defines the fundamental period T0 = fs / f0.
+//   2. Within each fundamental period, a dual-tap fractional comb delay sweeps
+//      at the slave sync ratio R_sync = f_slave / f0 (modulated by in4 in Hz),
+//      resetting phase-synchronously at every tuba wave cycle with raised-cosine
+//      anti-aliasing crossfade envelopes!
+//   3. A resonant feedback loop + post-sync SVF bandpass/lowpass body shapes the
+//      sync comb into tearing dubstep "laser-sync" vocal cries!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (locks master sync reset rate & slave pitch)
+//   in4: Modulation Signal in Hz (sweeps slave sync formant frequency in Hz)
+// Outlets:
+//   out1: Left Time-Varying Hard-Sync Comb Output
+//   out2: Right Time-Varying Hard-Sync Comb Output
+
+@param({ min: 1.0, max: 16.0 }) slave_sync_ratio = 3.5;
+@param({ min: 0.0, max: 0.94 }) sync_comb_feedback = 0.72;
+@param({ min: 0.05, max: 1.0 }) window_edge_smooth = 0.25;
+@param({ min: 0.0, max: 1.0 }) post_filter_morph = 0.35;
+@param({ min: 0.0, max: 1.5 }) pitch_track_amt = 1.0;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 24.0 }) sync_bite_drive_db = 9.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.90;
+
+// Circular comb delay buffers (4096 samples per channel)
+@state syncBufL = new FixedSampleArray(4096);
+@state syncBufR = new FixedSampleArray(4096);
+@state writeIdx: Int = 0;
+
+// Master fundamental phasor & feedback states
+@state masterPhasor = new phasor();
+@state fbStateL = 0.0;
+@state fbStateR = 0.0;
+@state postSvfL = new svf();
+@state postSvfR = new svf();
+
+// Fallback ZC pitch tracker & smoothing
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothSlaveHz = 220.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Slave Sync Frequency (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+let trk = clamp(pitch_track_amt, 0.0, 1.5);
+let masterHz = clamp(linearinterp(clamp(trk, 0.0, 1.0), 65.0, f0 * maximum(trk, 0.25)), 24.0, 1000.0);
+let mShiftHz = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+
+let sRatio = clamp(slave_sync_ratio, 1.0, 16.0);
+let targetSlaveHz = clamp(masterHz * sRatio + mShiftHz, masterHz, 7500.0);
+smoothSlaveHz += (targetSlaveHz - smoothSlaveHz) * slew;
+
+// --- 2. Pitch-Synchronous Time-Varying Comb Delay Sweep (DAFx-12 Sec 4, p. 5) ---
+let mPh = masterPhasor.next(masterHz);
+let effRatioL = clamp(smoothSlaveHz / masterHz, 1.0, 24.0);
+let effRatioR = clamp((smoothSlaveHz * 1.02 - mShiftHz * 0.15) / masterHz, 1.0, 24.0);
+
+// Slave phase wraps effRatio times per master period, resetting cleanly at mPh = 0!
+let slavePhL = wrap(mPh * effRatioL, 0.0, 1.0);
+let slavePhR = wrap(mPh * effRatioR, 0.0, 1.0);
+
+// Slave period in samples T_slave = sr / smoothSlaveHz
+let slavePerL = clamp(sr / smoothSlaveHz, 4.0, 1800.0);
+let slavePerR = clamp(sr / (smoothSlaveHz * 1.02), 4.0, 1800.0);
+
+// Primary and half-period offset comb delay taps sweep across [2 .. slavePer * effRatio]
+let del1L = clamp(2.0 + mPh * (effRatioL - 1.0) * slavePerL, 2.0, 4088.0);
+let del2L = clamp(2.0 + wrap(mPh + 0.5, 0.0, 1.0) * (effRatioL - 1.0) * slavePerL, 2.0, 4088.0);
+
+let del1R = clamp(2.0 + mPh * (effRatioR - 1.0) * slavePerR, 2.0, 4088.0);
+let del2R = clamp(2.0 + wrap(mPh + 0.5, 0.0, 1.0) * (effRatioR - 1.0) * slavePerR, 2.0, 4088.0);
+
+// Trapezoidal / raised-cosine reset window around master sync reset (mPh = 0/1)
+let edge = clamp(window_edge_smooth, 0.05, 1.0) * 0.48;
+let win1 = trapezoid(mPh, edge, 1.0 - edge);
+let win2 = 1.0 - win1;
+
+// Write input + resonant feedback into circular buffer
+let fb = clamp(sync_comb_feedback, 0.0, 0.94);
+let drv = dbtoa(clamp(sync_bite_drive_db, 0.0, 24.0));
+let uL = tanh((xL + fb * fbStateL) * drv * 0.5);
+let uR = tanh((xR + fb * fbStateR) * drv * 0.5);
+
+syncBufL[writeIdx] = uL;
+syncBufR[writeIdx] = uR;
+
+// --- 3. Cubic Interpolated Dual-Tap Read & Slave Phase Modulation ---
+let rp1L = writeIdx - del1L;
+while (rp1L < 0.0) { rp1L += 4096.0; }
+let i1L: Int = floor(rp1L);
+let c1L = cubicinterp(rp1L - i1L, syncBufL[(i1L - 1 + 4096) & 4095], syncBufL[i1L & 4095], syncBufL[(i1L + 1) & 4095], syncBufL[(i1L + 2) & 4095]);
+
+let rp2L = writeIdx - del2L;
+while (rp2L < 0.0) { rp2L += 4096.0; }
+let i2L: Int = floor(rp2L);
+let c2L = cubicinterp(rp2L - i2L, syncBufL[(i2L - 1 + 4096) & 4095], syncBufL[i2L & 4095], syncBufL[(i2L + 1) & 4095], syncBufL[(i2L + 2) & 4095]);
+
+let rp1R = writeIdx - del1R;
+while (rp1R < 0.0) { rp1R += 4096.0; }
+let i1R: Int = floor(rp1R);
+let c1R = cubicinterp(rp1R - i1R, syncBufR[(i1R - 1 + 4096) & 4095], syncBufR[i1R & 4095], syncBufR[(i1R + 1) & 4095], syncBufR[(i1R + 2) & 4095]);
+
+let rp2R = writeIdx - del2R;
+while (rp2R < 0.0) { rp2R += 4096.0; }
+let i2R: Int = floor(rp2R);
+let c2R = cubicinterp(rp2R - i2R, syncBufR[(i2R - 1 + 4096) & 4095], syncBufR[i2R & 4095], syncBufR[(i2R + 1) & 4095], syncBufR[(i2R + 2) & 4095]);
+
+// Multiply time-varying comb output with hard-synced slave formant carrier
+let syncCarrierL = 1.0 - 0.55 * cos(2.0 * pi * slavePhL);
+let syncCarrierR = 1.0 - 0.55 * cos(2.0 * pi * slavePhR);
+
+let combL = (win1 * c1L + win2 * c2L) * syncCarrierL;
+let combR = (win1 * c1R + win2 * c2R) * syncCarrierR;
+
+fbStateL = combL;
+fbStateR = combR;
+writeIdx = (writeIdx + 1) & 4095;
+
+// --- 4. Post-Sync Resonant SVF Filter centered at Slave Formant Frequency ---
+let svfOutL = postSvfL.next(combL, clamp(smoothSlaveHz, 80.0, 8000.0), 0.78);
+let svfOutR = postSvfR.next(combR, clamp(smoothSlaveHz * 1.02, 80.0, 8000.0), 0.78);
+
+// Morph post-filter from Lowpass (0.0) to Bandpass Formant (1.0)
+let pMorph = clamp(post_filter_morph, 0.0, 1.0);
+let filtL = linearinterp(pMorph, svfOutL[0], svfOutL[2] * 1.8);
+let filtR = linearinterp(pMorph, svfOutR[0], svfOutR[2] * 1.8);
+
+let wetL = tanh((0.45 * combL + 0.85 * filtL) * 1.3);
+let wetR = tanh((0.45 * combR + 0.85 * filtR) * 1.3);
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, wetL);
+out2 = linearinterp(mix, xR, wetR);

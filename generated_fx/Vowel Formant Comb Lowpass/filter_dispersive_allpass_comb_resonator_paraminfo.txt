@@ -1,0 +1,54 @@
+================================================================================
+filter_dispersive_allpass_comb_resonator — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Dispersive Allpass-In-Loop Inharmonic Comb & Metallic Bell/Pipe Resonator implementing Jari Kleimola (DAFx-08 Paper 36, "Dispersion Modulation using Allpass Filters", Sections 2 & 3), Gianpaolo Evangelista & Sergio Cavaliere (DAFx-98 EVA14, "Dispersive and Pitch-Synchronous Processing of Sounds"), and Matti Karjalainen, Vesa Välimäki & Paulo Esquef (DAFx-02, "Efficient Modeling and Synthesis of Bell-like Sounds", Fig. 4). In a standard comb filter, the resonant peaks are spaced at exact integer multiples `k * f0`. By inserting a 4-stage first-order allpass dispersion cascade inside the pitch-tracked comb loop, the phase delay becomes frequency-dependent: the fundamental stays locked to the tuba's pitch (`in3`, Hz) while upper comb teeth stretch or compress into inharmonic bell, gong, and stiff-metal riddim pipe partials!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (tunes the fundamental comb loop with DC phase-delay compensation)
+- in4: Modulation Signal in Hz (modulates comb frequency in Hz and drives Kleimola dispersion modulation)
+- out1 / out2: Stereo Dispersive Comb Resonator Output
+
+PARAMETERS (8)
+
+1. comb_harmonic
+   - Range: 0.50 to 12.00 (Comb Fundamental Ratio Relative to Tuba Pitch `f0`, Default: 1.00)
+   - Taper: Continuous harmonic multiplier.
+   - Function: Tunes the base comb period relative to the tuba's tracked fundamental pitch.
+
+2. dispersion_coeff
+   - Range: -0.88 to +0.88 (Allpass Dispersion Coefficient `a_ap`, Default: -0.55)
+   - Taper: Linear bipolar allpass coefficient with automatic low-frequency phase-delay compensation.
+   - Function: Negative values (`-0.88 .. 0`) stretch upper comb teeth further apart like a stiff metal bar or bell; positive values (`0 .. +0.88`) compress upper comb teeth closely together in the midrange like a vocal formant cluster.
+
+3. dispersion_mod_depth
+   - Range: 0.00 to 1.00 (Kleimola Allpass Dispersion Modulation Depth from in4, Default: 0.45)
+   - Taper: Linear modulation scaling (DAFx-08 Section 3).
+   - Function: Modulates the allpass coefficient `a_ap` dynamically from `in4` so upper overtones detune and shimmer while the bass fundamental remains pitch-stable.
+
+4. feedback_gain
+   - Range: -0.97 to +0.97 (Comb Loop Feedback Gain, Default: 0.84)
+   - Taper: Power curve (`1 - (1 - |x|)^1.5`) giving fine resolution near self-oscillation, with internal `tanh` saturation.
+   - Function: Controls the decay time and metallic resonance intensity; negative values invert the loop into a hollow odd-harmonic pipe.
+
+5. loop_lowpass_hz
+   - Range: 400.0 to 16000.0 Hz (Feedback Loop Damping Lowpass Cutoff, Default: 6500.0 Hz)
+   - Taper: Direct cutoff frequency in Hz.
+   - Function: Tames high-frequency ringing in the dispersive feedback loop.
+
+6. pitch_track_amt
+   - Range: 0.00 to 1.50 Hz/Hz (Pitch Tracking Ratio from in3 in Hz; Default: 1.00)
+   - Taper: Linear Hz tracking ratio.
+   - Function: Locks the fundamental comb period to the tuba's pitch in Hz.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Modulates both the comb delay frequency in Hz and the allpass dispersion coefficient from `in4`.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Dispersive Comb; Default: 0.80)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba with the dispersive allpass-comb output.

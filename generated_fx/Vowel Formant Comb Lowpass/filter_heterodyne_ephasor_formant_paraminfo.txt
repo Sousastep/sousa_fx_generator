@@ -1,0 +1,56 @@
+================================================================================
+filter_heterodyne_ephasor_formant — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Dual-Formant Heterodyne `"ephasor"` & FOF Vocal Resonator implementing Victor Lazzarini & Joseph Timoney (DAFx-12 Paper 58, "Synthesis of Resonant Sounds with a Heterodyne Model", Sections 2.1, 2.2 & 3, Eq. 3–10, Fig. 1–2) and Perry R. Cook (DAFx-98 COO62, Section 2.4). Instead of using an IIR filter whose phase response smears bass transients, this effect synthesizes exact two-pole formant impulse responses in the time domain synchronized to the tuba's fundamental period `T0 = fs / f0`:
+1. Csound `ephasor` + FOF Attack Skirt (Section 2.1 & 3, p. 3): Generates a periodic exponentially decaying envelope `M(n) = R^(n mod T0)` minus a wider-bandwidth exponential modulator `R_skirt^(n mod T0)`, shaping the attack of each vocal grain just like a Rodet CHANT Formant Wave Function (FOF).
+2. Aliasing-Free Adjacent-Harmonic Carrier Interpolation (Section 2.2, Eq. 8–10): Evaluates `k = int(fc / f0)` and `a = (fc / f0) - k`, crossfading `cos(k*w0*n)` and `cos((k+1)*w0*n)` so sweeping the formant frequency `fc` never creates phase discontinuities at fundamental period boundaries!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (locks the `ephasor` reset period `T0` and harmonic carriers `k * f0`)
+- in4: Modulation Signal in Hz (sweeps both `formant1_hz` and `formant2_hz` directly in Hz)
+- out1 / out2: Stereo Heterodyne FOF Formant Output
+
+PARAMETERS (8)
+
+1. formant1_hz
+   - Range: 180.0 to 1400.0 Hz (First Formant Center Frequency `fc1`, Default: 520.0 Hz)
+   - Taper: Direct frequency in Hz with adjacent-harmonic carrier crossfading (Eq. 8–10).
+   - Function: Sets the lower chest/jaw vowel formant frequency.
+
+2. formant2_hz
+   - Range: 650.0 to 4200.0 Hz (Second Formant Center Frequency `fc2`, Default: 1650.0 Hz)
+   - Taper: Direct frequency in Hz with adjacent-harmonic carrier crossfading (Eq. 8–10).
+   - Function: Sets the upper tongue/palate vocal formant frequency for aggressive `"YAH / YOI / WEE"` dubstep vowels.
+
+3. bandwidth_hz
+   - Range: 20.0 to 350.0 Hz (Formant -3 dB Bandwidth in Hz, Default: 75.0 Hz)
+   - Taper: Direct bandwidth in Hz mapped to `ephasor` decay base `R = exp(-pi * BW / fs)` (Eq. 4).
+   - Function: Controls how long each formant impulse rings within the tuba's fundamental period.
+
+4. fof_skirt_sharpness
+   - Range: 0.05 to 0.95 (FOF Attack Skirt Rise Time / Bandwidth Ratio, Default: 0.45)
+   - Taper: Linear multiplier on the subtracted secondary modulator bandwidth (DAFx-12 Section 3).
+   - Function: Controls the attack roundness of the FOF grain, steeper skirts suppressing sideband leakage while high values add snappy vocal plosives.
+
+5. ring_to_synth_mode
+   - Range: 0.00 to 1.00 (0.0 = Direct Audio Heterodyne Ring-Modulation, 1.0 = Envelope-Followed Pure FOF Resynthesis; Default: 0.55)
+   - Taper: Linear crossfade.
+   - Function: Blends between multiplying the raw saturated tuba waveform by the heterodyne formant grain (gritty brass-talkbox hybrid) and pure envelope-tracked FOF vocal synthesis.
+
+6. pitch_track_amt
+   - Range: 0.00 to 2.00 Hz/Hz (Formant Cutoff Pitch Tracking from in3 in Hz; Default: 1.00)
+   - Taper: Linear Hz tracking ratio.
+   - Function: Shifts `formant1_hz` and `formant2_hz` in Hz along with the tuba's pitch (in addition to locking the `ephasor` period to `in3`).
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Sweeps both `formant1_hz` and `formant2_hz` smoothly across the harmonic grid using the Hz signal on `in4`.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Heterodyne FOF Output; Default: 0.90)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba with the stereo quadrature heterodyne formant signal.

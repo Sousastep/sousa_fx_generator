@@ -1,0 +1,57 @@
+================================================================================
+filter_voicer_2d_vowel_talkbox — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo 2D Vowel-Plane Talkbox & "Voicer" Formant Filter implementing Daniel Arfib, Jean-Michel Couturier & Loïc Kessous (DAFx-02, "Gestural Strategies for Specific Filtering Processes", Sections 3 & 4, Eq. 3–7, Fig. 8–11). Realizes both vocal tract topologies presented in Section 3:
+1. All-Pole Cascade "Voicer" Mode (Eq. 3–6, Fig. 9): Three cascaded 2nd-order complex-conjugate all-pole resonators with exact unity-peak gain normalization `G = (1 - R) * sqrt(1 - 2R cos(2*w0) + R^2)` (Eq. 4), naturally modeling the steep spectral roll-off of a sung glottal wave.
+2. Parallel Equal-Gain Talkbox Mode (Section 3, p. 4): Four parallel narrow-bandwidth bandpass resonators with equalized resonant peak gains, capturing the stressed upper-formant articulation of an analog mouth-tube Talkbox or didjeridu "OU-I" vocal tract gesture.
+Formant frequencies interpolate bilinearly across a 4-corner 2D vowel map (`/u/ "OU"`, `/i/ "EE"`, `/a/ "AAH"`, `/ae/ "EH"`) while tracking the tuba's pitch in Hz (`in3`) and external frequency modulation in Hz (`in4`).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (shifts formant frequencies proportionally with tuba pitch)
+- in4: Modulation Signal in Hz (modulates formant frequencies in Hz and orbits the 2D vowel plane)
+- out1 / out2: Stereo 2D Vowel Talkbox / Voicer Output
+
+PARAMETERS (8)
+
+1. vowel_x_front_back
+   - Range: 0.00 to 1.00 (0.0 = Back Vowels "OU / AAH", 1.0 = Front Vowels "EE / EH"; Default: 0.25)
+   - Taper: Linear 2D vowel plane X coordinate (DAFx-02 Fig. 10).
+   - Function: Sweeps primarily the second formant `F2` from deep back-throat vowels (870–1090 Hz) up to bright front-palate vowels (1720–2290 Hz).
+
+2. vowel_y_open_close
+   - Range: 0.00 to 1.00 (0.0 = Closed Vowels "OU / EE", 1.0 = Open Vowels "AAH / EH"; Default: 0.65)
+   - Taper: Linear 2D vowel plane Y coordinate (DAFx-02 Fig. 10).
+   - Function: Sweeps primarily the first formant `F1` from closed jaw vowels (270–300 Hz) to wide-open jaw vowels (650–730 Hz).
+
+3. cascade_to_talkbox
+   - Range: 0.00 to 1.00 (0.0 = 6-Pole All-Pole Cascade "Voicer", 1.0 = 4-Band Equal-Gain Parallel Talkbox; Default: 0.60)
+   - Taper: Linear crossfade.
+   - Function: Morphs from natural sung vowel chest resonance (0.0) to aggressive, biting upper-formant Talkbox articulation (1.0).
+
+4. formant_bw_hz
+   - Range: 25.0 to 220.0 Hz (Formant -3 dB Bandwidth in Hz, Default: 65.0 Hz)
+   - Taper: Direct bandwidth in Hz (exponential pole radius `R = exp(-pi * BW / fs)`).
+   - Function: Controls the sharpness (Q) of the vowel peaks; pushing down to 25 Hz creates liquid, resonant dubstep "yoi" formants.
+
+5. tract_scale
+   - Range: 0.40 to 2.20 (Vocal Tract Formant Frequency Multiplier, Default: 1.00)
+   - Taper: Linear frequency multiplier.
+   - Function: Scales the entire 4-corner vowel table from a giant sub-bass monster throat (0.40x) to a screaming high-formant vocal synth (2.20x).
+
+6. pitch_track_amt
+   - Range: 0.00 to 2.00 Hz/Hz (Formant Tracking Sensitivity to Tuba Pitch on in3 in Hz; Default: 0.75)
+   - Taper: Linear Hz tracking slope.
+   - Function: Shifts `F1..F4` upward as the tuba plays higher notes so the vowel formants ride the instrument's harmonic envelope.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Applies the Hz modulation signal on `in4` to both the formant frequencies and the 2D "OU-I" vowel orbit.
+
+8. talkbox_drive_db
+   - Range: 0.0 to 24.0 dB (Pre-Emphasis Driver Saturation Gain, Default: 9.0 dB)
+   - Taper: Logarithmic dB gain.
+   - Function: Boosts high-frequency brass harmonics via a 1st-order pre-emphasis differentiator and soft clipper so `F2`, `F3`, and `F4` speak with maximum clarity.

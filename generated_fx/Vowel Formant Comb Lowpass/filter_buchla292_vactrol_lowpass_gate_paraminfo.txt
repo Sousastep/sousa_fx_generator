@@ -1,0 +1,54 @@
+================================================================================
+filter_buchla292_vactrol_lowpass_gate — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Topology-Preserving Buchla 292 Vactrol Lowpass-Gate (LPG) implementing Julian Parker & Stefano D'Angelo (DAFx-13 Paper 44, "A Digital Model of the Buchla Lowpass-Gate", Sections 2.1, 2.2.2, 2.2.3, 2.3 & 3, Eq. 5–26, Table 1, Fig. 1–7). Unlike standard East-Coast synthesizer lowpass filters, Don Buchla's Model 292 LPG uses a Perkin Elmer VTL5C3 photoresistive opto-isolator (vactrol) whose resistance `Rf` simultaneously lowers the filter cutoff frequency AND attenuates the signal via a resistive divider with `R_alpha` (Eq. 12). This implementation solves the 3-capacitor (`C1`, `C2`, `C3`) KCL state-space system using 2x-oversampled trapezoidal integrators and differentiators (Eq. 14–22), complete with the paper's decoupled stability limit `a_max` (Eq. 11 & 23), instantaneous Taylor-linearized diode feedback saturation (Eq. 24–26), and asymmetric vactrol memory ballistics.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (scales the LPG vactrol cutoff frequency in Hz)
+- in4: Modulation Signal in Hz (strikes or wobbles the vactrol control path in Hz)
+- out1 / out2: Stereo Buchla 292 Lowpass-Gate Output
+
+PARAMETERS (8)
+
+1. base_cutoff_hz
+   - Range: 30.0 to 10000.0 Hz (Minimum Vactrol Cutoff Frequency `Fc`, Default: 220.0 Hz)
+   - Taper: Direct frequency in Hz mapped to vactrol resistance `Rf` (DAFx-13 Table 1 & Fig. 2).
+   - Function: Sets the resting cutoff and VCA potential-divider attenuation floor; at 30 Hz in `'Both'` mode, the gate closes almost completely to silence when un-struck.
+
+2. mode_both_to_lowpass
+   - Range: 0.00 to 1.00 (0.0 = Buchla 'Both' Combo VCA + Gentle -6dB/oct Filter, 1.0 = Buchla 'Lowpass' Steep Resonant Sallen-Key Mode; Default: 0.75)
+   - Taper: Continuous interpolation of feedback capacitor `C3` (0.15 nF to 4.7 nF) and `R_alpha` (DAFx-13 Table 1).
+   - Function: Morphs continuously between organic West-Coast bongo/marimba VCA-filter gating (`0.0`) and resonant Sallen-Key lowpass filtering (`1.0`).
+
+3. resonance_norm
+   - Range: 0.00 to 0.98 (Decoupled Normalized Feedback Resonance `a_norm = a / a_max`, Default: 0.62)
+   - Taper: Linear normalized stability ratio (DAFx-13 Section 2.2.3, Eq. 11 & 23).
+   - Function: Because `a_max` is dynamically computed from `Rf`, `R_alpha`, and `C1..C3`, `resonance_norm` delivers consistent resonant peak height across the entire cutoff sweep up to self-oscillation near `0.98`.
+
+4. env_vactrol_strike
+   - Range: 0.00 to 2.50 (Input Tuba Envelope Strike -> Vactrol LED Current Sensitivity, Default: 0.85)
+   - Taper: Linear strike sensitivity.
+   - Function: Turns every tuba tongue attack into a percussive Buchla "bong" impulse that snaps the vactrol wide open before decaying organically.
+
+5. vactrol_decay_ms
+   - Range: 25.0 to 1200.0 ms (VTL5C3 Photoresistor Relaxation Time Constant, Default: 240.0 ms)
+   - Taper: Direct decay time in milliseconds (DAFx-13 Section 3).
+   - Function: Controls the lazy, acoustic-like tail of the vactrol after a note attack or fast `in4` modulation pulse.
+
+6. diode_fb_saturation
+   - Range: 0.00 to 1.00 (Feedback Path Diode Limiter Nonlinearity Depth, Default: 0.55)
+   - Taper: Linear blend of the first-order Taylor-linearized `tanh(x_o)` feedback limiter (DAFx-13 Section 2.3, Eq. 24–26, Fig. 6).
+   - Function: Adds Korg MS-20-style diode limiting inside the `C3` differentiator loop, taming resonant spikes into gritty harmonic growls.
+
+7. pitch_track_amt
+   - Range: 0.00 to 3.00 Hz/Hz (Cutoff Pitch Tracking Ratio from in3 in Hz; Default: 1.00)
+   - Taper: Linear Hz tracking ratio.
+   - Function: Scales the vactrol cutoff frequency in Hz with the tuba's fundamental pitch.
+
+8. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Feeds the Hz modulation signal on `in4` directly into the vactrol LED control circuit, smoothing sharp LFO/audio steps through the vactrol's organic memory curve.

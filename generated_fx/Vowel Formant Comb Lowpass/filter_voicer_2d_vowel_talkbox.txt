@@ -1,0 +1,177 @@
+// ============================================================================
+// filter_voicer_2d_vowel_talkbox.txt
+// Stereo 2D Vowel-Plane Talkbox & Didjeridu "OU-I" Formant Morphing Filter
+// Implements Daniel Arfib, Jean-Michel Couturier & Loic Kessous (DAFx-02):
+// "Gestural Strategies for Specific Filtering Processes" (Sections 3 & 4,
+// Eq. 3-7, Fig. 8-11).
+// Combines BOTH vocal filtering architectures described in Section 3:
+//   1. Cascade All-Pole "Voicer" Mode (Sec 3, Eq. 3-6, Fig. 9): Three cascaded
+//      two-pole complex-conjugate resonators H(z) = G / (1 - 2R cos(w0) z^-1 + R^2 z^-2)
+//      with exact peak normalization G = (1 - R) * sqrt(1 - 2R cos(2*w0) + R^2) (Eq. 4)
+//   2. Parallel Talkbox Mode (Sec 3, p. 4): Parallel narrow-bandwidth bandpass
+//      formant resonators with equalized resonant gains for stressed Talkbox
+//      articulation on live musical instruments!
+// Morphs across the 4-corner 2D vowel space (Fig. 10: /i/ "EE", /a/ "AAH",
+// /u/ "OU", /e/ "EH") with optional circular "OU-I" didjeridu gesture (Sec 4,
+// Fig. 11), plus tuba pitch tracking on in3 (Hz) and modulation on in4 (Hz).
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (scales formant frequencies with pitch)
+//   in4: Modulation Signal in Hz (shifts formant frequencies or drives OU-I orbit)
+// Outlets:
+//   out1: Left 2D Vowel Talkbox / Voicer Output
+//   out2: Right 2D Vowel Talkbox / Voicer Output
+
+@param({ min: 0.0, max: 1.0 }) vowel_x_front_back = 0.25;
+@param({ min: 0.0, max: 1.0 }) vowel_y_open_close = 0.65;
+@param({ min: 0.0, max: 1.0 }) cascade_to_talkbox = 0.60;
+@param({ min: 25.0, max: 220.0 }) formant_bw_hz = 65.0;
+@param({ min: 0.4, max: 2.2 }) tract_scale = 1.0;
+@param({ min: 0.0, max: 2.0 }) pitch_track_amt = 0.75;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 24.0 }) talkbox_drive_db = 9.0;
+
+// All-pole 2nd-order cascade states y(n-1), y(n-2) for 3 formants (L & R, Eq. 6)
+@state casY1L = new FixedSampleArray(3);
+@state casY2L = new FixedSampleArray(3);
+@state casY1R = new FixedSampleArray(3);
+@state casY2R = new FixedSampleArray(3);
+
+// Parallel Talkbox bandpass states (one-zero two-pole SVF bandpass per formant, L & R)
+@state parSvf1L = new svf(); @state parSvf2L = new svf(); @state parSvf3L = new svf();
+@state parSvf4L = new svf();
+@state parSvf1R = new svf(); @state parSvf2R = new svf(); @state parSvf3R = new svf();
+@state parSvf4R = new svf();
+
+// Pre-emphasis filter for Talkbox articulation (Sec 3, p. 4) & fallback pitch tracker
+@state preX_L = 0.0;
+@state preX_R = 0.0;
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothVx = 0.25;
+@state smoothVy = 0.65;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) & Pre-Conditioning ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.005 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+
+// Pre-filtering + soft saturation to simulate glottal/talkbox driver tube (Sec 3, p. 4)
+let drvGain = dbtoa(clamp(talkbox_drive_db, 0.0, 24.0));
+let preL = tanh((xL + 0.65 * (xL - preX_L)) * drvGain);
+let preR = tanh((xR + 0.65 * (xR - preX_R)) * drvGain);
+preX_L = xL;
+preX_R = xR;
+
+// --- 2. 2D Vowel Space Bilinear Interpolation (DAFx-02 Sec 3, Eq. 7, Fig. 10) ---
+// 4 Corner Vowels:
+//   Corner 00 (x=0, y=0): "OU" /u/ -> F1=300, F2=870,  F3=2240
+//   Corner 10 (x=1, y=0): "EE" /i/ -> F1=270, F2=2290, F3=3010 (Csound table, p. 2)
+//   Corner 01 (x=0, y=1): "AAH" /a/ -> F1=730, F2=1090, F3=2440 (Csound table, p. 2)
+//   Corner 11 (x=1, y=1): "AE/EH"  -> F1=650, F2=1720, F3=2650 (Fig. 9)
+let mDepth = clamp(mod_hz_depth, -2.0, 2.0);
+let modOrbit = clamp((modHz * mDepth) / 800.0, -0.75, 0.75);
+
+smoothVx += (clamp(vowel_x_front_back + modOrbit, 0.0, 1.0) - smoothVx) * slew;
+smoothVy += (clamp(vowel_y_open_close - 0.5 * modOrbit, 0.0, 1.0) - smoothVy) * slew;
+
+let vx = smoothVx;
+let vy = smoothVy;
+
+let f1Base = linearinterp(vy, linearinterp(vx, 300.0, 270.0), linearinterp(vx, 730.0, 650.0));
+let f2Base = linearinterp(vy, linearinterp(vx, 870.0, 2290.0), linearinterp(vx, 1090.0, 1720.0));
+let f3Base = linearinterp(vy, linearinterp(vx, 2240.0, 3010.0), linearinterp(vx, 2440.0, 2650.0));
+let f4Base = 3450.0; // Fixed upper singer's formant resonance for 4th parallel talkbox band
+
+// Apply vocal tract scaling + tuba pitch tracking offset (in3, Hz) + direct Hz modulation (in4, Hz)
+let tScale = clamp(tract_scale, 0.4, 2.2);
+let pShiftHz = clamp(pitch_track_amt, 0.0, 2.0) * (smoothF0 - 65.0) + mDepth * modHz;
+
+let f1L = clamp(f1Base * tScale + pShiftHz * 0.65, 120.0, 1400.0);
+let f2L = clamp(f2Base * tScale + pShiftHz * 1.35, 350.0, 4200.0);
+let f3L = clamp(f3Base * tScale + pShiftHz * 1.85, 900.0, 6500.0);
+let f4L = clamp(f4Base * tScale + pShiftHz * 2.00, 1500.0, 8000.0);
+
+// Slight stereo vowel width between L and R
+let f1R = clamp(f1L * 1.02, 120.0, 1400.0);
+let f2R = clamp(f2L * 0.98, 350.0, 4200.0);
+let f3R = clamp(f3L * 1.02, 900.0, 6500.0);
+let f4R = clamp(f4L * 0.98, 1500.0, 8000.0);
+
+// --- 3. Engine A: Cascade 3-Formant All-Pole "Voicer" Filter (Eq. 3-6, Fig. 9) ---
+let bw = clamp(formant_bw_hz, 25.0, 220.0);
+let rPole = clamp(exp(0.0 - pi * bw / sr), 0.70, 0.994);
+let r2 = rPole * rPole;
+
+let casL = preL;
+let casR = preR;
+
+for (let k: Int = 0; k < 3; k++) {
+	let fkL = (k == 0) ? f1L : ((k == 1) ? f2L : f3L);
+	let fkR = (k == 0) ? f1R : ((k == 1) ? f2R : f3R);
+
+	let w0L = 2.0 * pi * fkL / sr;
+	let w0R = 2.0 * pi * fkR / sr;
+
+	let a1L = 0.0 - 2.0 * rPole * cos(w0L);
+	let a1R = 0.0 - 2.0 * rPole * cos(w0R);
+
+	// Eq. 4 exact unity-peak normalization gain G = (1 - R) * sqrt(1 - 2*R*cos(2*w0) + R^2)
+	let gL = (1.0 - rPole) * sqrt(maximum(1.0 - 2.0 * rPole * cos(2.0 * w0L) + r2, 0.0001));
+	let gR = (1.0 - rPole) * sqrt(maximum(1.0 - 2.0 * rPole * cos(2.0 * w0R) + r2, 0.0001));
+
+	// Eq. 6: y(n) = G*x(n) - a1*y(n-1) - a2*y(n-2)
+	let ynL = gL * casL - a1L * casY1L[k] - r2 * casY2L[k];
+	casY2L[k] = casY1L[k];
+	casY1L[k] = ynL;
+	casL = tanh(ynL * 1.15);
+
+	let ynR = gR * casR - a1R * casY1R[k] - r2 * casY2R[k];
+	casY2R[k] = casY1R[k];
+	casY1R[k] = ynR;
+	casR = tanh(ynR * 1.15);
+}
+
+// --- 4. Engine B: Parallel Equal-Gain Talkbox Bank (DAFx-02 Sec 3, p. 4) ---
+// "Musical perception is better if frequency bandwidths are small and all the
+// resonance gains of each filter are equal, which seems to indicate a stressed
+// articulation when one plays with a Talkbox."
+let svfRes = clamp(1.0 - (bw / 320.0), 0.55, 0.96);
+
+let p1L = parSvf1L.next(preL, f1L, svfRes)[2];
+let p2L = parSvf2L.next(preL, f2L, svfRes)[2];
+let p3L = parSvf3L.next(preL, f3L, svfRes)[2];
+let p4L = parSvf4L.next(preL, f4L, svfRes)[2];
+let parL = (p1L + p2L + p3L + 0.75 * p4L) * 0.85;
+
+let p1R = parSvf1R.next(preR, f1R, svfRes)[2];
+let p2R = parSvf2R.next(preR, f2R, svfRes)[2];
+let p3R = parSvf3R.next(preR, f3R, svfRes)[2];
+let p4R = parSvf4R.next(preR, f4R, svfRes)[2];
+let parR = (p1R + p2R + p3R + 0.75 * p4R) * 0.85;
+
+// --- 5. Morph Cascade Voicer <-> Parallel Talkbox ---
+let mode = clamp(cascade_to_talkbox, 0.0, 1.0);
+out1 = tanh(linearinterp(mode, casL, parL));
+out2 = tanh(linearinterp(mode, casR, parR));

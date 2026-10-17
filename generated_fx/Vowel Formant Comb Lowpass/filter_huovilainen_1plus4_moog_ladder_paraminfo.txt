@@ -1,0 +1,54 @@
+================================================================================
+filter_huovilainen_1plus4_moog_ladder — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo 2x-Oversampled `"1+4"` Nonlinear Transistor Moog Ladder Lowpass Filter implementing Antti Huovilainen (DAFx-04 Paper P_061, "Non-Linear Digital Implementation of the Moog Ladder Filter", Sections 2–5, Eq. 10–22) and Hiroyuki Oyama (DAFx-26 Paper 29, "Quantifying Nonlinear Behavior in Digital Moog Ladder Filters: Cross-Implementation Comparison and Common-Core Ablation", Sections 1 & 3.1–3.2). Models the five distinct emitter-coupled BJT saturation points (`"1+4"`: 1 input differential pair + 4 stacked transistor ladder stages) with cached `W_k = tanh(y_k / 2V_t)` states, half-sample phase-compensated resonance feedback, and Oyama's stage-nonlinearity scaling that captures the analog circuit's drive-dependent cutoff shift and self-oscillation compression.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (scales the ladder cutoff frequency in Hz with tuba pitch)
+- in4: Modulation Signal in Hz (modulates the ladder cutoff frequency in Hz for dubstep wobbles/FM)
+- out1 / out2: Stereo Nonlinear Moog Ladder Output
+
+PARAMETERS (8)
+
+1. base_cutoff_hz
+   - Range: 35.0 to 12000.0 Hz (Base Ladder Lowpass Cutoff Frequency `Fc`, Default: 280.0 Hz)
+   - Taper: Direct frequency in Hz with impulse-invariant exponential tuning `g = 1 - exp(-2*pi*Fc/Fs)` (Eq. 21).
+   - Function: Sets the unmodulated lowpass cutoff frequency.
+
+2. resonance_k
+   - Range: 0.00 to 1.15 (Normalized Resonance Feedback `k / 4`, Default: 0.78)
+   - Taper: Linear resonance control with polynomial high-frequency phase compensation; values above `0.95` enter warm transistor self-oscillation (`4*k >= 4.0`).
+   - Function: Controls the resonant peak height at `Fc` up to self-oscillating sub-bass sine waves.
+
+3. drive_db
+   - Range: 0.0 to 24.0 dB (Input Differential Pair Pre-Drive, Default: 9.0 dB)
+   - Taper: Logarithmic dB gain with automatic output headroom compensation.
+   - Function: Drives the input differential transistor pair into saturation, compressing the resonant peak and inducing analog drive-dependent cutoff frequency shifting (DAFx-26 Section 1).
+
+4. stage_nonlinearity
+   - Range: 0.10 to 1.50 (Inverse Thermal Voltage `1 / (2*V_t)` Stage Saturation Scaling, Default: 0.85)
+   - Taper: Linear scaling of internal stage saturation with Oyama DAFx-26 front-stage weighting.
+   - Function: Controls how strongly the four internal capacitor stages saturate relative to the input pair, morphing from a clean boundary-saturated ladder (0.10) to a thick, harmonically saturated vintage ladder (1.50).
+
+5. pole_slope_morph
+   - Range: 0.00 to 1.00 (0.0 = 2-Pole 12 dB/oct Stage 2, 0.5 = 3-Pole 18 dB/oct Stage 3, 1.0 = 4-Pole 24 dB/oct Stage 4; Default: 1.00)
+   - Taper: Continuous linear tap morph across the ladder stages `y_b`, `y_c`, `y_d`.
+   - Function: Adjusts the lowpass roll-off steepness from punchy 12 dB/oct brass growl to deep 24 dB/oct sub-bass filtering.
+
+6. pitch_track_amt
+   - Range: 0.00 to 4.00 Hz/Hz (Cutoff Pitch Tracking Multiplier from in3 in Hz; Default: 1.50)
+   - Taper: Linear harmonic ratio (`0.0` = fixed cutoff, `1.0` = unison tracking, `2.0` = 2nd harmonic tracking, `4.0` = 4th harmonic tracking).
+   - Function: Locks the Moog ladder cutoff to a chosen harmonic multiple of the tuba's fundamental pitch in Hz.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Cutoff Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Sweeps the ladder cutoff directly in Hz from a dubstep LFO, envelope, or audio-rate FM modulator on `in4`.
+
+8. bass_comp_mix
+   - Range: 0.00 to 1.00 (Passband Loss Makeup & Dry Sub-Bass Retention, Default: 0.65)
+   - Taper: Linear makeup gain + parallel dry bass blend.
+   - Function: Counteracts the classic Moog ladder -12 dB passband volume drop at high resonance so the tuba's sub-bass stays massive.

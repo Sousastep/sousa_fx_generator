@@ -1,0 +1,235 @@
+// ============================================================================
+// filter_kelly_lochbaum_vocal_tract.txt
+// Stereo 8-Section Kelly-Lochbaum Waveguide Articulatory Vocal Tract Filter
+// Implements Damian T. Murphy, Matyas Jani & Sten Ternstrom (DAFx-15, Paper 32):
+// "Articulatory Vocal Tract Synthesis in SuperCollider" (Sections 2 & 3, Eq. 1-8,
+// Fig. 1-3) and Perry R. Cook (DAFx-98, COO62, Sec 2.5).
+// Models the human vocal tract from glottis to lips as an 8-segment 1-D digital
+// waveguide with one-multiply Kelly-Lochbaum pressure scattering junctions:
+//   r_i = (A_i - A_{i+1}) / (A_i + A_{i+1})                     (Eq. 5)
+//   w_i = r_i * (p_i^+ - p_{i+1}^-)                             (Eq. 8)
+//   p_i^- = p_{i+1}^- + w_i,   p_{i+1}^+ = p_i^+ + w_i          (Eq. 7)
+// Plus fractional delay lines per tube section that scale the effective vocal
+// tract length inversely with the tuba's tracked pitch f0 (in3, Hz) and external
+// modulation signal (in4, Hz), creating a growling dubstep vocal talkbox that
+// tracks the tuba across octaves!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (scales vocal tract resonance tuning)
+//   in4: Modulation Signal in Hz (modulates vocal tract resonance & articulation)
+// Outlets:
+//   out1: Left Kelly-Lochbaum Vocal Tract Output
+//   out2: Right Kelly-Lochbaum Vocal Tract Output
+
+@param({ min: 0.0, max: 1.0 }) tongue_pos = 0.35;
+@param({ min: 0.0, max: 1.0 }) tongue_constriction = 0.72;
+@param({ min: 0.0, max: 1.0 }) lip_rounding = 0.40;
+@param({ min: 0.0, max: 1.5 }) pitch_track_amt = 0.65;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.2, max: 0.99 }) glottal_refl = 0.85;
+@param({ min: 0.0, max: 24.0 }) larynx_drive_db = 8.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.90;
+
+// 8-section bidirectional waveguide fractional delay buffers (64 samples per section)
+// Flatten 8 sections x 64 samples = 512 samples per travelling wave direction
+@state fwdBufL = new FixedSampleArray(512);
+@state bwdBufL = new FixedSampleArray(512);
+@state fwdBufR = new FixedSampleArray(512);
+@state bwdBufR = new FixedSampleArray(512);
+@state wIdx: Int = 0;
+
+// Lip radiation highpass differentiator & glottal boundary states
+@state prevLipL = 0.0;
+@state prevLipR = 0.0;
+@state bwdTermL = 0.0;
+@state bwdTermR = 0.0;
+
+// Fallback ZC pitch tracker & parameter slews
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothPos = 0.35;
+@state smoothConst = 0.72;
+@state smoothLip = 0.40;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Modulation (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+
+// Reference F1/tract base around 110 Hz; in3 and in4 shift the effective tract frequency in Hz
+let trkAmt = clamp(pitch_track_amt, 0.0, 1.5);
+let mDepth = clamp(mod_hz_depth, -2.0, 2.0);
+let trackedHz = 110.0 + trkAmt * (smoothF0 - 65.0) + mDepth * modHz;
+let effTractHz = clamp(trackedHz, 35.0, 950.0);
+
+// Total 8-section one-way delay in samples corresponding to vocal tract length
+// At 17.5 cm male tract (quarter-wave F1 = 500 Hz), total 8-segment delay ~ fs / (4 * F1_base)
+let secDelay = clamp((sr / (32.0 * effTractHz)) * 4.0, 1.25, 28.0);
+
+// Also modulate tongue position slightly from in4 Hz for dynamic dubstep "yoi" articulation
+let modNorm = clamp((modHz * mDepth) / 600.0, -0.6, 0.6);
+smoothPos += (clamp(tongue_pos + modNorm, 0.0, 1.0) - smoothPos) * slew;
+smoothConst += (clamp(tongue_constriction, 0.0, 1.0) - smoothConst) * slew;
+smoothLip += (clamp(lip_rounding, 0.0, 1.0) - smoothLip) * slew;
+
+// --- 2. Compute Cross-Sectional Area Function A_0..A_7 (DAFx-15 Sec 2.1-2.2, Eq. 1-2) ---
+// Constriction center moves along sections 1..6 (pharynx to hard palate), section 7 = lips
+let cCenter = 1.0 + 4.8 * smoothPos;
+// Musical quadratic taper on constriction so extreme values (>0.85) pinch into razor-sharp resonances
+let pinch = 1.0 - 0.94 * pow(smoothConst, 1.5);
+let lipArea = 1.35 - 1.22 * pow(smoothLip, 1.3);
+
+// Reflection coefficients r_0..r_6 for Left and slightly spread Right channel
+let preGain = dbtoa(clamp(larynx_drive_db, 0.0, 24.0) * 0.85);
+let rGlot = clamp(glottal_refl, 0.2, 0.99);
+let rLip = -0.82 - 0.14 * smoothLip;
+
+// Inject glottal/larynx pressure wave with nonlinear brass/vocal fold saturation
+let pInL = tanh(xL * preGain + rGlot * bwdTermL);
+let pInR = tanh(xR * preGain + rGlot * bwdTermR);
+
+// Read delayed forward & backward travelling waves for each of the 8 sections
+let fOutL0 = 0.0; let fOutL1 = 0.0; let fOutL2 = 0.0; let fOutL3 = 0.0;
+let fOutL4 = 0.0; let fOutL5 = 0.0; let fOutL6 = 0.0; let fOutL7 = 0.0;
+let bOutL0 = 0.0; let bOutL1 = 0.0; let bOutL2 = 0.0; let bOutL3 = 0.0;
+let bOutL4 = 0.0; let bOutL5 = 0.0; let bOutL6 = 0.0; let bOutL7 = 0.0;
+
+let fOutR0 = 0.0; let fOutR1 = 0.0; let fOutR2 = 0.0; let fOutR3 = 0.0;
+let fOutR4 = 0.0; let fOutR5 = 0.0; let fOutR6 = 0.0; let fOutR7 = 0.0;
+let bOutR0 = 0.0; let bOutR1 = 0.0; let bOutR2 = 0.0; let bOutR3 = 0.0;
+let bOutR4 = 0.0; let bOutR5 = 0.0; let bOutR6 = 0.0; let bOutR7 = 0.0;
+
+let rPos = wIdx - secDelay;
+while (rPos < 0.0) { rPos += 64.0; }
+let i0: Int = floor(rPos);
+let frac = rPos - i0;
+let idxA: Int = i0 & 63;
+let idxB: Int = (i0 + 1) & 63;
+
+// Read all 8 sections using linear fractional delay interpolation
+for (let s: Int = 0; s < 8; s++) {
+	let base: Int = s * 64;
+	let fl = linearinterp(frac, fwdBufL[base + idxA], fwdBufL[base + idxB]);
+	let bl = linearinterp(frac, bwdBufL[base + idxA], bwdBufL[base + idxB]);
+	let fr = linearinterp(frac, fwdBufR[base + idxA], fwdBufR[base + idxB]);
+	let br = linearinterp(frac, bwdBufR[base + idxA], bwdBufR[base + idxB]);
+	if (s == 0) { fOutL0 = fl; bOutL0 = bl; fOutR0 = fr; bOutR0 = br; }
+	else if (s == 1) { fOutL1 = fl; bOutL1 = bl; fOutR1 = fr; bOutR1 = br; }
+	else if (s == 2) { fOutL2 = fl; bOutL2 = bl; fOutR2 = fr; bOutR2 = br; }
+	else if (s == 3) { fOutL3 = fl; bOutL3 = bl; fOutR3 = fr; bOutR3 = br; }
+	else if (s == 4) { fOutL4 = fl; bOutL4 = bl; fOutR4 = fr; bOutR4 = br; }
+	else if (s == 5) { fOutL5 = fl; bOutL5 = bl; fOutR5 = fr; bOutR5 = br; }
+	else if (s == 6) { fOutL6 = fl; bOutL6 = bl; fOutR6 = fr; bOutR6 = br; }
+	else { fOutL7 = fl; bOutL7 = bl; fOutR7 = fr; bOutR7 = br; }
+}
+
+// --- 3. One-Multiply Kelly-Lochbaum Scattering Junctions (DAFx-15 Sec 3, Eq. 5, 7, 8) ---
+let fNextL0 = pInL; let fNextL1 = 0.0; let fNextL2 = 0.0; let fNextL3 = 0.0;
+let fNextL4 = 0.0;  let fNextL5 = 0.0; let fNextL6 = 0.0; let fNextL7 = 0.0;
+let bNextL0 = 0.0;  let bNextL1 = 0.0; let bNextL2 = 0.0; let bNextL3 = 0.0;
+let bNextL4 = 0.0;  let bNextL5 = 0.0; let bNextL6 = 0.0; let bNextL7 = rLip * fOutL7;
+
+let fNextR0 = pInR; let fNextR1 = 0.0; let fNextR2 = 0.0; let fNextR3 = 0.0;
+let fNextR4 = 0.0;  let fNextR5 = 0.0; let fNextR6 = 0.0; let fNextR7 = 0.0;
+let bNextR0 = 0.0;  let bNextR1 = 0.0; let bNextR2 = 0.0; let bNextR3 = 0.0;
+let bNextR4 = 0.0;  let bNextR5 = 0.0; let bNextR6 = 0.0; let bNextR7 = rLip * fOutR7;
+
+for (let j: Int = 0; j < 7; j++) {
+	// Cross-sectional area A_j and A_{j+1} from Gaussian tongue profile + jaw/lip opening
+	let d0L = j - cCenter;
+	let d1L = (j + 1) - cCenter;
+	let a0L = (j == 7) ? lipArea : maximum(0.05, 1.0 - (1.0 - pinch) * exp(-0.45 * d0L * d0L));
+	let a1L = ((j + 1) == 7) ? lipArea : maximum(0.05, 1.0 - (1.0 - pinch) * exp(-0.45 * d1L * d1L));
+	let rKL_L = clamp((a0L - a1L) / (a0L + a1L), -0.94, 0.94);
+
+	let d0R = j - (cCenter + 0.18);
+	let d1R = (j + 1) - (cCenter + 0.18);
+	let a0R = (j == 7) ? lipArea : maximum(0.05, 1.0 - (1.0 - pinch) * exp(-0.45 * d0R * d0R));
+	let a1R = ((j + 1) == 7) ? lipArea : maximum(0.05, 1.0 - (1.0 - pinch) * exp(-0.45 * d1R * d1R));
+	let rKL_R = clamp((a0R - a1R) / (a0R + a1R), -0.94, 0.94);
+
+	let pPlusL = 0.0; let pMinusL = 0.0;
+	let pPlusR = 0.0; let pMinusR = 0.0;
+	if (j == 0) { pPlusL = fOutL0; pMinusL = bOutL1; pPlusR = fOutR0; pMinusR = bOutR1; }
+	else if (j == 1) { pPlusL = fOutL1; pMinusL = bOutL2; pPlusR = fOutR1; pMinusR = bOutR2; }
+	else if (j == 2) { pPlusL = fOutL2; pMinusL = bOutL3; pPlusR = fOutR2; pMinusR = bOutR3; }
+	else if (j == 3) { pPlusL = fOutL3; pMinusL = bOutL4; pPlusR = fOutR3; pMinusR = bOutR4; }
+	else if (j == 4) { pPlusL = fOutL4; pMinusL = bOutL5; pPlusR = fOutR4; pMinusR = bOutR5; }
+	else if (j == 5) { pPlusL = fOutL5; pMinusL = bOutL6; pPlusR = fOutR5; pMinusR = bOutR6; }
+	else { pPlusL = fOutL6; pMinusL = bOutL7; pPlusR = fOutR6; pMinusR = bOutR7; }
+
+	// Eq. 7 & 8: One-multiply scattering junction + loss factor 0.992
+	let wL = rKL_L * (pPlusL - pMinusL);
+	let fScatL = (pPlusL + wL) * 0.992;
+	let bScatL = (pMinusL + wL) * 0.992;
+
+	let wR = rKL_R * (pPlusR - pMinusR);
+	let fScatR = (pPlusR + wR) * 0.992;
+	let bScatR = (pMinusR + wR) * 0.992;
+
+	if (j == 0) { fNextL1 = fScatL; bNextL0 = bScatL; fNextR1 = fScatR; bNextR0 = bScatR; }
+	else if (j == 1) { fNextL2 = fScatL; bNextL1 = bScatL; fNextR2 = fScatR; bNextR1 = bScatR; }
+	else if (j == 2) { fNextL3 = fScatL; bNextL2 = bScatL; fNextR3 = fScatR; bNextR2 = bScatR; }
+	else if (j == 3) { fNextL4 = fScatL; bNextL3 = bScatL; fNextR4 = fScatR; bNextR3 = bScatR; }
+	else if (j == 4) { fNextL5 = fScatL; bNextL4 = bScatL; fNextR5 = fScatR; bNextR4 = bScatR; }
+	else if (j == 5) { fNextL6 = fScatL; bNextL5 = bScatL; fNextR6 = fScatR; bNextR5 = bScatR; }
+	else { fNextL7 = fScatL; bNextL6 = bScatL; fNextR7 = fScatR; bNextR6 = bScatR; }
+}
+
+// Write updated waves back into circular waveguide buffers
+let wOff: Int = wIdx & 63;
+fwdBufL[0 + wOff] = fNextL0;   bwdBufL[0 + wOff] = bNextL0;
+fwdBufL[64 + wOff] = fNextL1;  bwdBufL[64 + wOff] = bNextL1;
+fwdBufL[128 + wOff] = fNextL2; bwdBufL[128 + wOff] = bNextL2;
+fwdBufL[192 + wOff] = fNextL3; bwdBufL[192 + wOff] = bNextL3;
+fwdBufL[256 + wOff] = fNextL4; bwdBufL[256 + wOff] = bNextL4;
+fwdBufL[320 + wOff] = fNextL5; bwdBufL[320 + wOff] = bNextL5;
+fwdBufL[384 + wOff] = fNextL6; bwdBufL[384 + wOff] = bNextL6;
+fwdBufL[448 + wOff] = fNextL7; bwdBufL[448 + wOff] = bNextL7;
+
+fwdBufR[0 + wOff] = fNextR0;   bwdBufR[0 + wOff] = bNextR0;
+fwdBufR[64 + wOff] = fNextR1;  bwdBufR[64 + wOff] = bNextR1;
+fwdBufR[128 + wOff] = fNextR2; bwdBufR[128 + wOff] = bNextR2;
+fwdBufR[192 + wOff] = fNextR3; bwdBufR[192 + wOff] = bNextR3;
+fwdBufR[256 + wOff] = fNextR4; bwdBufR[256 + wOff] = bNextR4;
+fwdBufR[320 + wOff] = fNextR5; bwdBufR[320 + wOff] = bNextR5;
+fwdBufR[384 + wOff] = fNextR6; bwdBufR[384 + wOff] = bNextR6;
+fwdBufR[448 + wOff] = fNextR7; bwdBufR[448 + wOff] = bNextR7;
+
+bwdTermL = bOutL0;
+bwdTermR = bOutR0;
+wIdx = (wIdx + 1) & 63;
+
+// Lip radiation filter: blend direct lip pressure and first-difference radiation impedance
+let radL = (1.0 + rLip) * fOutL7 + 0.65 * (fOutL7 - prevLipL);
+let radR = (1.0 + rLip) * fOutR7 + 0.65 * (fOutR7 - prevLipR);
+prevLipL = fOutL7;
+prevLipR = fOutR7;
+
+let wetL = tanh(radL * 1.35);
+let wetR = tanh(radR * 1.35);
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, wetL);
+out2 = linearinterp(mix, xR, wetR);

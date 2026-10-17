@@ -1,0 +1,172 @@
+// ============================================================================
+// filter_dispersive_allpass_comb_resonator.txt
+// Stereo Dispersive Allpass-In-Loop Inharmonic Comb & Bell/Pipe Resonator
+// Implements Jari Kleimola (DAFx-08, Paper 36): "Dispersion Modulation using
+// Allpass Filters" (Sections 2 & 3), Gianpaolo Evangelista & Sergio Cavaliere
+// (DAFx-98, EVA14: "Dispersive and Pitch-Synchronous Processing of Sounds"),
+// and Karjalainen, Valimaki & Esquef (DAFx-02: "Bell-like Sounds", Fig. 4).
+// Places a 4-stage cascaded first-order allpass dispersion filter H_ap(z) inside
+// a pitch-tracked fractional-delay feedback/feedforward comb loop:
+//   1. The allpass cascade introduces a frequency-dependent phase delay tau_p(w),
+//      stretching or compressing the upper comb overtones away from integer
+//      harmonicity (Evangelista DAFx-98; Karjalainen DAFx-02)!
+//   2. Modulating the allpass coefficient a_ap at audio or LFO rate (Kleimola
+//      DAFx-08 Sec 3 "Dispersion Modulation") warps the upper comb teeth
+//      dynamically while keeping the fundamental bass pitch rock-solid!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (tunes the base comb delay loop)
+//   in4: Modulation Signal in Hz (modulates comb frequency & dispersion warp)
+// Outlets:
+//   out1: Left Dispersive Comb Resonator Output
+//   out2: Right Dispersive Comb Resonator Output
+
+@param({ min: 0.5, max: 12.0 }) comb_harmonic = 1.0;
+@param({ min: -0.88, max: 0.88 }) dispersion_coeff = -0.55;
+@param({ min: 0.0, max: 1.0 }) dispersion_mod_depth = 0.45;
+@param({ min: -0.97, max: 0.97 }) feedback_gain = 0.84;
+@param({ min: 400.0, max: 16000.0 }) loop_lowpass_hz = 6500.0;
+@param({ min: 0.0, max: 1.5 }) pitch_track_amt = 1.0;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.80;
+
+// Stereo circular comb delay buffers (4096 samples per channel)
+@state combBufL = new FixedSampleArray(4096);
+@state combBufR = new FixedSampleArray(4096);
+@state writeIdx: Int = 0;
+
+// 4-stage first-order allpass dispersion chains inside feedback loop (L & R)
+@state apXL = new FixedSampleArray(4);
+@state apYL = new FixedSampleArray(4);
+@state apXR = new FixedSampleArray(4);
+@state apYR = new FixedSampleArray(4);
+
+// Loop lowpass damping filters & DC blockers
+@state loopLpL = new onepole();
+@state loopLpR = new onepole();
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+// Fallback ZC pitch tracker & smoothing states
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothDelL = 200.0;
+@state smoothDelR = 200.0;
+@state smoothDisp = -0.55;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Modulation (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+let trk = clamp(pitch_track_amt, 0.0, 1.5);
+let baseHz = linearinterp(clamp(trk, 0.0, 1.0), 65.0, f0 * maximum(trk, 0.2));
+let mDepth = clamp(mod_hz_depth, -2.0, 2.0);
+let fShift = mDepth * modHz;
+
+let targetFreqL = clamp(baseHz * clamp(comb_harmonic, 0.5, 12.0) + fShift, 20.0, 5000.0);
+let targetFreqR = clamp(targetFreqL * 1.006 - fShift * 0.2, 20.0, 5000.0);
+
+// Allpass dispersion coefficient a_ap + Kleimola Dispersion Modulation (DAFx-08 Sec 3)
+smoothDisp += (clamp(dispersion_coeff, -0.88, 0.88) - smoothDisp) * slew;
+let dispMod = clamp((modHz * mDepth) / 500.0, -1.0, 1.0) * clamp(dispersion_mod_depth, 0.0, 1.0) * 0.45;
+let aApL = clamp(smoothDisp + dispMod, -0.90, 0.90);
+let aApR = clamp(smoothDisp - dispMod + 0.04, -0.90, 0.90);
+
+// Compensate low-frequency phase delay of the 4-stage allpass filter: D_ap(0) = 4 * (1 - a) / (1 + a)
+let apDcDelayL = clamp(4.0 * (1.0 - aApL) / maximum(1.0 + aApL, 0.15), 0.2, 48.0);
+let apDcDelayR = clamp(4.0 * (1.0 - aApR) / maximum(1.0 + aApR, 0.15), 0.2, 48.0);
+
+let rawDelL = clamp((sr / targetFreqL) - apDcDelayL * 0.45, 4.0, 4088.0);
+let rawDelR = clamp((sr / targetFreqR) - apDcDelayR * 0.45, 4.0, 4088.0);
+smoothDelL += (rawDelL - smoothDelL) * slew;
+smoothDelR += (rawDelR - smoothDelR) * slew;
+
+// --- 2. Cubic-Interpolated Delay Read ---
+let rpL = writeIdx - smoothDelL;
+while (rpL < 0.0) { rpL += 4096.0; }
+let iL: Int = floor(rpL);
+let delL = cubicinterp(rpL - iL,
+	combBufL[(iL - 1 + 4096) & 4095],
+	combBufL[iL & 4095],
+	combBufL[(iL + 1) & 4095],
+	combBufL[(iL + 2) & 4095]);
+
+let rpR = writeIdx - smoothDelR;
+while (rpR < 0.0) { rpR += 4096.0; }
+let iR: Int = floor(rpR);
+let delR = cubicinterp(rpR - iR,
+	combBufR[(iR - 1 + 4096) & 4095],
+	combBufR[iR & 4095],
+	combBufR[(iR + 1) & 4095],
+	combBufR[(iR + 2) & 4095]);
+
+// --- 3. 4-Stage Allpass Dispersion Filter in Feedback Loop (DAFx-08 Sec 2 & 3) ---
+let dispSigL = delL;
+let dispSigR = delR;
+
+for (let k: Int = 0; k < 4; k++) {
+	// H(z) = (a + z^-1) / (1 + a*z^-1) -> y[n] = a * (x[n] - y[n-1]) + x[n-1]
+	let ynL = aApL * (dispSigL - apYL[k]) + apXL[k];
+	apXL[k] = dispSigL;
+	apYL[k] = ynL;
+	dispSigL = ynL;
+
+	let ynR = aApR * (dispSigR - apYR[k]) + apXR[k];
+	apXR[k] = dispSigR;
+	apYR[k] = ynR;
+	dispSigR = ynR;
+}
+
+// Lowpass damping filter in loop
+let lpCut = clamp(loop_lowpass_hz, 400.0, 16000.0);
+let dampedL = loopLpL.next(dispSigL, lpCut);
+let dampedR = loopLpR.next(dispSigR, lpCut);
+
+// Musical taper on feedback gain near +/- 1.0
+let fbRaw = clamp(feedback_gain, -0.97, 0.97);
+let fbSign = (fbRaw >= 0.0) ? 1.0 : -1.0;
+let fb = fbSign * (1.0 - pow(1.0 - abs(fbRaw), 1.5));
+
+let loopL = tanh(xL + fb * dampedL);
+let loopR = tanh(xR + fb * dampedR);
+
+// DC blocker in loop
+let cleanL = loopL - dcXL + 0.995 * dcYL;
+dcXL = loopL; dcYL = cleanL;
+let cleanR = loopR - dcXR + 0.995 * dcYR;
+dcXR = loopR; dcYR = cleanR;
+
+combBufL[writeIdx] = cleanL;
+combBufR[writeIdx] = cleanR;
+writeIdx = (writeIdx + 1) & 4095;
+
+let normGain = 1.0 / (1.0 + 0.45 * abs(fb));
+let wetL = (xL + fb * dispSigL) * normGain;
+let wetR = (xR + fb * dispSigR) * normGain;
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, wetL);
+out2 = linearinterp(mix, xR, wetR);

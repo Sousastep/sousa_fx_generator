@@ -1,0 +1,153 @@
+// ============================================================================
+// filter_photosonic_3sine_fir_vowel_comb.txt
+// Stereo Photosonic 3-Sine Windowed FIR Vowel Matrix & Doppler Comb Scanner
+// Implements Daniel Arfib, Jean-Michel Couturier & Loic Kessous (DAFx-02):
+// "Gestural Strategies for Specific Filtering Processes" (Section 2.1 & 2.2,
+// Eq. 1-2, Fig. 1-7).
+// Emulates Jacques Dudon's optical "Photosonic" instrument filter matrix:
+//   1. A circular delay line of the tuba is convolved at audio rate with a
+//      windowed multi-tap kernel h_i = M_{x, y+i} * w_i (Eq. 1-2, Fig. 3).
+//   2. In 3-Sine Vowel Matrix Mode (Sec 2.2, Fig. 6 & 7): M_{x, y+i} is the sum
+//      of three sinusoidal formant gratings that sweep continuously between
+//      male "EE" (270, 2290, 3010 Hz) and male "AAH" (730, 1090, 2440 Hz), where
+//      the formant bandwidth is inversely proportional to the photocell window
+//      duration (Fig. 7)!
+//   3. In Square Optical Comb Mode (Sec 2.2, Fig. 4): M_{x, y+i} morphs toward
+//      a bipolar square-wave comb grating with odd-harmonic teeth.
+//   4. Vertical Translation y (Doppler Offset, p. 2): Translating the grating
+//      inside the photocell window induces true Doppler pitch/phase shifts!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (scales the optical grating frequencies)
+//   in4: Modulation Signal in Hz (scans the vowel matrix & Doppler translation)
+// Outlets:
+//   out1: Left Photosonic FIR Vowel/Comb Output
+//   out2: Right Photosonic FIR Vowel/Comb Output
+
+@param({ min: 0.0, max: 1.0 }) ee_to_aah_scan = 0.35;
+@param({ min: 2.0, max: 28.0 }) photocell_win_ms = 11.0;
+@param({ min: 0.0, max: 1.0 }) sine_to_square_comb = 0.25;
+@param({ min: 0.0, max: 8.0 }) doppler_vert_shift = 1.5;
+@param({ min: 0.4, max: 2.5 }) formant_freq_scale = 1.0;
+@param({ min: 0.0, max: 2.0 }) pitch_track_amt = 0.80;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.85;
+
+// Circular delay lines for windowed FIR convolution (2048 samples -> up to 42 ms)
+@state firBufL = new FixedSampleArray(2048);
+@state firBufR = new FixedSampleArray(2048);
+@state writeIdx: Int = 0;
+
+// Doppler vertical translation phase & fallback ZC pitch tracker
+@state dopplerPh = new phasor();
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothScan = 0.35;
+@state smoothWinMs = 11.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+firBufL[writeIdx] = xL;
+firBufR[writeIdx] = xR;
+
+// --- 1. Pitch Tracking (in3 in Hz) & Modulation (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+
+let mDepth = clamp(mod_hz_depth, -2.0, 2.0);
+let modScanShift = clamp((modHz * mDepth) / 600.0, -0.75, 0.75);
+smoothScan += (clamp(ee_to_aah_scan + modScanShift, 0.0, 1.0) - smoothScan) * slew;
+smoothWinMs += (clamp(photocell_win_ms, 2.0, 28.0) - smoothWinMs) * slew;
+
+// --- 2. 3-Sine Vowel Matrix Frequencies (DAFx-02 Sec 2.2, p. 2, Fig. 6 & 7) ---
+// MALE "EE":  270, 2290, 3010 Hz
+// MALE "AAH": 730, 1090, 2440 Hz
+let sc = smoothScan;
+let fScale = clamp(formant_freq_scale, 0.4, 2.5);
+let pOffsetHz = clamp(pitch_track_amt, 0.0, 2.0) * (smoothF0 - 65.0) + mDepth * modHz;
+
+let f1 = clamp((270.0 + (730.0 - 270.0) * sc) * fScale + pOffsetHz * 0.7, 90.0, 1800.0);
+let f2 = clamp((2290.0 + (1090.0 - 2290.0) * sc) * fScale + pOffsetHz * 1.4, 300.0, 4800.0);
+let f3 = clamp((3010.0 + (2440.0 - 3010.0) * sc) * fScale + pOffsetHz * 1.8, 700.0, 7200.0);
+
+// Vertical coordinate movement inside the photocell window -> Doppler shift (Sec 2.1 & 2.2)
+let doppRateHz = clamp(doppler_vert_shift, 0.0, 8.0) + abs(modHz * mDepth) * 0.015;
+let doppPhase = dopplerPh.next(doppRateHz);
+let yShiftL = 2.0 * pi * doppPhase;
+let yShiftR = 2.0 * pi * wrap(doppPhase + 0.25, 0.0, 1.0);
+
+// --- 3. 24-Tap Sparse Windowed FIR Convolution Across Photocell Span (Eq. 1 & 2) ---
+// Span in samples = mstosamps(photocell_win_ms); bandwidth is inversely proportional to window width!
+let winSamps = clamp(mstosamps(smoothWinMs), 24.0, 1800.0);
+let tapStep = winSamps / 24.0;
+let sqMix = clamp(sine_to_square_comb, 0.0, 1.0);
+let sqDrive = 1.0 + 8.0 * sqMix;
+
+let accL = 0.0;
+let accR = 0.0;
+let normSum = 0.0001;
+
+for (let k: Int = 0; k < 24; k++) {
+	// Normalized position u in [0..1] inside the photocell window (Fig. 3 right & Fig. 7)
+	let u = (k + 0.5) / 24.0;
+	let wPhotocell = hann(u); // Smooth bell-shaped photocell aperture window w_i
+	let delSamps = k * tapStep + 2.0;
+	let tSec = delSamps / sr;
+
+	// Evaluate 3-sine matrix M_{x, y+i} at delay time tSec + vertical Doppler phase yShift
+	let s1L = sin(2.0 * pi * f1 * tSec + yShiftL);
+	let s2L = sin(2.0 * pi * f2 * tSec + yShiftL * 1.5);
+	let s3L = sin(2.0 * pi * f3 * tSec + yShiftL * 2.0);
+	let triSineL = (s1L + 0.85 * s2L + 0.65 * s3L) * 0.4;
+
+	let s1R = sin(2.0 * pi * f1 * tSec + yShiftR);
+	let s2R = sin(2.0 * pi * f2 * tSec + yShiftR * 1.5);
+	let s3R = sin(2.0 * pi * f3 * tSec + yShiftR * 2.0);
+	let triSineR = (s1R + 0.85 * s2R + 0.65 * s3R) * 0.4;
+
+	// Morph between 3-Sine Formant Matrix (Fig. 6) and Bipolar Square Optical Comb (Fig. 4)
+	let hL = wPhotocell * linearinterp(sqMix, triSineL, tanh(s1L * sqDrive));
+	let hR = wPhotocell * linearinterp(sqMix, triSineR, tanh(s1R * sqDrive));
+
+	let rp = writeIdx - clamp(delSamps, 2.0, 2042.0);
+	while (rp < 0.0) { rp += 2048.0; }
+	let i0: Int = floor(rp);
+	let frac = rp - i0;
+
+	let sampL = linearinterp(frac, firBufL[i0 & 2047], firBufL[(i0 + 1) & 2047]);
+	let sampR = linearinterp(frac, firBufR[i0 & 2047], firBufR[(i0 + 1) & 2047]);
+
+	accL += hL * sampL;
+	accR += hR * sampR;
+	normSum += wPhotocell;
+}
+
+writeIdx = (writeIdx + 1) & 2047;
+
+let scaleNorm = 3.2 / sqrt(normSum);
+let wetL = tanh(accL * scaleNorm);
+let wetR = tanh(accR * scaleNorm);
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, wetL);
+out2 = linearinterp(mix, xR, wetR);

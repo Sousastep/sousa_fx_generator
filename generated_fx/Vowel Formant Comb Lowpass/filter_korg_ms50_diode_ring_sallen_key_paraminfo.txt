@@ -1,0 +1,54 @@
+================================================================================
+filter_korg_ms50_diode_ring_sallen_key — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Virtual Analog model of the Korg MS-50 CA3019 Diode-Bridge & Asymmetric Op-Amp Sallen-Key Lowpass VCF implementing Maximilian Rest, Julian D. Parker & Kurt J. Werner (DAFx-17 Paper 88, "WDF Modeling of a Korg MS-50 Based Non-linear Diode Bridge VCF", Sections 2.1, 2.2 & 4, Eq. 1–7, Fig. 1–5) and Rémy Müller & Thomas Hélie (DAFx-19 Paper 6, "A Minimal Passive Model of the Operational Amplifier: Application to Sallen-Key Analog Filters", Sections 2.3 & 4, Eq. 18–32, 40–42). In the Korg MS-50 (and 700S/800DV), the two Sallen-Key resistors are replaced by a 6-diode CA3019 ring-modulator bridge (`IC5`). Large audio signals modulate the dynamic diode resistances `r_A||r_B` and `r_C||r_D` in real time, while the non-inverting Sallen-Key amplifier (`IC4`, gain `G in [0, 3)`) saturates against its asymmetric power supply rails (`e_S+`, `e_S-`) and feedback clipping diodes (`D5–D12`).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (scales the diode-bridge Sallen-Key cutoff in Hz)
+- in4: Modulation Signal in Hz (modulates the diode-bridge bias frequency in Hz)
+- out1 / out2: Stereo Korg MS-50 Diode-Bridge Sallen-Key Output
+
+PARAMETERS (8)
+
+1. cutoff_hz
+   - Range: 35.0 to 12000.0 Hz (Small-Signal Linearized Diode-Bridge Cutoff Frequency, Default: 310.0 Hz)
+   - Taper: Direct frequency in Hz mapped to the symmetric diode bridge bias current `I_b` (DAFx-17 Eq. 2–3).
+   - Function: Sets the base 2-pole Sallen-Key lowpass cutoff frequency.
+
+2. sk_feedback_g
+   - Range: 0.00 to 2.95 (Sallen-Key Non-Inverting Amplifier Gain `G = 1 + R2/R1`, Default: 2.15)
+   - Taper: Direct Sallen-Key feedback gain `G` (DAFx-19 Section 4, Fig. 7: linear stability boundary is `G = 3.0`, where poles cross the imaginary axis into diode-limited self-oscillation).
+   - Function: Controls the Sallen-Key resonant peak; pushing `G` above `2.6` unleashes screaming Korg MS-50/MS-20 self-oscillation clipped by `D5–D12`.
+
+3. diode_bridge_mod
+   - Range: 0.00 to 1.00 (CA3019 6-Diode Ring Dynamic Resistance Modulation Depth, Default: 0.65)
+   - Taper: Linear depth of the 1st- and 2nd-order Shockley diode conductance modulation across branches `r_A||r_B` and `r_C||r_D` (DAFx-17 Section 2.1, Fig. 3).
+   - Function: Causes loud tuba peaks to instantaneously shift the equivalent Sallen-Key resistances, producing audio-rate self-FM and gnarly ring-mod-like sidebands around the cutoff!
+
+4. opamp_rail_asym
+   - Range: 0.00 to 1.00 (Op-Amp Supply Rail Asymmetry `V_cm = (e_S+ + e_S-)/2`, Default: 0.40)
+   - Taper: Linear shift of the common-mode supply voltage `V_cm` in Müller & Hélie's conservative OPA law `e_out = V_cm + V_dm * tanh(...)` (DAFx-19 Eq. 4 & 18, Fig. 4 & 9).
+   - Function: Introduces asymmetric positive/negative clipping in the Sallen-Key feedback amplifier for thick 2nd-harmonic brass growl.
+
+5. bridge_drive_db
+   - Range: 0.0 to 24.0 dB (Input Signal Level into the CA3019 Diode Bridge, Default: 9.0 dB)
+   - Taper: Logarithmic dB gain with automatic output trim.
+   - Function: Pushes the input voltage `v_s` closer to the diode bias voltage `V_b` (`v_s ~ n * v_T`), transitioning the MS-50 from a clean lowpass filter into a roaring nonlinear beast.
+
+6. pitch_track_amt
+   - Range: 0.00 to 4.00 Hz/Hz (Cutoff Pitch Tracking Multiplier from in3 in Hz; Default: 1.50)
+   - Taper: Linear harmonic ratio.
+   - Function: Tracks the Sallen-Key cutoff frequency to the tuba's pitch in Hz.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Modulates the diode bridge cutoff frequency directly in Hz from `in4`.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Korg MS-50 VCF; Default: 0.95)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba with the Korg MS-50 Sallen-Key output.

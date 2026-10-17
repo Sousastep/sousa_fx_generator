@@ -1,0 +1,180 @@
+// ============================================================================
+// filter_ems_vcs3_diode_ladder.txt
+// Stereo 2x-Oversampled EMS VCS3 Coupled Nonlinear Diode Ladder Lowpass Filter
+// Implements Marco Civolani & Federico Fontana (DAFx-08, Paper 06):
+// "A Nonlinear Digital Model of the EMS VCS3 Voltage-Controlled Filter"
+// (Sections 1, 3 & 4, Eq. 14-22, Fig. 1-5) and Russell McClellan (DAFx-26,
+// Paper 28: "Stability Analysis of Time-Varying Virtual Analog Filters", Sec 4).
+// Unlike the Moog transistor ladder where stages are buffered, the 1969 EMS
+// VCS3 diode ladder (18dB/24dB slope) bilaterally couples adjacent capacitors:
+//   - Long-tailed BJT input pair (Q1, Q2): tanh((v_in - (0.5 + k)*v_C4) / 2Vt)
+//   - Coupled diode-capacitor ladder (Eq. 19 & 22):
+//       dvC1/dt = (I0 / 2C) * [tanh((vC2 - vC1)/gamma) + tanh((vin - fb)/2Vt)]
+//       dvC2/dt = (I0 / 2C) * [tanh((vC3 - vC2)/gamma) - tanh((vC2 - vC1)/gamma)]
+//       dvC3/dt = (I0 / 2C) * [tanh((vC4 - vC3)/gamma) - tanh((vC3 - vC2)/gamma)]
+//       dvC4/dt = (I0 / 2C) * [-tanh(vC4 / (3*gamma))  - tanh((vC4 - vC3)/gamma)]
+//   - Notice the 3*gamma denominator in Stage 4 due to the series pull-up diodes
+//     D9-D14 (Sec 3, p. 3) and the C7/R7 feedback highpass filter (Sec 1)!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (scales VCS3 control current cutoff in Hz)
+//   in4: Modulation Signal in Hz (modulates VCS3 cutoff frequency in Hz)
+// Outlets:
+//   out1: Left EMS VCS3 Diode Ladder Output
+//   out2: Right EMS VCS3 Diode Ladder Output
+
+@param({ min: 35.0, max: 12000.0 }) cutoff_hz = 300.0;
+@param({ min: 0.0, max: 10.0 }) vcs3_response_k = 6.2;
+@param({ min: 0.0, max: 24.0 }) bjt_input_drive_db = 9.0;
+@param({ min: 0.4, max: 2.5 }) diode_gamma_scale = 1.0;
+@param({ min: 10.0, max: 350.0 }) fb_highpass_hz = 45.0;
+@param({ min: 0.0, max: 4.0 }) pitch_track_amt = 1.5;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.95;
+
+// 4 bilaterally-coupled capacitor voltages vC1, vC2, vC3, vC4 (L & R, Eq. 22)
+@state vC1L = 0.0; @state vC2L = 0.0; @state vC3L = 0.0; @state vC4L = 0.0;
+@state vC1R = 0.0; @state vC2R = 0.0; @state vC3R = 0.0; @state vC4R = 0.0;
+
+// C7/R7 & C8/R8 First-Order Highpass Filter in Resonance Feedback Loop (DAFx-08 Sec 1)
+@state fbLpL = 0.0;
+@state fbLpR = 0.0;
+
+// Fallback ZC pitch tracker & parameter slews
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothCut = 300.0;
+@state smoothK = 6.2;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Modulation (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothCut += (clamp(cutoff_hz, 35.0, 12000.0) - smoothCut) * slew;
+smoothK += (clamp(vcs3_response_k, 0.0, 10.0) - smoothK) * slew;
+
+let pHz = clamp(pitch_track_amt, 0.0, 4.0) * smoothF0;
+let mHz = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+
+// Compensate for the VCS3 diode ladder's classic cutoff rise with increasing resonance
+let resFreqShift = 1.0 + 0.045 * smoothK;
+let fcL = clamp((smoothCut + pHz + mHz) / resFreqShift, 25.0, sr * 0.40);
+let fcR = clamp((smoothCut * 1.016 + pHz + mHz * 0.94) / resFreqShift, 25.0, sr * 0.40);
+
+// --- 2. EMS VCS3 Coupled Diode-Capacitor State Equations (DAFx-08 Eq. 18, 21, 22) ---
+// Using 2x oversampled Heun (2nd-order Runge-Kutta predictor-corrector) integration
+// Note: (1 - e^(x/gamma)) / (1 + e^(x/gamma)) == -tanh(x / (2*gamma))!
+let osSr = 2.0 * sr;
+// Factor 1.836 accounts for the coupled ladder eigenvalue spread (3-diodes D9-D14 at bottom)
+let alphaL = clamp(2.0 * pi * fcL * 1.836 / osSr, 0.001, 0.88);
+let alphaR = clamp(2.0 * pi * fcR * 1.836 / osSr, 0.001, 0.88);
+
+// Normalized thermal/emission voltage gamma = eta * VT (Eq. 18)
+let gScale = clamp(diode_gamma_scale, 0.4, 2.5);
+let invGamma = 1.0 / gScale;
+let invThreeGamma = 1.0 / (3.0 * gScale); // 3 series pull-up diodes D9,D11,D13 & D10,D12,D14!
+let invTwoVt = 1.836 / gScale;             // Long-tailed BJT input pair Q1/Q2 (eta = 1 vs 1.836)
+
+// Eq. 21: v_out = vC4 * (0.5 + R13/R9), mapped from 0..10 panel "Response" dial
+let kGain = 0.5 + 0.62 * smoothK;
+let gHp = 1.0 - exp(-2.0 * pi * clamp(fb_highpass_hz, 10.0, 350.0) / osSr);
+
+let drv = dbtoa(clamp(bjt_input_drive_db, 0.0, 24.0));
+let uInL = xL * drv;
+let uInR = xR * drv;
+
+for (let step: Int = 0; step < 2; step++) {
+	// C7/R7 feedback highpass filter (strips polarization DC & prevents sub-bass lockup)
+	fbLpL = fbLpL + gHp * (vC4L - fbLpL);
+	let vC4HpL = vC4L - fbLpL;
+
+	// Predictor step (Euler)
+	let tInL = tanh((uInL - kGain * vC4HpL) * invTwoVt);
+	let t12L = tanh((vC2L - vC1L) * invGamma);
+	let t23L = tanh((vC3L - vC2L) * invGamma);
+	let t34L = tanh((vC4L - vC3L) * invGamma);
+	let t40L = tanh(vC4L * invThreeGamma);
+
+	let d1L = alphaL * (tInL + t12L);
+	let d2L = alphaL * (t23L - t12L);
+	let d3L = alphaL * (t34L - t23L);
+	let d4L = 0.0 - alphaL * (t40L + t34L);
+
+	let p1L = vC1L + d1L;
+	let p2L = vC2L + d2L;
+	let p3L = vC3L + d3L;
+	let p4L = vC4L + d4L;
+
+	// Corrector step (Heun midpoint average for unconditional stability at high resonance)
+	let tInL2 = tanh((uInL - kGain * (p4L - fbLpL)) * invTwoVt);
+	let t12L2 = tanh((p2L - p1L) * invGamma);
+	let t23L2 = tanh((p3L - p2L) * invGamma);
+	let t34L2 = tanh((p4L - p3L) * invGamma);
+	let t40L2 = tanh(p4L * invThreeGamma);
+
+	vC1L = vC1L + 0.5 * (d1L + alphaL * (tInL2 + t12L2));
+	vC2L = vC2L + 0.5 * (d2L + alphaL * (t23L2 - t12L2));
+	vC3L = vC3L + 0.5 * (d3L + alphaL * (t34L2 - t23L2));
+	vC4L = vC4L + 0.5 * (d4L - alphaL * (t40L2 + t34L2));
+
+	// Right channel
+	fbLpR = fbLpR + gHp * (vC4R - fbLpR);
+	let vC4HpR = vC4R - fbLpR;
+
+	let tInR = tanh((uInR - kGain * vC4HpR) * invTwoVt);
+	let t12R = tanh((vC2R - vC1R) * invGamma);
+	let t23R = tanh((vC3R - vC2R) * invGamma);
+	let t34R = tanh((vC4R - vC3R) * invGamma);
+	let t40R = tanh(vC4R * invThreeGamma);
+
+	let d1R = alphaR * (tInR + t12R);
+	let d2R = alphaR * (t23R - t12R);
+	let d3R = alphaR * (t34R - t23R);
+	let d4R = 0.0 - alphaR * (t40R + t34R);
+
+	let p1R = vC1R + d1R;
+	let p2R = vC2R + d2R;
+	let p3R = vC3R + d3R;
+	let p4R = vC4R + d4R;
+
+	let tInR2 = tanh((uInR - kGain * (p4R - fbLpR)) * invTwoVt);
+	let t12R2 = tanh((p2R - p1R) * invGamma);
+	let t23R2 = tanh((p3R - p2R) * invGamma);
+	let t34R2 = tanh((p4R - p3R) * invGamma);
+	let t40R2 = tanh(p4R * invThreeGamma);
+
+	vC1R = vC1R + 0.5 * (d1R + alphaR * (tInR2 + t12R2));
+	vC2R = vC2R + 0.5 * (d2R + alphaR * (t23R2 - t12R2));
+	vC3R = vC3R + 0.5 * (d3R + alphaR * (t34R2 - t23R2));
+	vC4R = vC4R + 0.5 * (d4R - alphaR * (t40R2 + t34R2));
+}
+
+// Eq. 21 output amplifier U1 scaling + drive headroom trim
+let outScale = (1.5 + 0.25 * smoothK) / sqrt(maximum(drv * 0.45, 1.0));
+let wetL = tanh(vC4L * outScale);
+let wetR = tanh(vC4R * outScale);
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, wetL);
+out2 = linearinterp(mix, xR, wetR);

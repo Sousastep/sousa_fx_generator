@@ -1,0 +1,181 @@
+// ============================================================================
+// filter_universal_comb_q_resonator.txt
+// Stereo Unity-Gain Q-Normalized Universal Comb Filter & Sympathetic Pipe Bank
+// Implements DAFx-21 (Paper 2):
+// "Separation of Harmonic Signals" (Sections 4.1-4.5 & 5.1, Eq. 6-19, Fig. 4-7)
+// and P. Dutilleux (DAFx-98, DUT52, Sec 3.2 & 3.8).
+// Realizes the canonical single-delay-line Universal Comb Filter (UCF, Eq. 8,
+// Fig. 4) tuned to the tuba's pitch (in3, Hz) and modulated by in4 (Hz):
+//   xh[n] = x[n] + a_M * xh[n - M]
+//   y[n]  = b_0 * xh[n] + b_M * xh[n - M]
+// With exact analytical Q-factor and t60 parameterization (Eq. 10, 14, 18, 19):
+//   beta = tan(pi / (2 * Q))
+//   a_M  = (1 - beta) / (1 + beta),   b_0 = (1 - abs(a_M)*0.5) / (1 + beta)
+// Plus an optional sympathetic harmonic pipe branch (Sec 5.1) at 1.5x / 2.0x
+// harmonic ratios and polarity morphing between even/integer harmonics (+b_M)
+// and odd/hollow half-wavelength pipe harmonics (-b_M, Sec 4.1 & 4.2)!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (tunes comb fundamental f1 = harmonic_mult * f0)
+//   in4: Modulation Signal in Hz (modulates comb frequency in Hz for flanging/chirps)
+// Outlets:
+//   out1: Left Universal Comb Resonator Output
+//   out2: Right Universal Comb Resonator Output
+
+@param({ min: 0.5, max: 16.0 }) harmonic_mult = 2.0;
+@param({ min: 2.0, max: 80.0 }) comb_q_factor = 14.0;
+@param({ min: -1.0, max: 1.0 }) fir_iir_polarity = 0.65;
+@param({ min: 0.0, max: 1.0 }) sympathetic_fifth = 0.35;
+@param({ min: 300.0, max: 16000.0 }) loop_damping_hz = 5500.0;
+@param({ min: 0.0, max: 1.5 }) pitch_track_amt = 1.0;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.85;
+
+// Primary Universal Comb canonical state buffers xh[n] (4096 samples per channel)
+@state ucfBufL = new FixedSampleArray(4096);
+@state ucfBufR = new FixedSampleArray(4096);
+// Sympathetic harmonic resonator buffers (2048 samples per channel, Sec 5.1)
+@state symBufL = new FixedSampleArray(2048);
+@state symBufR = new FixedSampleArray(2048);
+@state writeIdx: Int = 0;
+
+// Natural-sounding resonator loop lowpass damping (DAFx-98 DUT52 Sec 3.8) & DC blockers
+@state dampLpL = new onepole();
+@state dampLpR = new onepole();
+@state symLpL = new onepole();
+@state symLpR = new onepole();
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+// Fallback ZC pitch tracker & parameter slews
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothDelL = 200.0;
+@state smoothDelR = 200.0;
+@state smoothQ = 14.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Modulation (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.006 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+let trk = clamp(pitch_track_amt, 0.0, 1.5);
+let basePitchHz = linearinterp(clamp(trk, 0.0, 1.0), 65.0, f0 * maximum(trk, 0.2));
+let mShiftHz = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+
+let combFreqL = clamp(basePitchHz * clamp(harmonic_mult, 0.5, 16.0) + mShiftHz, 18.0, 6000.0);
+let combFreqR = clamp(combFreqL * 1.008 - mShiftHz * 0.15, 18.0, 6000.0);
+
+// Eq. 9: Delay length M = fs / f1
+let targetML = clamp(sr / combFreqL, 4.0, 4088.0);
+let targetMR = clamp(sr / combFreqR, 4.0, 4088.0);
+smoothDelL += (targetML - smoothDelL) * slew;
+smoothDelR += (targetMR - smoothDelR) * slew;
+
+// --- 2. Analytical Q-to-Coefficient Mapping (DAFx-21 Sec 4.4, Eq. 10, 14, 18) ---
+smoothQ += (clamp(comb_q_factor, 2.0, 80.0) - smoothQ) * slew;
+let beta = tan(pi / (2.0 * maximum(smoothQ, 2.0)));
+let invOnePlusBeta = 1.0 / (1.0 + beta);
+
+// Polarity parameter morphs between positive comb (+1, integer harmonics) and
+// negative/shifted comb (-1, odd harmonics shifted by pi/M, Sec 4.1 & 4.2)
+let pol = clamp(fir_iir_polarity, -1.0, 1.0);
+let polSign = (pol >= 0.0) ? 1.0 : -1.0;
+let aMag = clamp((1.0 - beta) * invOnePlusBeta, 0.0, 0.985);
+let aM = polSign * aMag;
+let b0 = clamp(beta * invOnePlusBeta, 0.015, 0.5);
+let bM = b0 * pol;
+
+// --- 3. Read Primary Universal Comb Delay Line with Cubic Interpolation ---
+let rpL = writeIdx - smoothDelL;
+while (rpL < 0.0) { rpL += 4096.0; }
+let iL: Int = floor(rpL);
+let xhDelL = cubicinterp(rpL - iL,
+	ucfBufL[(iL - 1 + 4096) & 4095],
+	ucfBufL[iL & 4095],
+	ucfBufL[(iL + 1) & 4095],
+	ucfBufL[(iL + 2) & 4095]);
+
+let rpR = writeIdx - smoothDelR;
+while (rpR < 0.0) { rpR += 4096.0; }
+let iR: Int = floor(rpR);
+let xhDelR = cubicinterp(rpR - iR,
+	ucfBufR[(iR - 1 + 4096) & 4095],
+	ucfBufR[iR & 4095],
+	ucfBufR[(iR + 1) & 4095],
+	ucfBufR[(iR + 2) & 4095]);
+
+// Natural-sounding lowpass IIR comb loop filter (DAFx-98 DUT52 Sec 3.8)
+let dampCut = clamp(loop_damping_hz, 300.0, 16000.0);
+let dampedDelL = dampLpL.next(xhDelL, dampCut);
+let dampedDelR = dampLpR.next(xhDelR, dampCut);
+
+// Eq. 8 canonical Universal Comb Filter update with soft saturation guard
+let xhL = tanh(xL + aM * dampedDelL);
+let xhR = tanh(xR + aM * dampedDelR);
+let yPrimaryL = b0 * xhL + bM * dampedDelL;
+let yPrimaryR = b0 * xhR + bM * dampedDelR;
+
+ucfBufL[writeIdx] = xhL;
+ucfBufR[writeIdx] = xhR;
+
+// --- 4. Sympathetic Harmonic Comb Pipe (DAFx-21 Sec 5.1, tuned 1.5x fifth / 3rd harmonic) ---
+let symDelL = clamp(smoothDelL * 0.666667, 4.0, 2040.0);
+let symDelR = clamp(smoothDelR * 0.500000, 4.0, 2040.0);
+let wSym: Int = writeIdx & 2047;
+
+let rpSL = wSym - symDelL;
+while (rpSL < 0.0) { rpSL += 2048.0; }
+let iSL: Int = floor(rpSL);
+let sDelL = linearinterp(rpSL - iSL, symBufL[iSL & 2047], symBufL[(iSL + 1) & 2047]);
+
+let rpSR = wSym - symDelR;
+while (rpSR < 0.0) { rpSR += 2048.0; }
+let iSR: Int = floor(rpSR);
+let sDelR = linearinterp(rpSR - iSR, symBufR[iSR & 2047], symBufR[(iSR + 1) & 2047]);
+
+let symXhL = tanh(yPrimaryL + aMag * 0.92 * symLpL.next(sDelL, dampCut));
+let symXhR = tanh(yPrimaryR + aMag * 0.92 * symLpR.next(sDelR, dampCut));
+symBufL[wSym] = symXhL;
+symBufR[wSym] = symXhR;
+
+let ySymL = b0 * (symXhL + sDelL);
+let ySymR = b0 * (symXhR + sDelR);
+
+writeIdx = (writeIdx + 1) & 4095;
+
+let symAmt = clamp(sympathetic_fifth, 0.0, 1.0);
+let rawWetL = (yPrimaryL + symAmt * 0.75 * ySymL) * 1.45;
+let rawWetR = (yPrimaryR + symAmt * 0.75 * ySymR) * 1.45;
+
+// DC blocker
+let wetL = rawWetL - dcXL + 0.995 * dcYL;
+dcXL = rawWetL; dcYL = wetL;
+let wetR = rawWetR - dcXR + 0.995 * dcYR;
+dcXR = rawWetR; dcYR = wetR;
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, wetL);
+out2 = linearinterp(mix, xR, wetR);

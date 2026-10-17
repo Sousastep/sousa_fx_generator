@@ -1,0 +1,161 @@
+// ============================================================================
+// filter_huovilainen_1plus4_moog_ladder.txt
+// Stereo 2x-Oversampled "1+4" Nonlinear Transistor Moog Ladder Lowpass Filter
+// Implements Antti Huovilainen (DAFx-04, Paper P_061): "Non-Linear Digital
+// Implementation of the Moog Ladder Filter" (Sections 2-5, Eq. 10-22, Fig. 1-4)
+// and Hiroyuki Oyama (DAFx-26, Paper 29): "Quantifying Nonlinear Behavior in
+// Digital Moog Ladder Filters: Cross-Implementation Comparison and Common-Core
+// Ablation" (Sections 1 & 3.1-3.2, Fig. 1).
+// Realizes the full SPICE-referenced "1+4" emitter-coupled BJT ladder:
+//   - 1 input differential-pair tanh saturator driven by x(n) - 4*r*y_d(n-0.5)
+//   - 4 stacked NPN transistor ladder stages with cached W_k = tanh(y_k / 2Vt)
+//     (requiring only 5 tanh evaluations per oversampled step, Eq. 13-17)
+//   - Half-sample phase-compensated feedback delay (Huovilainen DAFx-04 Sec 5.3)
+//   - 2x internal oversampling + Oyama DAFx-26 stage-ablation / thermal-voltage
+//     asymmetry control (`stage_nonlinearity`) and multi-pole slope morphing!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (cutoff tracks tuba pitch in Hz)
+//   in4: Modulation Signal in Hz (wobbles/FM-modulates ladder cutoff in Hz)
+// Outlets:
+//   out1: Left Nonlinear Moog Ladder Output
+//   out2: Right Nonlinear Moog Ladder Output
+
+@param({ min: 35.0, max: 12000.0 }) base_cutoff_hz = 280.0;
+@param({ min: 0.0, max: 1.15 }) resonance_k = 0.78;
+@param({ min: 0.0, max: 24.0 }) drive_db = 9.0;
+@param({ min: 0.1, max: 1.5 }) stage_nonlinearity = 0.85;
+@param({ min: 0.0, max: 1.0 }) pole_slope_morph = 1.0;
+@param({ min: 0.0, max: 4.0 }) pitch_track_amt = 1.5;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) bass_comp_mix = 0.65;
+
+// 4-stage ladder states ya, yb, yc, yd + cached tanh outputs Wa, Wb, Wc + half-sample delay
+@state yaL = 0.0; @state ybL = 0.0; @state ycL = 0.0; @state ydL = 0.0;
+@state waL = 0.0; @state wbL = 0.0; @state wcL = 0.0;
+@state ydPrevL = 0.0; @state phaseCompL = 0.0;
+
+@state yaR = 0.0; @state ybR = 0.0; @state ycR = 0.0; @state ydR = 0.0;
+@state waR = 0.0; @state wbR = 0.0; @state wcR = 0.0;
+@state ydPrevR = 0.0; @state phaseCompR = 0.0;
+
+// Fallback ZC pitch tracker & parameter slews
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothCut = 280.0;
+@state smoothRes = 0.78;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Modulation (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothCut += (clamp(base_cutoff_hz, 35.0, 12000.0) - smoothCut) * slew;
+smoothRes += (clamp(resonance_k, 0.0, 1.15) - smoothRes) * slew;
+
+let pTrackHz = clamp(pitch_track_amt, 0.0, 4.0) * smoothF0;
+let mShiftHz = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+
+let fcL = clamp(smoothCut + pTrackHz + mShiftHz, 25.0, sr * 0.42);
+let fcR = clamp(smoothCut * 1.015 + pTrackHz + mShiftHz * 0.95, 25.0, sr * 0.42);
+
+// --- 2. Huovilainen Tuning & Resonance Compensation (DAFx-04 Sec 5.1-5.3, Eq. 21) ---
+// 2x oversampled sample rate osSr = 2 * sr
+let osSr = 2.0 * sr;
+let fcNormL = fcL / osSr;
+let fcNormR = fcR / osSr;
+
+// Polynomial tuning & Q compensation (Huovilainen 2004 / Csound moogladder lineage, Oyama DAFx-26 Sec 3.2)
+let gL = clamp(1.0 - exp(0.0 - 2.0 * pi * fcNormL), 0.001, 0.92);
+let gR = clamp(1.0 - exp(0.0 - 2.0 * pi * fcNormR), 0.001, 0.92);
+
+let acrL = 1.0 - 1.38 * fcNormL + 1.8 * fcNormL * fcNormL;
+let acrR = 1.0 - 1.38 * fcNormR + 1.8 * fcNormR * fcNormR;
+let resK_L = clamp(smoothRes * acrL, 0.0, 1.18);
+let resK_R = clamp(smoothRes * acrR, 0.0, 1.18);
+
+// Thermal voltage scaling 2*Vt (Oyama DAFx-26 Sec 3.1: stage nonlinearity ablation)
+// Higher stage_nonlinearity lowers effective 2*Vt in early ladder stages, increasing harmonic drive & cutoff shift!
+let nlScale = clamp(stage_nonlinearity, 0.1, 1.5);
+let vt2 = 1.0 / maximum(nlScale, 0.1);
+let invVt2 = nlScale;
+
+let inGain = dbtoa(clamp(drive_db, 0.0, 24.0));
+let uInL = xL * inGain;
+let uInR = xR * inGain;
+
+// --- 3. 2x Oversampled "1+4" Nonlinear Moog Ladder Integration (Eq. 13-17, 22) ---
+for (let step: Int = 0; step < 2; step++) {
+	// Input differential pair ("1" of "1+4") + 4*k feedback with half-sample phase compensation
+	let inDiffL = tanh((uInL - 4.0 * resK_L * phaseCompL) * invVt2);
+	yaL = yaL + vt2 * gL * (inDiffL - waL);
+	waL = tanh(yaL * invVt2);
+
+	ybL = ybL + vt2 * gL * (waL - wbL);
+	wbL = tanh(ybL * invVt2);
+
+	ycL = ycL + vt2 * gL * (wbL - wcL);
+	wcL = tanh(ycL * invVt2 * 0.85); // Oyama DAFx-26: earlier stages dominate nonlinear harmonics
+
+	let wdL = tanh(ydL * invVt2 * 0.75);
+	ydL = ydL + vt2 * gL * (wcL - wdL);
+
+	// Half-sample delay phase compensation for 180-deg resonance lock (DAFx-04 Sec 5.3)
+	phaseCompL = 0.5 * (ydL + ydPrevL);
+	ydPrevL = ydL;
+
+	// Right channel
+	let inDiffR = tanh((uInR - 4.0 * resK_R * phaseCompR) * invVt2);
+	yaR = yaR + vt2 * gR * (inDiffR - waR);
+	waR = tanh(yaR * invVt2);
+
+	ybR = ybR + vt2 * gR * (waR - wbR);
+	wbR = tanh(ybR * invVt2);
+
+	ycR = ycR + vt2 * gR * (wbR - wcR);
+	wcR = tanh(ycR * invVt2 * 0.85);
+
+	let wdR = tanh(ydR * invVt2 * 0.75);
+	ydR = ydR + vt2 * gR * (wcR - wdR);
+
+	phaseCompR = 0.5 * (ydR + ydPrevR);
+	ydPrevR = ydR;
+}
+
+// --- 4. Continuous Multi-Pole Slope Selection (2-Pole 12dB/oct -> 4-Pole 24dB/oct + Bandpass) ---
+// Morph from 2-pole punchy lowpass (yb) to 3-pole (yc) to full 4-pole 24dB/oct ladder (yd)
+let slope = clamp(pole_slope_morph, 0.0, 1.0);
+let ladderOutL = (slope <= 0.5)
+	? linearinterp(slope * 2.0, ybL, ycL)
+	: linearinterp((slope - 0.5) * 2.0, ycL, ydL);
+let ladderOutR = (slope <= 0.5)
+	? linearinterp(slope * 2.0, ybR, ycR)
+	: linearinterp((slope - 0.5) * 2.0, ycR, ydR);
+
+// Passband DC/sub-bass loss compensation at high resonance k (Moog ladder drops 12 dB at cutoff)
+let compAmt = clamp(bass_comp_mix, 0.0, 1.0);
+let makeup = 1.0 + compAmt * 2.2 * smoothRes;
+let normTrim = 1.0 / sqrt(maximum(inGain * 0.45, 1.0));
+
+out1 = tanh((ladderOutL * makeup * normTrim) + (1.0 - compAmt) * 0.25 * xL);
+out2 = tanh((ladderOutR * makeup * normTrim) + (1.0 - compAmt) * 0.25 * xR);

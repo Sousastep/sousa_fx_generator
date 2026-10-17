@@ -1,0 +1,179 @@
+// ============================================================================
+// filter_korg_ms50_diode_ring_sallen_key.txt
+// Stereo Korg MS-50 CA3019 Diode-Bridge & Asymmetric Op-Amp Sallen-Key VCF
+// Implements Maximilian Rest, Julian D. Parker & Kurt J. Werner (DAFx-17,
+// Paper 88): "WDF Modeling of a Korg MS-50 Based Non-linear Diode Bridge VCF"
+// (Sections 2.1, 2.2 & 4, Eq. 1-7, Fig. 1-5) and Remy Muller & Thomas Helie
+// (DAFx-19, Paper 6): "A Minimal Passive Model of the Operational Amplifier:
+// Application to Sallen-Key Analog Filters" (Sections 2.3 & 4, Eq. 18-32, 40-42).
+// Captures BOTH nonlinear mechanisms of the vintage Korg MS-50 / MS-20 Sallen-Key
+// lowpass filter family:
+//   1. CA3019 6-Diode Bridge Cutoff Control Element (DAFx-17 Sec 2.1, Eq. 1-3):
+//      Superimposing the large-signal audio voltage v_s onto the bias voltage V_b
+//      across the exponential Shockley diodes (i_D = I_b * exp(v_s / (n*v_T)))
+//      modulates the dynamic equivalent resistances r_A||r_B and r_C||r_D (Fig. 3c)
+//      with the signal itself, creating signal-dependent cutoff FM and odd/even
+//      ring-modulator-like sidebands!
+//   2. Conservative Asymmetric Rail-Saturating Sallen-Key Op-Amp IC4 (DAFx-19
+//      Sec 2.3 & 4, Eq. 18 & 40-41): e_out = V_cm + V_dm * tanh(K * eps / V_dm)
+//      with clipping diodes D5-D12 in the positive Sallen-Key feedback loop!
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
+//   in3: Tracked Tuba Pitch f0 in Hz (scales Sallen-Key cutoff frequency in Hz)
+//   in4: Modulation Signal in Hz (modulates diode-bridge bias cutoff in Hz)
+// Outlets:
+//   out1: Left Korg MS-50 Diode-Bridge Sallen-Key Output
+//   out2: Right Korg MS-50 Diode-Bridge Sallen-Key Output
+
+@param({ min: 35.0, max: 12000.0 }) cutoff_hz = 310.0;
+@param({ min: 0.0, max: 2.95 }) sk_feedback_g = 2.15;
+@param({ min: 0.0, max: 1.0 }) diode_bridge_mod = 0.65;
+@param({ min: 0.0, max: 1.0 }) opamp_rail_asym = 0.40;
+@param({ min: 0.0, max: 24.0 }) bridge_drive_db = 9.0;
+@param({ min: 0.0, max: 4.0 }) pitch_track_amt = 1.5;
+@param({ min: -2.0, max: 2.0 }) mod_hz_depth = 1.0;
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.95;
+
+// 2x-oversampled Sallen-Key capacitor states vC1 (feedback cap C13) & vC2 (ground cap C11||C12)
+@state sC1_L = 0.0; @state sC2_L = 0.0; @state vOutPrevL = 0.0;
+@state sC1_R = 0.0; @state sC2_R = 0.0; @state vOutPrevR = 0.0;
+
+// DC blocking states (MS-50 rightmost differential DC blocking stage, Sec 2)
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
+
+// Fallback ZC pitch tracker & parameter slews
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 58.27;
+@state smoothF0 = 58.27;
+@state smoothCut = 310.0;
+@state smoothG = 2.15;
+
+// Helper: Muller & Helie (DAFx-19 Eq. 18 & 40) Asymmetric Power-Rail Sallen-Key Op-Amp
+// + IC4 Clipping Diodes D5-D12 (DAFx-17 Sec 2)
+function skNonlinearOpAmp(vC2: number, G: number, asym: number): number {
+	// eS+ and eS- asymmetric supply rails (DAFx-19 Fig. 4 & 9: e.g. +1.35 and -0.85)
+	let vCm = 0.28 * asym;
+	let vDm = 1.15;
+	let u = G * vC2;
+	// Blend smooth diode feedback clipping (D5-D12) with op-amp rail saturation (Eq. 18)
+	let railSat = vCm + vDm * tanh((u - vCm) / vDm);
+	let diodeClip = 0.65 * u + 0.35 * tanh(u * 1.8);
+	return 0.55 * railSat + 0.45 * diodeClip;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let pitchIn = in3;
+let modHz = in4;
+
+// --- 1. Pitch Tracking (in3 in Hz) + Modulation (in4 in Hz) ---
+let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1200.0) ? pitchIn : zcHz;
+let slew = 1.0 - exp(-1.0 / (0.004 * sr));
+smoothF0 += (rawF0 - smoothF0) * slew;
+smoothCut += (clamp(cutoff_hz, 35.0, 12000.0) - smoothCut) * slew;
+smoothG += (clamp(sk_feedback_g, 0.0, 2.95) - smoothG) * slew;
+
+let pHz = clamp(pitch_track_amt, 0.0, 4.0) * smoothF0;
+let mHz = clamp(mod_hz_depth, -2.0, 2.0) * modHz;
+
+let baseFcL = clamp(smoothCut + pHz + mHz, 25.0, sr * 0.42);
+let baseFcR = clamp(smoothCut * 1.015 + pHz + mHz * 0.94, 25.0, sr * 0.42);
+
+let drv = dbtoa(clamp(bridge_drive_db, 0.0, 24.0));
+let uInL = xL * drv;
+let uInR = xR * drv;
+
+let dbMod = clamp(diode_bridge_mod, 0.0, 1.0);
+let asym = clamp(opamp_rail_asym, 0.0, 1.0);
+let osSr = 2.0 * sr;
+
+let yOutL = 0.0;
+let yOutR = 0.0;
+
+// --- 2. 2x-Oversampled Diode-Bridge Sallen-Key State-Space Integration ---
+for (let step: Int = 0; step < 2; step++) {
+	// DAFx-17 Sec 2.1 Eq. 2-7: Dynamic conductance 1/r_d of the CA3019 6-diode bridge
+	// depends exponentially/hyperbolically on the superposition of bias Ib and signal vs!
+	// Branch 1 (r_A || r_B) sees (uIn - v_x); Branch 2 (r_C || r_D) sees (v_x - v_C2)
+	let vs1L = uInL - sC1_L;
+	let vs2L = sC1_L - sC2_L;
+	let condMod1L = clamp(1.0 + dbMod * (0.45 * vs1L + 0.35 * vs1L * vs1L), 0.25, 3.2);
+	let condMod2L = clamp(1.0 + dbMod * (-0.35 * vs2L + 0.45 * vs2L * vs2L), 0.25, 3.2);
+
+	let gBaseL = tan(pi * baseFcL / osSr);
+	let g1L = clamp(gBaseL * condMod1L, 0.0005, 0.95);
+	let g2L = clamp(gBaseL * condMod2L, 0.0005, 0.95);
+
+	// Sallen-Key KCL node equations (DAFx-17 Fig. 4 & DAFx-19 Fig. 8a-d):
+	// Node vx (C1 to vOut): dvC1/dt = g1*(uIn - vx) - g2*(vx - vC2), with vx = vC1 + fbOut
+	// Node v+ (C2 to GND):  dvC2/dt = g2*(vx - vC2)
+	let fbEstL = skNonlinearOpAmp(sC2_L, smoothG, asym);
+	let secGainL = (abs(sC2_L) > 0.001) ? clamp(fbEstL / sC2_L, 0.2, 2.92) : smoothG;
+
+	let denomL = 1.0 + g1L + g2L + g1L * g2L - g2L * secGainL;
+	let safeDenomL = maximum(denomL, 0.08);
+
+	let vC2_L = (sC2_L * (1.0 + g1L + g2L) + g2L * (sC1_L + g1L * uInL)) / safeDenomL;
+	yOutL = skNonlinearOpAmp(vC2_L, smoothG, asym);
+	let vX_L = vC2_L + (vC2_L - sC2_L) / maximum(g2L, 0.0001);
+	let vC1_L = vX_L - yOutL;
+
+	sC1_L = 2.0 * vC1_L - sC1_L;
+	sC2_L = 2.0 * vC2_L - sC2_L;
+	vOutPrevL = yOutL;
+
+	// Right channel
+	let vs1R = uInR - sC1_R;
+	let vs2R = sC1_R - sC2_R;
+	let condMod1R = clamp(1.0 + dbMod * (0.45 * vs1R + 0.35 * vs1R * vs1R), 0.25, 3.2);
+	let condMod2R = clamp(1.0 + dbMod * (-0.35 * vs2R + 0.45 * vs2R * vs2R), 0.25, 3.2);
+
+	let gBaseR = tan(pi * baseFcR / osSr);
+	let g1R = clamp(gBaseR * condMod1R, 0.0005, 0.95);
+	let g2R = clamp(gBaseR * condMod2R, 0.0005, 0.95);
+
+	let fbEstR = skNonlinearOpAmp(sC2_R, smoothG, asym);
+	let secGainR = (abs(sC2_R) > 0.001) ? clamp(fbEstR / sC2_R, 0.2, 2.92) : smoothG;
+
+	let denomR = 1.0 + g1R + g2R + g1R * g2R - g2R * secGainR;
+	let safeDenomR = maximum(denomR, 0.08);
+
+	let vC2_R = (sC2_R * (1.0 + g1R + g2R) + g2R * (sC1_R + g1R * uInR)) / safeDenomR;
+	yOutR = skNonlinearOpAmp(vC2_R, smoothG, asym);
+	let vX_R = vC2_R + (vC2_R - sC2_R) / maximum(g2R, 0.0001);
+	let vC1_R = vX_R - yOutR;
+
+	sC1_R = 2.0 * vC1_R - sC1_R;
+	sC2_R = 2.0 * vC2_R - sC2_R;
+	vOutPrevR = yOutR;
+}
+
+// --- 3. Output Differential Scaling & DC Blocker (DAFx-17 Sec 2) ---
+let normTrim = 1.0 / (sqrt(maximum(drv * 0.5, 1.0)) * maximum(smoothG * 0.55, 0.8));
+let rawL = yOutL * normTrim;
+let rawR = yOutR * normTrim;
+
+let cleanL = rawL - dcXL + 0.995 * dcYL;
+dcXL = rawL; dcYL = cleanL;
+let cleanR = rawR - dcXR + 0.995 * dcYR;
+dcXR = rawR; dcYR = cleanR;
+
+let mix = clamp(dry_wet_mix, 0.0, 1.0);
+out1 = linearinterp(mix, xL, tanh(cleanL * 1.25));
+out2 = linearinterp(mix, xR, tanh(cleanR * 1.25));

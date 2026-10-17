@@ -1,0 +1,54 @@
+================================================================================
+filter_kelly_lochbaum_vocal_tract — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo 8-section Kelly-Lochbaum 1-D digital waveguide vocal tract filter based on Damian T. Murphy, Mátyás Jani & Sten Ternström (DAFx-15 Paper 32, "Articulatory Vocal Tract Synthesis in SuperCollider", Sections 2 & 3, Eq. 1–8) and Perry R. Cook (DAFx-98 COO62). Rather than approximating vowels with isolated biquad peaks, this effect simulates forward and backward acoustic pressure waves travelling between the glottis/larynx and the lips across 8 cylindrical tube segments coupled by one-multiply Kelly-Lochbaum scattering junctions. The segment delay lengths scale dynamically with the tuba's fundamental pitch in Hz (`in3`) and external frequency modulation in Hz (`in4`), turning the brass horn into an articulatory dubstep talkbox and throat-growl engine.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (scales vocal tract tube length & formant tuning)
+- in4: Modulation Signal in Hz (modulates effective vocal tract frequency & tongue articulation)
+- out1 / out2: Stereo Kelly-Lochbaum Vocal Tract Output
+
+PARAMETERS (8)
+
+1. tongue_pos
+   - Range: 0.00 to 1.00 (0.0 = Posterior Pharyngeal Constriction / "AH-AW", 0.5 = Central Palatal / "OO-ER", 1.0 = Anterior Blade / "EE-IH"; Default: 0.35)
+   - Taper: Linear articulatory position along tube segments 1 to 6.
+   - Function: Moves the primary tongue body constriction from the throat toward the teeth, sweeping all coupled vocal tract formants simultaneously.
+
+2. tongue_constriction
+   - Range: 0.00 to 1.00 (0.0 = Wide Open Neutral Tube, 1.0 = Extreme 94% Area Pinch; Default: 0.72)
+   - Taper: Power curve (x^1.5) giving smooth vowel shaping in the middle and extreme whistling resonant reflections near 1.0.
+   - Function: Controls how tightly the tongue narrows the vocal tract cross-section, increasing reflection coefficients |r_i| and formant Q.
+
+3. lip_rounding
+   - Range: 0.00 to 1.00 (0.0 = Spread Open Lips, 1.0 = Tightly Rounded/Pursed Lips; Default: 0.40)
+   - Taper: Power curve (x^1.3) on terminal lip area A_7 and lip reflection coefficient.
+   - Function: Lowers F1 and F2 together to create deep, hollow "OO/OU" dubstep bass vowels and aggressive lip-buzz reflections.
+
+4. pitch_track_amt
+   - Range: 0.00 to 1.50 Hz/Hz (Formant-to-Pitch Tracking Ratio from in3 Hz; Default: 0.65)
+   - Taper: Linear Hz tracking ratio.
+   - Function: Scales the waveguide delay length inversely with the tuba's pitch in Hz so formants stay locked to the tuba's harmonic series across low pedal notes and high screams.
+
+5. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Sensitivity to Modulation Signal on in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar scaling of `in4` (Hz).
+   - Function: Shifts the vocal tract's effective resonant frequency and tongue position directly in Hz from an LFO, envelope, or audio-rate modulator on `in4`.
+
+6. glottal_refl
+   - Range: 0.20 to 0.99 (Glottal Boundary Reflection Coefficient; Default: 0.85)
+   - Taper: Linear reflection gain.
+   - Function: Sets the acoustic regeneration at the larynx termination; values above 0.90 make the waveguide ring like a resonant throat pipe on staccato tuba notes.
+
+7. larynx_drive_db
+   - Range: 0.0 to 24.0 dB (Pre-Waveguide Glottal Saturation Drive; Default: 8.0 dB)
+   - Taper: Logarithmic dB gain into hyperbolic tangent glottal waveshaper.
+   - Function: Enriches the tuba with dense high-frequency harmonics before entering the vocal tract so upper formants scream with tearout intensity.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Vocal Tract; Default: 0.90)
+   - Taper: Linear crossfade.
+   - Function: Blends the raw tuba with the Kelly-Lochbaum vocal tract output.

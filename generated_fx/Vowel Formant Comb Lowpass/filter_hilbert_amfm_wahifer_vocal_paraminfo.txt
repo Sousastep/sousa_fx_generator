@@ -1,0 +1,54 @@
+================================================================================
+filter_hilbert_amfm_wahifer_vocal — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Analytic AM/FM `"WahIFer"` Instantaneous-Frequency & Dual-Formant Vocal Modulator implementing Antonio José Homsi Goulart, Victor Lazzarini & Joseph Timoney (DAFx-15 Paper 30, "New Audio Effects Based on Time-Domain AM/FM Decomposition", Sections 2 & 3.5 `"WahIFer"`, Eq. 2–8 & 13, Fig. 7). Instead of only filtering the audio signal directly, the `WahIFer` extracts the analytic signal `z(t) = x(t) + j*x_hat(t)` via a 4-stage quadrature Hilbert transform to separate Instantaneous Amplitude `a(t) = |z(t)|` and Instantaneous Frequency `f(t) = d(theta)/dt` (Eq. 4–6). Passing the instantaneous frequency `f(t)` through a resonant bandpass wah filter `h(t)` and resynthesizing `x_wah(t) = a(t) * cos(2*pi * int(h(tau) * f(tau) dtau))` (Eq. 13) creates liquid, vocal FM sideband swaps that track the tuba's pitch (`in3`, Hz) and modulation (`in4`, Hz)!
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (anchors the IF carrier fundamental and vocal wah cutoff)
+- in4: Modulation Signal in Hz (modulates both the IF bandpass filter and audio vocal wah in Hz)
+- out1 / out2: Stereo AM/FM WahIFer Vocal Output
+
+PARAMETERS (8)
+
+1. if_wah_center_hz
+   - Range: 1.0 to 120.0 Hz (Instantaneous-Frequency Bandpass Filter Center Frequency, Default: 14.0 Hz)
+   - Taper: Direct frequency in Hz (DAFx-15 Section 3.5, Fig. 7).
+   - Function: Controls which modulation frequencies in the tuba's instantaneous frequency contour `f(t)` are resonantly amplified before FM phase re-integration. Low values (1–15 Hz) create liquid FM vowel glides; higher values (25–120 Hz) create gnarly dubstep FM sideband growls.
+
+2. if_fm_index
+   - Range: 0.50 to 6.00 (Filtered Instantaneous-Frequency Deviation Index, Default: 2.20)
+   - Taper: Linear FM deviation multiplier.
+   - Function: Scales the excursion of the wah-filtered instantaneous frequency `h(t) * f(t)` during cosine carrier resynthesis (Eq. 13).
+
+3. audio_wah_cutoff_hz
+   - Range: 250.0 to 3200.0 Hz (Coupled Audio-Domain Dual-Formant Wah Center Frequency, Default: 780.0 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Tunes the coupled audio-domain `F1/F2` resonant wah filters that sculpt the resynthesized AM/FM spectrum into clear vocal vowels.
+
+4. wah_resonance_q
+   - Range: 0.40 to 0.97 (Resonance Q of Both the IF Bandpass and Audio Formant Wah Filters, Default: 0.84)
+   - Taper: Linear SVF resonance control.
+   - Function: Increases the ringing selectivity of the `WahIFer` FM modulator and the vocal formant peaks.
+
+5. amfm_to_hybrid_mode
+   - Range: 0.00 to 1.00 (0.0 = Pure DAFx-15 Eq. 13 IF-Domain WahIFer, 1.0 = Coupled IF WahIFer + Dual-Formant Audio Wah; Default: 0.65)
+   - Taper: Linear blend.
+   - Function: Morphs from raw AM/FM phase-resynthesis (`0.0`) to a full hybrid FM + dual-formant vocal talkbox (`1.0`).
+
+6. pitch_track_amt
+   - Range: 0.00 to 3.00 Hz/Hz (Cutoff Pitch Tracking Multiplier from in3 in Hz; Default: 1.25)
+   - Taper: Linear harmonic ratio.
+   - Function: Scales the vocal wah formant frequencies in Hz with the tuba's pitch.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Modulates both the IF resynthesis carrier and the audio wah cutoff in Hz from `in4`.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet AM/FM WahIFer; Default: 0.90)
+   - Taper: Linear crossfade.
+   - Function: Blends the dry tuba with the stereo `WahIFer` output.

@@ -1,0 +1,54 @@
+================================================================================
+filter_sygyt_biphonic_overtone_vocal — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Tuvan Sygyt & Kargyraa Biphonic Overtone Singing vocal filter based on Mateo Cámara, María Pilar Daza-Llin et al. (DAFx-26 Paper 39, "Differentiable Articulatory Copy-Synthesis of Biphonic Singing", Sections 1, 2.1, 2.2 & 3.2, Fig. 1–2) and Malte Kob et al. (DAFx-99 Paper kob). In sygyt throat singing, the performer sustains a deep fundamental drone (`F1`) while converging the second and third vocal tract formants (`F2 ≈ F3`) and narrowing their bandwidth to ~15–30 Hz under pharyngeal constriction so a single harmonic (`h2..h16`) whistles out above the bass drone. This effect combines a sublingual/kargyraa period-doubling throat exciter, a nasal/pharyngeal antiresonance notch, a chest drone resonator, and a pitch-tracked `F2/F3` formant-merging overtone laser.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (locks the whistling sygyt overtone to `overtone_harmonic * f0`)
+- in4: Modulation Signal in Hz (sweeps the merged F2/F3 overtone ridge directly in Hz)
+- out1 / out2: Stereo Sygyt Biphonic Vocal Filter Output
+
+PARAMETERS (8)
+
+1. overtone_harmonic
+   - Range: 2.0 to 16.0 (Harmonic Partial Multiplier `N` of Tracked Pitch `f0`, Default: 6.0)
+   - Taper: Continuous harmonic multiplier (can lock onto integer harmonics h3, h5, h6, h8, h12 or sweep continuously across partials).
+   - Function: Selects which harmonic partial of the tuba's pitch is isolated and whistled by the converged `F2/F3` sygyt ridge.
+
+2. formant_merge_focus
+   - Range: 0.00 to 1.00 (0.0 = Separated Vowel Formants F2 & F3, 1.0 = Coincident Cascaded F2 = F3 Sygyt Merge; Default: 0.82)
+   - Taper: Power curve (x^1.4) transitioning both frequency separation and filter topology from parallel to series-coupled (DAFx-26 Section 2.1).
+   - Function: Merges `F2` and `F3` onto the exact same frequency to create the piercing 4-pole biphonic whistle characteristic of Tuvan sygyt.
+
+3. sygyt_bandwidth_hz
+   - Range: 15.0 to 250.0 Hz (3-dB Bandwidth of the F2/F3 Resonant Peak, Default: 32.0 Hz)
+   - Taper: Direct bandwidth in Hz mapped inversely to SVF Q.
+   - Function: Narrows the formant bandwidth down to the 15–20 Hz pharyngeal constriction regime (Klingholz, DAFx-26 Sec 2.1) so single harmonics ring like a flute over the brass bass.
+
+4. sublingual_kargyraa
+   - Range: 0.00 to 1.00 (Sublingual / False-Vocal-Fold Nonlinear Throat Excitation, Default: 0.45)
+   - Taper: Linear blend + drive scaling (DAFx-26 Section 3.2).
+   - Function: Injects a zero-crossing-locked subharmonic (`f0 / 2`) kargyraa growl and laryngeal impulse saturation so high overtones have rich harmonic energy to excite them.
+
+5. nasal_cavity_notch
+   - Range: 0.00 to 1.00 (Nasal-Pharyngeal Coupling Antiresonance Depth, Default: 0.65)
+   - Taper: Linear notch depth at `0.58 * F2`.
+   - Function: Carves a deep spectral valley between the low `F1` drone and the whistling `F2/F3` overtone ridge so the two biphonic voices separate cleanly.
+
+6. pitch_track_amt
+   - Range: 0.00 to 1.50 Hz/Hz (Pitch Tracking Ratio from in3 in Hz; Default: 1.00)
+   - Taper: Linear tracking scaling.
+   - Function: At 1.0, the sygyt overtone filter tracks the tuba's fundamental pitch in Hz 1:1 so the selected harmonic stays locked as you play melodies.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Allows an LFO, envelope, or audio-rate oscillator on `in4` (in Hz) to sweep the whistling sygyt formant across the tuba's harmonic series.
+
+8. whistle_boost_db
+   - Range: 0.0 to 24.0 dB (Sygyt Overtone Ridge Gain Boost, Default: 14.0 dB)
+   - Taper: Logarithmic dB boost.
+   - Function: Controls the prominence of the high whistling overtone relative to the low fundamental tuba drone.

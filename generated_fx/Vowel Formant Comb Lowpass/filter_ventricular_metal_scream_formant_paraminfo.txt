@@ -1,0 +1,56 @@
+================================================================================
+filter_ventricular_metal_scream_formant — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Extreme-Metal Ventricular-Fold & Dynamic Formant Roar/Screech Filter implementing Eric Smialek, Philippe Depalle & David Brackett (DAFx-12 Paper 55, "Musical Aspects of Vowel Formants in the Extreme Metal Voice", Sections 1.1, 1.2, 1.3 & 2.1, Fig. 1) and Julian Neri & Philippe Depalle (DAFx-17 Paper 66). Models the physiological mechanisms used by extreme metal vocalists to produce beastly guttural roars and piercing high screams, directly applicable to modern tearout dubstep and riddim tuba performance:
+1. Ventricular Folds ("False Vocal Chords", Section 1.1): Generates mucous-membrane subharmonic (`f0 / 2`) and pink-noise turbulence modulation that spreads the tuba's harmonic spectrum into a guttural growl.
+2. Exhaled Beast Growl vs. Inhaled 4 kHz Screech Vowel Alteration (Sections 1.1, 1.2 & 2.1): Morphs from lowered-larynx/rounded-lip `/u/–/ɔ/` death-metal growls (`F1 ~ 310 Hz`, `F2 ~ 760 Hz`) to shortened-tract/spread-lip `/a/–/æ/–/i/` black-metal screeches with intense `3.6–4.3 kHz` spectral energy concentration and rapid emotional `F1` contour fluctuations (Williams & Stevens, Section 3).
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (locks the ventricular subharmonic oscillator and formant tracking)
+- in4: Modulation Signal in Hz (drives rapid `F1/F2` vowel alterations in Hz)
+- out1 / out2: Stereo Extreme-Metal Ventricular Formant Output
+
+PARAMETERS (8)
+
+1. growl_to_screech_vowel
+   - Range: 0.00 to 1.00 (0.0 = Exhaled Death-Metal `/u/–/ɔ/` Guttural Beast Growl, 1.0 = Inhaled `/a/–/i/` High Screech; Default: 0.35)
+   - Taper: Power curve (`x^1.2` on `F1`, `x^1.4` on `F2`) matching DAFx-12 Section 2.1 Utterances 3–5.
+   - Function: Sweeps the vowel formants from deep subterranean monster vowels to tearing high-register screams.
+
+2. ventricular_fold_chaos
+   - Range: 0.00 to 1.00 (False-Vocal-Fold Subharmonic & Pink-Turbulence Roughness, Default: 0.68)
+   - Taper: Power curve (`x^1.3`) on laryngeal saturation and subharmonic AM/PM modulation (DAFx-12 Section 1.1).
+   - Function: Controls the guttural "throat-fry" distortion before the vocal tract resonators.
+
+3. tract_length_jaw
+   - Range: 0.50 to 1.80 (Effective Vocal Tract Length / Jaw & Larynx Lowering Ratio, Default: 1.15)
+   - Taper: Inverse formant scaling `1 / tract_length_jaw` (DAFx-12 Section 1.2, Fig. 1).
+   - Function: Values above `1.0` tilt the virtual head forward, lower the larynx, and round the lips to imitate an inhumanly large beast (`1.80`); values below `1.0` shorten the vocal tract into a demonic shriek (`0.50`).
+
+4. f1_emotional_tremor
+   - Range: 0.00 to 2.00 (Envelope- & Subharmonic-Driven `F1` Contour Fluctuation Depth, Default: 0.70)
+   - Taper: Linear modulation depth in Hz (up to +680 Hz dynamic `F1` jump on loud blasts).
+   - Function: Implements the rapid `F1` frequency envelope fluctuations cited in DAFx-12 Abstract & Section 3 as the primary acoustic correlate of extreme vocal aggression.
+
+5. inhale_4khz_pierce
+   - Range: 0.00 to 1.00 (High-Register 3.6–4.3 kHz Inhaled Scream Formant Cluster Gain, Default: 0.55)
+   - Taper: Linear gain scaling weighted by `growl_to_screech_vowel` (DAFx-12 Section 1.1, p. 1).
+   - Function: Controls the piercing ~4000 Hz spectral energy peak characteristic of inhaled extreme vocals and tearout dubstep screeches.
+
+6. pitch_track_amt
+   - Range: 0.00 to 3.00 Hz/Hz (Formant Pitch Tracking Ratio from in3 in Hz; Default: 1.00)
+   - Taper: Linear Hz tracking ratio.
+   - Function: Shifts the scream formants in Hz with the tuba's fundamental pitch.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Lets an external LFO, envelope, or audio-rate modulator on `in4` (in Hz) whip the growl-to-screech vowel trajectory back and forth.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Extreme Vocal Filter; Default: 0.92)
+   - Taper: Linear crossfade.
+   - Function: Blends the dry tuba with the extreme-metal ventricular formant output.

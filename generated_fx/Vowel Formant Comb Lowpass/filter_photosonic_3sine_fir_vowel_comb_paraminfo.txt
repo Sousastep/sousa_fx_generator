@@ -1,0 +1,57 @@
+================================================================================
+filter_photosonic_3sine_fir_vowel_comb — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo emulation of the optical "Photosonic" FIR Vowel Matrix & Square Comb Scanner from Daniel Arfib, Jean-Michel Couturier & Loïc Kessous (DAFx-02, "Gestural Strategies for Specific Filtering Processes", Sections 2.1 & 2.2, Eq. 1–2, Fig. 1–7). In the Photosonic instrument, an optical filter grating is placed in front of a bell-shaped solar photocell window (`w_i`), producing a windowed FIR impulse response `h_i = M_{x, y+i} * w_i` (Eq. 1):
+1. 3-Sine Vowel Matrix (Section 2.2, Fig. 6 & 7): Summing three sinusoidal gratings that sweep between male `"EE"` (270, 2290, 3010 Hz) and male `"AAH"` (730, 1090, 2440 Hz) creates a zero-feedback FIR vowel filter whose formant bandwidth is inversely proportional to the photocell window width (`photocell_win_ms`).
+2. Square Optical Comb Grating (Section 2.2, Fig. 4): Morphing the grating toward a square wave generates an odd-harmonic optical comb filter.
+3. Vertical Doppler Translation (Section 2.2, p. 2): Translating the grating vertically inside the stationary photocell window produces true phase-continuous Doppler vibrato and spectral scanning without changing the underlying delay tap spacing.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (shifts the 3-sine vowel & square comb grating frequencies)
+- in4: Modulation Signal in Hz (scans the horizontal EE-to-AAH coordinate and vertical Doppler rate)
+- out1 / out2: Stereo Photosonic FIR Vowel/Comb Output
+
+PARAMETERS (8)
+
+1. ee_to_aah_scan
+   - Range: 0.00 to 1.00 (0.0 = Male "EE" [270, 2290, 3010 Hz], 1.0 = Male "AAH" [730, 1090, 2440 Hz]; Default: 0.35)
+   - Taper: Linear horizontal matrix scan (DAFx-02 Section 2.2, Fig. 6).
+   - Function: Scans horizontally across the 3-sine optical matrix, sweeping `F1` upward while `F2` and `F3` sweep downward.
+
+2. photocell_win_ms
+   - Range: 2.0 to 28.0 ms (Photocell Aperture Window Duration, Default: 11.0 ms)
+   - Taper: Direct time span in milliseconds.
+   - Function: Controls the width of the Hann photocell window (`w_i`, Fig. 3 & 7). Short windows (2–5 ms) produce broad, punchy formants; wide windows (15–28 ms) produce narrow, resonant metallic vowel peaks.
+
+3. sine_to_square_comb
+   - Range: 0.00 to 1.00 (0.0 = 3-Sine Vowel Formant Grating Fig. 6, 1.0 = Square Odd-Harmonic Comb Grating Fig. 4; Default: 0.25)
+   - Taper: Linear crossfade with hyperbolic tangent square-edge sharpening.
+   - Function: Morphs the optical mask from a 3-formant vocal filter into an odd-harmonic square comb filter.
+
+4. doppler_vert_shift
+   - Range: 0.00 to 8.00 Hz (Vertical Grating Translation / Doppler Rate in Hz, Default: 1.50 Hz)
+   - Taper: Direct translation frequency in Hz.
+   - Function: Translates the sinusoidal/square wave grating continuously inside the photocell window (DAFx-02 p. 2), producing a lush quadrature stereo Doppler chorus and barberpole phase animation.
+
+5. formant_freq_scale
+   - Range: 0.40 to 2.50 (Optical Grating Frequency Multiplier, Default: 1.00)
+   - Taper: Linear frequency multiplier.
+   - Function: Scales the Csound `"EE"–"AAH"` formant frequencies down into the bass register (0.4x) or up into screaming treble (2.5x).
+
+6. pitch_track_amt
+   - Range: 0.00 to 2.00 Hz/Hz (Pitch Tracking Sensitivity to in3 in Hz; Default: 0.80)
+   - Taper: Linear Hz tracking ratio.
+   - Function: Shifts the optical grating frequencies in Hz with the tuba's fundamental pitch.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Lets the Hz signal on `in4` scan the horizontal `"EE-AAH"` matrix and accelerate the vertical Doppler shift.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Photosonic FIR Filter; Default: 0.85)
+   - Taper: Linear crossfade.
+   - Function: Blends the dry tuba with the Photosonic windowed FIR output.

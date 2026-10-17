@@ -1,0 +1,56 @@
+================================================================================
+filter_vplpc_vocal_effort_formant — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Variable Pre-Emphasis Vocal Effort & Pulsed Aspiration Formant Filter implementing Karl I. Nordstrom & Peter F. Driessen (DAFx-06 Paper p_157, "Variable Pre-Emphasis LPC for Modeling Vocal Effort in the Singing Voice", Sections 1.1, 2.1, 2.2 & Fig. 1, 3–5). Standard formant filters apply a static spectral tilt regardless of vocal intensity. This effect explicitly models the glottal source spectral envelope (`A_PN`) separately from the 4-formant vocal tract filter (`1/A_F`):
+1. Vocal Effort & 2–3 kHz Singer's Hump (Section 1.1 & 2.1, Fig. 1 & 4): Sweeping `vocal_effort` transitions the excitation from a lax, low-passed glottal wave to a compressed, reduced-open-quotient glottal pulse with a resonant 2–3 kHz high-effort spectral hump (`effort_hump_hz`).
+2. Pitch-Synchronous Pulsed Aspiration Noise (Section 2.2, Fig. 5): Generates broadband aspiration noise gated at a 50% duty cycle locked to the tuba's fundamental pitch (`in3`, Hz) and blended via matched high-pass/low-pass filters before exciting the formant bank.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (synchronizes the 50% duty-cycle aspiration noise & tracks formants)
+- in4: Modulation Signal in Hz (modulates vowel formants, effort hump, and vocal effort in Hz)
+- out1 / out2: Stereo Variable Vocal Effort Formant Output
+
+PARAMETERS (8)
+
+1. vocal_effort
+   - Range: 0.00 to 1.00 (0.0 = Lax / Mellow Voice Fig. 4a, 1.0 = High-Effort Strained Scream Fig. 4b; Default: 0.70)
+   - Taper: Power curve (x^1.6) on glottal compression drive and linear boost on upper formants `F2..F4`.
+   - Function: Transforms the tuba from a dark, relaxed hum into a strained, high-effort dubstep vocal roar.
+
+2. vowel_morph
+   - Range: 0.00 to 1.00 (Continuous 5-Vowel Trajectory: 0.00 = "OO", 0.25 = "OH", 0.50 = "AH", 0.75 = "EH", 1.00 = "EE"; Default: 0.45)
+   - Taper: Piecewise linear formant interpolation across `F1`, `F2`, and `F3`.
+   - Function: Sweeps the vocal tract filter (`1/A_F`) smoothly through five classic singing vowels.
+
+3. pulsed_aspiration
+   - Range: 0.00 to 1.00 (Pitch-Synchronized 50%-Duty-Cycle Breath/Chuff Noise Level, Default: 0.25)
+   - Taper: Linear amplitude scaling tied to input RMS envelope (DAFx-06 Section 2.2).
+   - Function: Adds rhythmic, pitch-locked breathy chuffing that excites the upper formants like a whispering or growling human vocalist.
+
+4. effort_hump_hz
+   - Range: 1800.0 to 4200.0 Hz (High-Effort Pre-Emphasis Resonance Center Frequency, Default: 2650.0 Hz)
+   - Taper: Direct frequency in Hz (DAFx-06 Section 2.1, Fig. 4b).
+   - Function: Tunes the broad 2–3 kHz "singer's effort" pre-emphasis peak that gives strained vocals and tearout bass their midrange bite.
+
+5. pole_bwe_radius
+   - Range: 0.50 to 1.40 (Bandwidth Expansion / Pole Radius Scaling Factor, Default: 0.96)
+   - Taper: Linear pole-radius scaling (values > 1.0 push the formant poles close to self-oscillation).
+   - Function: Controls the bandwidth expansion (BWE, Section 2.1) of the 4 vocal tract formants from wide natural speech to razor-sharp resonant peaks.
+
+6. pitch_track_amt
+   - Range: 0.00 to 1.50 Hz/Hz (Formant Frequency Pitch Tracking from in3 in Hz; Default: 0.80)
+   - Taper: Linear Hz tracking ratio.
+   - Function: Shifts the vowel formants in Hz with the tuba's fundamental pitch.
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Modulates both the vowel formant frequencies and vocal effort from the Hz signal on `in4`.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Vocal Effort Filter; Default: 0.90)
+   - Taper: Linear crossfade.
+   - Function: Blends the dry tuba with the VPLPC vocal-effort formant output.

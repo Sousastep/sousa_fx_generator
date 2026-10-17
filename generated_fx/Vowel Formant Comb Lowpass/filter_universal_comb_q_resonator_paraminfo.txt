@@ -1,0 +1,54 @@
+================================================================================
+filter_universal_comb_q_resonator — Parameter Information
+================================================================================
+
+OVERVIEW
+A stereo Unity-Gain Q-Normalized Universal Comb Filter & Sympathetic Pipe Resonator implementing DAFx-21 Paper 2 ("Separation of Harmonic Signals", Sections 4.1–4.5 & 5.1, Eq. 6–19, Fig. 4–7) and P. Dutilleux (DAFx-98 DUT52, Sections 3.2 & 3.8). Standard IIR comb filters explode in volume (+20 to +40 dB) when feedback approaches 1.0 and cannot reach zero-magnitude nulls between harmonics. This effect implements the canonical single-delay-line Universal Comb Filter (cascaded FIR + IIR comb sharing state `xh[n]`, Eq. 8) parameterized directly by quality factor `Q` via `beta = tan(pi / (2*Q))`, `a_M = (1 - beta)/(1 + beta)`, and `b_0 = b_M = beta/(1 + beta)` (Eq. 10, 14, 18). Peak gain stays strictly normalized to unity (0 dB) even at extreme `Q = 80`, while a coupled sympathetic resonator branch (Section 5.1) adds power-chord/octave metallic riddim overtones.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in3: Tracked Tuba Pitch f0 in Hz (tunes the comb delay `M = fs / (harmonic_mult * f0)`)
+- in4: Modulation Signal in Hz (modulates the comb resonant frequency in Hz for flanging/chirps)
+- out1 / out2: Stereo Universal Comb Resonator Output
+
+PARAMETERS (8)
+
+1. harmonic_mult
+   - Range: 0.50 to 16.00 (Comb Fundamental Ratio Relative to Tuba Pitch `f0`, Default: 2.00)
+   - Taper: Continuous harmonic multiplier (0.5 = sub-octave pipe, 1.0 = unison, 2.0 = octave, 3.0 = twelfth, up to 16th partial).
+   - Function: Tunes the primary comb teeth `k * f1` to any harmonic or subharmonic of the tuba.
+
+2. comb_q_factor
+   - Range: 2.0 to 80.0 (Universal Comb Quality Factor `Q = f1 / BW_3dB`, Default: 14.0)
+   - Taper: Direct analytical quality factor `Q` (DAFx-21 Eq. 13–19, Fig. 5 & 7).
+   - Function: Narrower `Q` values isolate razor-thin harmonic teeth and lengthen the decay time `t60` without increasing peak passband gain.
+
+3. fir_iir_polarity
+   - Range: -1.00 to +1.00 (-1.0 = Half-Wavelength Odd-Harmonic Clarinet/Pipe Comb, +1.0 = Full-Wavelength All-Harmonic Comb; Default: +0.65)
+   - Taper: Linear bipolar polarity control on `a_M` and `b_M` (DAFx-21 Sections 4.1 & 4.2).
+   - Function: Positive values align comb peaks with integer multiples of `f1`; negative values shift the comb peaks by `pi / M`, creating hollow, woody odd-harmonic square-pipe tones.
+
+4. sympathetic_fifth
+   - Range: 0.00 to 1.00 (Coupled Sympathetic Pipe Resonator Level, Default: 0.35)
+   - Taper: Linear blend (DAFx-21 Section 5.1).
+   - Function: Excites a secondary Q-normalized comb resonator tuned to a 3:2 fifth (Left) and 2:1 octave (Right) for wide stereo riddim chordal resonance.
+
+5. loop_damping_hz
+   - Range: 300.0 to 16000.0 Hz (Feedback Loop One-Pole Lowpass Cutoff, Default: 5500.0 Hz)
+   - Taper: Direct cutoff frequency in Hz (DAFx-98 DUT52 Section 3.8 "Natural sounding resonators").
+   - Function: Damps high-frequency comb teeth faster than low-frequency teeth, morphing from dark acoustic brass/woodwind tubes (300–1200 Hz) to icy metallic dubstep pipes (8–16 kHz).
+
+6. pitch_track_amt
+   - Range: 0.00 to 1.50 Hz/Hz (Pitch Tracking Ratio from in3 in Hz; Default: 1.00)
+   - Taper: Linear tracking ratio.
+   - Function: Controls whether the comb delay tracks the tuba's pitch in Hz (1.0) or stays anchored at a fixed resonant frequency (0.0).
+
+7. mod_hz_depth
+   - Range: -2.00 to +2.00 Hz/Hz (Modulation Sensitivity to in4 in Hz; Default: 1.00)
+   - Taper: Linear bipolar Hz scaling.
+   - Function: Modulates the comb fundamental frequency in Hz from `in4` with opposite stereo skew for metallic dubstep comb-flanging.
+
+8. dry_wet_mix
+   - Range: 0.00 to 1.00 (0% Dry to 100% Wet Universal Comb; Default: 0.85)
+   - Taper: Linear crossfade.
+   - Function: Balances the dry tuba with the Q-normalized Universal Comb output.
