@@ -95,6 +95,7 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 - wave_pulse_phase_modulator.maxpat 			sounds super broken
 - comp_fairchild_6386_varimu.maxpat 			broken: doesn't pass audio when mix is 1
 
+## Day 3 - vowel, formant, vocal, lowpass 
 - filter_crybaby_fasel_inductor_wah.txt 		* good old fashoned wah
 - filter_universal_comb_q_resonator.txt 		* sounds quite good as far as basic combs go
 - filter_ventricular_metal_scream_formant.txt 	* sounds really good
