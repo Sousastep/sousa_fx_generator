@@ -7,6 +7,9 @@ Each effect lives as two files in ``generated_fx/<category>/``::
     <name>.txt           the RNBO codebox~ source (verbatim)
     <name>_paraminfo.txt human readable parameter documentation
 
+Output mirrors that layout, so ``generated_fx/<category>/<name>.txt`` becomes
+``generated_maxpat/<category>/<name>.maxpat``.
+
 The generated ``.maxpat`` mirrors the structure of the hand-made examples in
 ``generated_maxpat/``: a top level demo patcher that wires ``receive~ inN`` /
 ``send~ outN`` pairs into a single embedded ``rnbo~`` object, whose nested
@@ -1031,16 +1034,23 @@ def build_maxpat(effect: Effect) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def discover_effects(root: str) -> list[tuple[str, str]]:
-    """Return ``(txt_path, paraminfo_path)`` pairs for every effect under root."""
+def discover_effects(root: str) -> list[tuple[str, str, str]]:
+    """Return ``(txt_path, paraminfo_path, rel_dir)`` for every effect under root.
+
+    ``rel_dir`` is the effect's directory relative to ``root`` (``""`` when the
+    effect sits directly in the root), so the caller can mirror the tree.
+    """
     pattern = os.path.join(root, "**", "*.txt")
-    effects: list[tuple[str, str]] = []
+    effects: list[tuple[str, str, str]] = []
     for txt in sorted(glob.glob(pattern, recursive=True)):
         base = os.path.basename(txt)
         if base.endswith("_paraminfo.txt"):
             continue
         paraminfo = os.path.splitext(txt)[0] + "_paraminfo.txt"
-        effects.append((txt, paraminfo))
+        rel_dir = os.path.relpath(os.path.dirname(txt), root)
+        if rel_dir == os.curdir:
+            rel_dir = ""
+        effects.append((txt, paraminfo, rel_dir))
     return effects
 
 
@@ -1058,21 +1068,22 @@ def main(argv: list[str] | None = None) -> int:
     found = discover_effects(args.src)
     if args.only:
         wanted = set(args.only)
-        found = [(t, p) for t, p in found if os.path.splitext(os.path.basename(t))[0] in wanted]
+        found = [e for e in found if os.path.splitext(os.path.basename(e[0]))[0] in wanted]
 
     if not found:
         print("No effects found.", file=sys.stderr)
         return 1
 
     if args.list:
-        for txt, _ in found:
-            print(os.path.splitext(os.path.basename(txt))[0])
+        for txt, _, rel_dir in found:
+            name = os.path.splitext(os.path.basename(txt))[0]
+            print(os.path.join(rel_dir, name) if rel_dir else name)
         return 0
 
     os.makedirs(args.outdir, exist_ok=True)
 
     count = 0
-    for txt, paraminfo in found:
+    for txt, paraminfo, rel_dir in found:
         effect = parse_effect(txt, paraminfo)
         if effect.n_in < 1 or effect.n_out < 1:
             print(
@@ -1081,7 +1092,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             continue
         patcher = build_maxpat(effect)
-        out_path = os.path.join(args.outdir, f"{effect.name}.maxpat")
+        out_dir = os.path.join(args.outdir, rel_dir)
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"{effect.name}.maxpat")
         with open(out_path, "w", encoding="utf-8") as fh:
             json.dump(patcher, fh, indent=2)
             fh.write("\n")
