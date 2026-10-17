@@ -48,8 +48,8 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 
 ## Day 2 - PD/FM, chorus, compressor/limiter 
 - barberpole_comb_ssb_flanger.maxpat 			** Excellent metallic sounds.
-- modal_heterodyne_inverter_dist.maxpat 		** super cool, sounds great
-- heterodyne_pd_shaper.maxpat 					** sounds great
+- modal_heterodyne_inverter_dist.maxpat 		** super cool synth sound
+- heterodyne_pd_shaper.maxpat 					** great ring mod sound
 - retuned_exp_fm_ltz.maxpat 					** great synth sound when dialed in
 
 - chorus_bbd_blep_clock_matrix.maxpat 			** sounds excellent
@@ -95,3 +95,20 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 - wave_pulse_phase_modulator.maxpat 			sounds super broken
 - comp_fairchild_6386_varimu.maxpat 			broken: doesn't pass audio when mix is 1
 
+- filter_crybaby_fasel_inductor_wah.txt 		* good old fashoned wah
+- filter_universal_comb_q_resonator.txt 		* sounds quite good as far as basic combs go
+- filter_ventricular_metal_scream_formant.txt 	* sounds really good
+- filter_dispersive_allpass_comb_resonator.txt  ok comb reso
+- filter_ems_vcs3_diode_ladder.txt 				ok LPF
+- filter_huovilainen_1plus4_moog_ladder.txt 	ok moog
+- filter_heterodyne_ephasor_formant.txt 		no
+- filter_hilbert_amfm_wahifer_vocal.txt 		meh
+- filter_photosonic_3sine_fir_vowel_comb.txt  	ok
+- filter_vplpc_vocal_effort_formant.txt 		ok
+- filter_sygyt_biphonic_overtone_vocal.txt 		hm
+- filter_time_varying_sync_comb.txt 			hm loud
+- filter_voicer_2d_vowel_talkbox.txt 			interesting
+- filter_kelly_lochbaum_vocal_tract.txt 		interesting but not useful
+- filter_buchla292_vactrol_lowpass_gate.txt 	broken, no sound
+- filter_edp_wasp_cmos_ota_svf.txt 				broken, no sound
+- filter_korg_ms50_diode_ring_sallen_key.txt 	broken, no sound
