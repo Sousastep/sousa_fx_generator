@@ -63,6 +63,8 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 
 - buchla259_parallel_wavefolder.maxpat 			* very nice saturator
 - nonlinear_ladder_allpass.maxpat 				* very nice bright tone
+- vector_phaseshaper_lissajous.maxpat 			* strong distortion, can't turn it down, sounds good though
+- wave_pulse_phase_modulator.maxpat 			* same as above
 
 - chorus_bbd_compander_juno.maxpat 				* sounds very good
 - chorus_multiscale_random_env.maxpat 			* sounds quite good while dialed in
@@ -85,14 +87,13 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 - cm_allpass_chain_synth.maxpat 				hmm
 - chorus_supersaw_waveform_animator.maxpat 		meh
 
-- chorus_amfm_hilbert_chorifer.maxpat 			sounds broken
-- deformed_circle_map_fbfm.maxpat 				sounds broken
-- modfm_pulse_saw_formant.maxpat 				sounds broken, slow modulation
-- quadrature_chebyshev_shaper.maxpat  			sounds broken, clicks every second or so
-- heterodyne_fof_resonator.maxpat 				passes audio with subtle changes, likely broken
-- limiter_hamalainen_orderstat_peak.maxpat 		broken: doesn't pass audio when mix is 1 
-- vector_phaseshaper_lissajous.maxpat 			sounds broken
-- wave_pulse_phase_modulator.maxpat 			sounds super broken
+- chorus_amfm_hilbert_chorifer.maxpat 			badly gurgly
+- deformed_circle_map_fbfm.maxpat 				still sounds broken
+- modfm_pulse_saw_formant.maxpat 				still sounds broken
+- quadrature_chebyshev_shaper.maxpat  			works, uninteresting
+- heterodyne_fof_resonator.maxpat 				useless dirt
+- limiter_hamalainen_orderstat_peak.maxpat 		sounds good but ceiling does nothing when drive is 0? 
+
 - comp_fairchild_6386_varimu.maxpat 			broken: doesn't pass audio when mix is 1
 
 ## Day 3 - vowel, formant, vocal, lowpass 
