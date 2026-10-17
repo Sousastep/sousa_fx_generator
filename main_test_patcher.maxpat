@@ -9,17 +9,35 @@
             "modernui": 1
         },
         "classnamespace": "box",
-        "rect": [ 542.0, 143.0, 1544.0, 1263.0 ],
+        "rect": [ 35.0, 87.0, 1544.0, 1263.0 ],
         "boxes": [
             {
                 "box": {
-                    "id": "obj-11",
-                    "maxclass": "newobj",
-                    "numinlets": 2,
+                    "id": "obj-57",
+                    "maxclass": "button",
+                    "numinlets": 1,
                     "numoutlets": 1,
-                    "outlettype": [ "signal" ],
-                    "patching_rect": [ 515.0, 631.0, 53.0, 22.0 ],
-                    "text": "cycle~ 1"
+                    "outlettype": [ "bang" ],
+                    "parameter_enable": 0,
+                    "patching_rect": [ 759.5, 654.0, 24.0, 24.0 ]
+                }
+            },
+            {
+                "box": {
+                    "filename": "file_list.js",
+                    "id": "obj-55",
+                    "maxclass": "v8ui",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "parameter_enable": 0,
+                    "patching_rect": [ 759.5, 691.0, 298.0, 296.0 ],
+                    "textfile": {
+                        "filename": "file_list.js",
+                        "flags": 0,
+                        "embed": 0,
+                        "autowatch": 1
+                    }
                 }
             },
             {
@@ -33,7 +51,7 @@
                     "numinlets": 2,
                     "numoutlets": 2,
                     "outlettype": [ "signal", "float" ],
-                    "patching_rect": [ 401.0, 599.0, 56.0, 22.0 ],
+                    "patching_rect": [ 434.0, 611.0, 56.0, 22.0 ],
                     "sig": 0.0
                 }
             },
@@ -131,7 +149,7 @@
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "" ],
-                    "patching_rect": [ 1058.0, 1060.0, 54.0, 22.0 ],
+                    "patching_rect": [ 1018.5, 1125.0, 54.0, 22.0 ],
                     "text": "deferlow"
                 }
             },
@@ -142,8 +160,8 @@
                     "numinlets": 2,
                     "numoutlets": 1,
                     "outlettype": [ "" ],
-                    "patching_rect": [ 1172.0, 1035.0, 48.0, 22.0 ],
-                    "text": "pipe 33"
+                    "patching_rect": [ 1132.5, 1100.0, 48.0, 22.0 ],
+                    "text": "pipe 50"
                 }
             },
             {
@@ -153,7 +171,7 @@
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "open" ],
-                    "patching_rect": [ 1172.0, 1004.6666666666667, 42.0, 22.0 ],
+                    "patching_rect": [ 1132.5, 1070.0, 42.0, 22.0 ],
                     "text": "t open"
                 }
             },
@@ -164,8 +182,8 @@
                     "numinlets": 2,
                     "numoutlets": 1,
                     "outlettype": [ "" ],
-                    "patching_rect": [ 1058.0, 970.3333333333334, 48.0, 22.0 ],
-                    "text": "pipe 33"
+                    "patching_rect": [ 1018.5, 1035.0, 48.0, 22.0 ],
+                    "text": "pipe 50"
                 }
             },
             {
@@ -175,7 +193,7 @@
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "" ],
-                    "patching_rect": [ 1058.0, 1004.6666666666667, 105.0, 22.0 ],
+                    "patching_rect": [ 1018.5, 1070.0, 105.0, 22.0 ],
                     "text": "prepend autobuild"
                 }
             },
@@ -186,7 +204,7 @@
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "int" ],
-                    "patching_rect": [ 1058.0, 936.0, 22.0, 22.0 ],
+                    "patching_rect": [ 1018.5, 1001.0, 22.0, 22.0 ],
                     "text": "t 1"
                 }
             },
@@ -196,7 +214,7 @@
                     "maxclass": "newobj",
                     "numinlets": 1,
                     "numoutlets": 0,
-                    "patching_rect": [ 1058.0, 1091.0, 73.0, 22.0 ],
+                    "patching_rect": [ 1018.5, 1156.0, 73.0, 22.0 ],
                     "text": "s messages"
                 }
             },
@@ -247,37 +265,8 @@
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "" ],
-                    "patching_rect": [ 799.0, 936.0, 235.0, 22.0 ],
+                    "patching_rect": [ 759.5, 1001.0, 235.0, 22.0 ],
                     "text": "prepend script sendbox replaceme replace"
-                }
-            },
-            {
-                "box": {
-                    "id": "obj-20",
-                    "maxclass": "number",
-                    "numinlets": 1,
-                    "numoutlets": 2,
-                    "outlettype": [ "", "bang" ],
-                    "parameter_enable": 0,
-                    "patching_rect": [ 799.0, 656.0, 50.0, 22.0 ]
-                }
-            },
-            {
-                "box": {
-                    "code": "/* Max 9 v8.codebox: map an integer onto a generated .maxpat file path.\n *\n * 1. Paste this entire script into a v8.codebox in a Max patch that sits in\n *    this repository's root (the folder that holds generated_maxpat/).\n * 2. Send an integer to the box's single inlet. Outlet 0 then emits the full,\n *    absolute path of the corresponding .maxpat file.\n *\n * Indexing is 0-based by default: 0 -> the first name in a case-insensitive\n * sort of generated_maxpat/*.maxpat, 1 -> the second, and so on. Order does not\n * matter: any integer works because out-of-range values wrap modulo the file\n * count, so every integer still selects a real file. Set FIRST_INDEX to 1\n * below for one-based numbering.\n *\n * The directory is re-scanned on every input, so files added or removed while\n * Max is open are picked up without re-pasting the script. Subfolders and\n * non-.maxpat files are ignored.\n *\n * Extra inputs: `bang` re-emits the last path, `count` emits how many .maxpat\n * files were found.\n *\n * Uses Max's File/Folder/Patcher APIs, not Node's fs or npm packages.\n */\n\nvar DIRECTORY = \"generated_maxpat\"; // Relative to this patch, or an absolute Max path.\nvar FIRST_INDEX = 0;                // 0 for zero-based indices, 1 for one-based.\nvar EXTENSION = \".maxpat\";          // Case-insensitive extension filter.\n\nvar boxContext = this;              // jsthis: gives access to this.patcher.\nvar lastIndex = FIRST_INDEX;        // Index remembered by `bang`.\n\n// An integer in the inlet (or the `int` message) -> emit one file path.\nfunction msg_int(value) {\n    var index = asInteger(value);\n    if (index === null) {\n        error(\"maxpat index: not an integer: \" + value + \"\\n\");\n        return;\n    }\n    var found = collectPatchers();\n    if (!found.files.length) {\n        error(\"maxpat index: no \" + EXTENSION + \" files found (looked in \" +\n            found.directory + \").\\n\");\n        return;\n    }\n    lastIndex = index;\n    outlet(0, found.files[wrap(index - FIRST_INDEX, found.files.length)]);\n}\n\n// A float in the inlet rounds to the nearest integer, so either input works.\nfunction msg_float(value) {\n    msg_int(Math.round(value));\n}\n\n// Re-emit the path chosen by the most recent integer input.\nfunction bang() {\n    msg_int(lastIndex);\n}\n\n// Emit how many .maxpat files were found.\nfunction count() {\n    outlet(0, collectPatchers().files.length);\n}\n\n// ---------------------------------------------------------------------------\n// Helpers\n// ---------------------------------------------------------------------------\n\n// Scan the first candidate directory that actually contains matching files.\nfunction collectPatchers() {\n    var candidates = directoryCandidates();\n    for (var i = 0; i < candidates.length; i++) {\n        var found = scanDirectory(candidates[i]);\n        if (found.files.length) return found;\n    }\n    return { directory: candidates[0], files: [] };\n}\n\n// Candidate directories, most specific first: an absolute DIRECTORY, then this\n// patch's own folder joined with DIRECTORY, then DIRECTORY as written so Max\n// can resolve it through the search path.\nfunction directoryCandidates() {\n    if (isAbsolute(DIRECTORY)) return unique([DIRECTORY]);\n    var candidates = [];\n    var folder = patchFolder();\n    if (folder) candidates.push(joinPath(folder, DIRECTORY));\n    candidates.push(DIRECTORY);\n    return unique(candidates);\n}\n\n// List generator_maxpat/*.maxpat as absolute paths, sorted by name.\nfunction scanDirectory(directory) {\n    var files = [];\n    var resolved = directory;\n    var folder = null;\n    try {\n        folder = new Folder(directory);\n        // pathname is the full resolved path Max found for the folder.\n        resolved = folder.pathname || directory;\n        while (!folder.end) {\n            if (folder.filetype !== \"fold\" && hasExtension(folder.filename, EXTENSION)) {\n                files.push(joinPath(resolved, folder.filename));\n            }\n            folder.next();\n        }\n    } catch (ignored) {\n        files = [];\n    } finally {\n        if (folder) {\n            try { folder.close(); } catch (ignored) {}\n        }\n    }\n    files.sort(compareNames);\n    return { directory: resolved, files: files };\n}\n\n// The folder containing this patch, derived from this.patcher.filepath.\nfunction patchFolder() {\n    try {\n        var patcher = boxContext && boxContext.patcher;\n        var filepath = patcher && patcher.filepath;\n        if (typeof filepath === \"string\" && filepath.length) {\n            return splitPath(filepath).directory;\n        }\n    } catch (ignored) {}\n    return null;\n}\n\nfunction splitPath(path) {\n    var normalized = String(path).replace(/[\\\\]/g, \"/\");\n    var slash = normalized.lastIndexOf(\"/\");\n    if (slash < 0) return { directory: normalized, name: \"\" };\n    return {\n        directory: slash === 0 ? \"/\" : normalized.slice(0, slash),\n        name: normalized.slice(slash + 1)\n    };\n}\n\nfunction isAbsolute(path) {\n    var p = String(path);\n    return p.charAt(0) === \"/\" || /^[A-Za-z]:[\\/\\\\]/.test(p);\n}\n\nfunction joinPath(directory, name) {\n    var base = String(directory).replace(/[\\/\\\\]+$/, \"\");\n    if (!base) return name;\n    return base + \"/\" + name;\n}\n\nfunction hasExtension(name, extension) {\n    var lower = String(name).toLowerCase();\n    var suffix = String(extension).toLowerCase();\n    return lower.length >= suffix.length &&\n        lower.slice(lower.length - suffix.length) === suffix;\n}\n\n// Case-insensitive, with a case-sensitive tiebreak so the order is stable.\nfunction compareNames(a, b) {\n    var x = a.toLowerCase();\n    var y = b.toLowerCase();\n    if (x < y) return -1;\n    if (x > y) return 1;\n    return a < b ? -1 : (a > b ? 1 : 0);\n}\n\nfunction wrap(value, modulus) {\n    return ((value % modulus) + modulus) % modulus;\n}\n\nfunction asInteger(value) {\n    var n = typeof value === \"number\" ? value : Number(String(value).trim());\n    if (typeof n !== \"number\" || !isFinite(n) || Math.floor(n) !== n) return null;\n    return n;\n}\n\nfunction unique(values) {\n    var out = [];\n    for (var i = 0; i < values.length; i++) {\n        if (values[i] && out.indexOf(values[i]) < 0) out.push(values[i]);\n    }\n    return out;\n}\n",
-                    "filename": "none",
-                    "fontface": 0,
-                    "fontname": "<Monospaced>",
-                    "fontsize": 12.0,
-                    "id": "obj-14",
-                    "maxclass": "v8.codebox",
-                    "numinlets": 1,
-                    "numoutlets": 1,
-                    "outlettype": [ "" ],
-                    "patching_rect": [ 799.0, 694.0, 631.0, 228.0 ],
-                    "saved_object_attributes": {
-                        "parameter_enable": 0
-                    }
                 }
             },
             {
@@ -314,7 +303,7 @@
                     "lockeddragscroll": 0,
                     "lockedsize": 0,
                     "maxclass": "bpatcher",
-                    "name": "vector_phaseshaper_lissajous.maxpat",
+                    "name": "retuned_exp_fm_ltz.maxpat",
                     "numinlets": 0,
                     "numoutlets": 0,
                     "offset": [ 0.0, 0.0 ],
@@ -354,7 +343,7 @@
                     "numinlets": 1,
                     "numoutlets": 2,
                     "outlettype": [ "", "" ],
-                    "patching_rect": [ 799.0, 970.0, 67.0, 22.0 ],
+                    "patching_rect": [ 759.5, 1035.0, 67.0, 22.0 ],
                     "save": [ "#N", "thispatcher", ";", "#Q", "end", ";" ],
                     "text": "thispatcher"
                 }
@@ -2018,9 +2007,9 @@
                                     "numinlets": 1,
                                     "numoutlets": 1,
                                     "outlettype": [ "" ],
-                                    "patching_rect": [ 1080.0, 143.0, 175.0, 23.0 ],
+                                    "patching_rect": [ 1080.0, 143.0, 114.0, 23.0 ],
                                     "rnbo_classname": "setparam",
-                                    "rnbo_serial": 3,
+                                    "rnbo_serial": 5,
                                     "rnbo_uniqueid": "set_sift_speed",
                                     "rnboinfo": {
                                         "needsInstanceInfo": 1,
@@ -2064,7 +2053,7 @@
                                         "versionId": 1197449671,
                                         "changesPatcherIO": 0
                                     },
-                                    "text": "setparam sift_speed",
+                                    "text": "setparam IFT_speed",
                                     "varname": "set_sift_speed"
                                 }
                             },
@@ -2330,7 +2319,7 @@
                                     "maxclass": "comment",
                                     "numinlets": 1,
                                     "numoutlets": 0,
-                                    "patching_rect": [ 30.0, 523.0, 573.0, 784.0 ],
+                                    "patching_rect": [ 30.0, 523.0, 576.0, 784.0 ],
                                     "text": "================================================================================\n00_tuba_freq_tracker — Parameter Information\n================================================================================\n\nOVERVIEW\nA custom Tuba-Specialized Hybrid Pitch & Phasor Tracker that outperforms generic FFT-based YinFFT (fluid.pitch~) for live low-brass dubstep performance by uniting three complementary DSP architectures inside a single RNBO codebox~:\n1. 4x-Decimated Recursive Sliding YIN (CMNDF): Computes the Cumulative Mean Normalized Difference Function continuously in the time domain with parabolic sub-sample interpolation and a 3-point transient median filter, updating every 32 samples (0.66 ms) instead of waiting for a 2048/4096-sample FFT frame.\n2. Instantaneous Frequency Tracking (IFT): Isolates the tuba's fundamental via a dual-stage adaptive SVF bandpass filter tracked to the YIN anchor, computes the analytic signal s_a(t) = A(t)*e^(j*theta(t)) via a 4-stage quadrature Hilbert transform, and differentiates the unwrapped phase d(theta)/dt on EVERY sample (zero window latency).\n3. Phase-Locked Loop (PLL) Fusion: Uses YIN as an unbreakable octave/harmonic anchor while using IFT to track fast lip bends, vibrato, and glissandi within a +/- 18% window, holding the last valid pitch cleanly on note releases.\n\nINLETS & OUTLETS\n- in1 / in2: Stereo (or Mono on in1) Tuba Audio Input\n- in3: Optional External Pitch Hint in Hz (if fluid.pitch~ is patched here, blends with the internal YIN anchor for redundant lock)\n- out1: Tracked Fundamental Pitch f0 in Hz (patch directly into in3 of effects 01–18!)\n- out2: Pitch Confidence / Periodicity [0.0 to 1.0]\n- out3: Phase-Locked Tuba Phasor [0.0 to 1.0) (phase-locked sawtooth ramp at f0)\n- out4: Pure Phase-Locked Fundamental Sine Wave [-1.0 to 1.0] (scaled by confidence)\n\nPARAMETERS (4)\n\n1. min_freq_hz\n   - Range: 24.0 to 120.0 Hz (Default: 28.0 Hz, covering down to Pedal Bb0 = 29.14 Hz)\n   - Taper: Direct frequency in Hz.\n   - Function: Sets the longest lag boundary of the YIN autocorrelation search window. Raising this to ~38 Hz when not playing pedal notes further reduces latency and CPU.\n\n2. max_freq_hz\n   - Range: 150.0 to 700.0 Hz (Default: 420.0 Hz, covering up to high G4/Ab4)\n   - Taper: Direct frequency in Hz.\n   - Function: Sets the shortest lag boundary of the YIN search window and upper clamp of the tracker, preventing high brass lip buzz or valve clicks from triggering false high-frequency jumps.\n\n3. IFT_speed\n   - Range: 0.0 to 1.0 (0.0 = Pure Median-Filtered YIN, 1.0 = Full Zero-Latency IFT Instantaneous Frequency)\n   - Taper: Linear crossfade coupled with tracking time-constant reduction (from 10 ms down to 1.5 ms).\n   - Function: Controls how aggressively the zero-latency Hilbert phase differentiator (IFT) overrides the YIN lag estimator during fast lip slurs, pitch bends, and vibrato.\n\n4. gate_thresh_db\n   - Range: -60.0 to -18.0 dB (Default: -42.0 dB)\n   - Taper: Logarithmic dB-to-linear RMS threshold (dbtoa).\n   - Function: Freezes the tracked pitch f0 at its last valid frequency whenever the tuba's RMS level drops below this threshold, completely eliminating pitch-drop glitches at the end of notes.\n",
                                     "varname": "paraminfo_comment"
                                 }
@@ -4426,20 +4415,6 @@
             },
             {
                 "patchline": {
-                    "destination": [ "obj-19", 0 ],
-                    "order": 1,
-                    "source": [ "obj-14", 0 ]
-                }
-            },
-            {
-                "patchline": {
-                    "destination": [ "obj-28", 0 ],
-                    "order": 0,
-                    "source": [ "obj-14", 0 ]
-                }
-            },
-            {
-                "patchline": {
                     "destination": [ "obj-13", 0 ],
                     "source": [ "obj-17", 0 ]
                 }
@@ -4454,12 +4429,6 @@
                 "patchline": {
                     "destination": [ "obj-24", 0 ],
                     "source": [ "obj-2", 0 ]
-                }
-            },
-            {
-                "patchline": {
-                    "destination": [ "obj-14", 0 ],
-                    "source": [ "obj-20", 0 ]
                 }
             },
             {
@@ -4696,6 +4665,26 @@
             },
             {
                 "patchline": {
+                    "destination": [ "obj-19", 0 ],
+                    "order": 1,
+                    "source": [ "obj-55", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-28", 0 ],
+                    "order": 0,
+                    "source": [ "obj-55", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-55", 0 ],
+                    "source": [ "obj-57", 0 ]
+                }
+            },
+            {
+                "patchline": {
                     "destination": [ "obj-3", 0 ],
                     "source": [ "obj-8", 0 ]
                 }
@@ -4714,7 +4703,6 @@
             }
         ],
         "parameters": {
-            "obj-21::obj-9": [ "rnbo~[1]", "rnbo~", 0 ],
             "obj-4": [ "rnbo~", "rnbo~", 0 ],
             "obj-51": [ "live.gain~", "live.gain~", 0 ],
             "obj-53": [ "live.gain~[2]", "live.gain~", 0 ],

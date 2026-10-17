@@ -46,6 +46,7 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 - 00c · tuba_4harmonic_IFT_analyzer = utility
 - 00d · tuba_4op_modfm_resynthesizer = extreme
 
+## Day 2 - PD/FM, chorus, compressor/limiter 
 - barberpole_comb_ssb_flanger.maxpat 			** Excellent metallic sounds.
 - modal_heterodyne_inverter_dist.maxpat 		** super cool, sounds great
 - heterodyne_pd_shaper.maxpat 					** sounds great
