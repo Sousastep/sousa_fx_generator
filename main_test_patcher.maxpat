@@ -25,14 +25,29 @@
             },
             {
                 "box": {
-                    "filename": "file_list.js",
-                    "id": "obj-55",
-                    "maxclass": "v8ui",
+                    "id": "obj-91",
+                    "maxclass": "jweb",
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "" ],
-                    "parameter_enable": 0,
                     "patching_rect": [ 760.0, 682.0, 383.0, 292.0 ],
+                    "rendermode": 0,
+                    "url": "file_list.html"
+                }
+            },
+            {
+                "box": {
+                    "filename": "file_list.js",
+                    "id": "obj-55",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 2,
+                    "outlettype": [ "", "" ],
+                    "patching_rect": [ 1159.0, 740.0, 95.0, 22.0 ],
+                    "saved_object_attributes": {
+                        "parameter_enable": 0
+                    },
+                    "text": "v8 file_list.js",
                     "textfile": {
                         "filename": "file_list.js",
                         "flags": 0,
@@ -4712,6 +4727,18 @@
                     "destination": [ "obj-28", 0 ],
                     "order": 0,
                     "source": [ "obj-55", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-91", 0 ],
+                    "source": [ "obj-55", 1 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-55", 0 ],
+                    "source": [ "obj-91", 0 ]
                 }
             },
             {
