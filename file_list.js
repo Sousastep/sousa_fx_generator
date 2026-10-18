@@ -329,6 +329,9 @@ function savestate() { outlet(1, "savestate"); }
 function keydebug(v) { outlet(1, "keydebug", v); }
 function kbd(v) { outlet(1, "kbd", v); }
 
-// Ignore jweb's automatic page-load notifications ("url ..." / "title ...")
+// Ignore jweb's automatic page-load notifications ("url ...", "title ...", "onloadstart ...", "onloadend ...")
 function url() {}
 function title() {}
+function onloadstart() {}
+function onloadend() {}
+function anything() {}
