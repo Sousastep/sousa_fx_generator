@@ -1,0 +1,1682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sousa FX Generator — Effects Browser</title>
+<style>
+  :root {
+    --bg-main: #1d1d20;
+    --bg-list: #212124;
+    --bg-header: #2b2b30;
+    --bg-panel: #19191c;
+    --bg-hover: rgba(255, 255, 255, 0.08);
+    --bg-sel: #4073cc;
+    --bg-loaded: rgba(250, 194, 71, 0.08);
+    --gold: #fac247;
+    --text-main: #ebebeb;
+    --text-dir: #d9e0f2;
+    --text-muted: #9e9ea8;
+    --border-hairline: rgba(255, 255, 255, 0.10);
+    --border-focus: rgba(89, 140, 230, 0.90);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    background: var(--bg-main);
+    color: var(--text-main);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  #app {
+    display: flex;
+    flex-direction: row;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Left / Primary Tree List Pane */
+  #list-pane {
+    display: flex;
+    flex-direction: column;
+    width: 380px;
+    min-width: 240px;
+    max-width: 100%;
+    height: 100%;
+    background: var(--bg-list);
+    border-right: 1px solid var(--border-hairline);
+    flex-shrink: 0;
+    outline: none;
+  }
+
+  /* In compact jweb windows, allow toggled or full-width list with expandable info drawer */
+  body.compact #app {
+    flex-direction: column;
+  }
+  body.compact #list-pane {
+    width: 100%;
+    height: 100%;
+    border-right: none;
+  }
+  body.compact.show-info #list-pane {
+    height: 56%;
+    border-bottom: 1px solid var(--border-hairline);
+  }
+  body.compact #detail-pane {
+    display: none;
+    width: 100%;
+    height: 44%;
+  }
+  body.compact.show-info #detail-pane {
+    display: flex;
+  }
+
+  /* Fixed Header */
+  #header {
+    height: 30px;
+    min-height: 30px;
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border-hairline);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 8px;
+    gap: 6px;
+  }
+
+  #list-pane:focus-within #header,
+  body.focused #header {
+    border-bottom-color: var(--border-focus);
+  }
+
+  #header-title {
+    color: var(--text-dir);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+
+  #header-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .chip {
+    height: 18px;
+    border-radius: 5px;
+    border: none;
+    background: transparent;
+    color: #9ea6b8;
+    font-family: inherit;
+    font-size: 11px;
+    padding: 0 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    gap: 3px;
+  }
+
+  .chip:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+  }
+
+  .chip.active,
+  #sort-chip {
+    background: var(--bg-sel);
+    color: #fff;
+  }
+
+  #sort-chip {
+    min-width: 30px;
+  }
+
+  #unrated-chip {
+    width: 22px;
+    padding: 0;
+  }
+
+  #info-toggle-chip {
+    display: none;
+  }
+  body.compact #info-toggle-chip {
+    display: inline-flex;
+  }
+
+  #filter-stars {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 2px;
+  }
+
+  .star-btn {
+    width: 16px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+
+  .star-svg {
+    width: 12px;
+    height: 12px;
+    display: block;
+    pointer-events: none;
+  }
+
+  .star-svg.filled polygon {
+    fill: var(--gold);
+    stroke: none;
+  }
+
+  .star-svg.hollow polygon {
+    fill: none;
+    stroke: rgba(217, 222, 242, 0.32);
+    stroke-width: 1.2;
+  }
+
+  .chip .star-svg.hollow polygon {
+    stroke: rgba(255, 255, 255, 0.55);
+  }
+  .chip.active .star-svg.hollow polygon {
+    stroke: #fff;
+  }
+
+  /* Search bar (shown on wide/static views or toggled) */
+  #search-bar {
+    display: flex;
+    align-items: center;
+    background: #17171a;
+    border-bottom: 1px solid var(--border-hairline);
+    padding: 4px 8px;
+    gap: 6px;
+  }
+  body.compact #search-bar {
+    display: none;
+  }
+  #search-input {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text-main);
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+  #search-input::placeholder {
+    color: #6c6e7a;
+  }
+  #search-clear {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    display: none;
+  }
+
+  /* Rows container */
+  #rows-container {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    position: relative;
+  }
+
+  #rows-container::-webkit-scrollbar {
+    width: 10px;
+  }
+  #rows-container::-webkit-scrollbar-track {
+    background: var(--bg-list);
+  }
+  #rows-container::-webkit-scrollbar-thumb {
+    background: rgba(140, 140, 148, 0.8);
+    border: 2px solid var(--bg-list);
+  }
+  #rows-container::-webkit-scrollbar-thumb:hover {
+    background: rgba(170, 170, 178, 1);
+  }
+
+  .row {
+    height: 20px;
+    display: flex;
+    align-items: center;
+    padding-right: 8px;
+    position: relative;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .row:hover {
+    background: var(--bg-hover);
+  }
+
+  .row.loaded {
+    background: var(--bg-loaded);
+  }
+
+  .row.selected {
+    background: var(--bg-sel);
+  }
+
+  .row.loaded::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 2px;
+    bottom: 2px;
+    width: 3px;
+    background: var(--gold);
+  }
+
+  .row-triangle {
+    width: 13px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    flex-shrink: 0;
+  }
+
+  .row-triangle svg {
+    width: 10px;
+    height: 10px;
+    fill: #bfc7d9;
+  }
+
+  .row-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 20px;
+  }
+
+  .row.dir .row-label {
+    color: var(--text-dir);
+  }
+
+  .row.file .row-label {
+    color: var(--text-main);
+  }
+
+  .row.empty {
+    cursor: default;
+  }
+  .row.empty .row-label {
+    color: #80808c;
+  }
+
+  .row-stars {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 6px;
+    flex-shrink: 0;
+  }
+
+  .status-msg {
+    padding: 14px 8px;
+    color: var(--text-muted);
+  }
+
+  /* Right / Bottom Detail Pane for Paraminfo & DSP Code */
+  #detail-pane {
+    flex: 1;
+    height: 100%;
+    background: var(--bg-panel);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  #detail-header {
+    height: 30px;
+    min-height: 30px;
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border-hairline);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  #detail-title {
+    font-weight: 600;
+    color: var(--text-dir);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+
+  #detail-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .tab-btn {
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .tab-btn:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .tab-btn.active {
+    background: var(--bg-sel);
+    color: #fff;
+  }
+
+  #detail-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 16px;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  #detail-body::-webkit-scrollbar {
+    width: 10px;
+  }
+  #detail-body::-webkit-scrollbar-track {
+    background: var(--bg-panel);
+  }
+  #detail-body::-webkit-scrollbar-thumb {
+    background: rgba(140, 140, 148, 0.6);
+    border: 2px solid var(--bg-panel);
+  }
+
+  #paraminfo-content {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.55;
+    color: #e2e4ed;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .empty-detail {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-style: italic;
+  }
+
+  #meta-badge {
+    font-size: 11px;
+    color: var(--gold);
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="list-pane" tabindex="0">
+    <div id="header">
+      <div id="header-title">Effects (0)</div>
+      <div id="header-controls">
+        <button id="info-toggle-chip" class="chip" title="Toggle Parameter Info">Info</button>
+        <button id="sort-chip" class="chip" title="Cycle sort: A-Z / Rating high-to-low / Rating low-to-high">A-Z</button>
+        <button id="unrated-chip" class="chip" title="Show unrated effects only"></button>
+        <button id="all-chip" class="chip active" title="Show all effects">All</button>
+        <div id="filter-stars" title="Filter by minimum star rating"></div>
+      </div>
+    </div>
+    <div id="search-bar">
+      <input id="search-input" type="text" placeholder="Filter effects by name or category..." autocomplete="off" spellcheck="false" />
+      <button id="search-clear" title="Clear search">&#x2715;</button>
+    </div>
+    <div id="rows-container"></div>
+  </div>
+
+  <div id="detail-pane">
+    <div id="detail-header">
+      <div id="detail-title">Select an effect to view parameter documentation</div>
+      <div id="meta-badge"></div>
+      <div id="detail-tabs">
+        <button id="tab-paraminfo" class="tab-btn active">Param Info</button>
+        <button id="tab-code" class="tab-btn">Codebox~ DSP</button>
+      </div>
+    </div>
+    <div id="detail-body">
+      <pre id="paraminfo-content" class="empty-detail">Click any effect in the list to inspect its parameter guide (_paraminfo.txt) and RNBO codebox~ source.</pre>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- Environment & GitHub config ----------
+  var isMax = typeof window.max !== "undefined" && window.max !== null;
+  var GH_OWNER = "Sousastep";
+  var GH_REPO = "sousa_fx_generator";
+  var GH_BRANCH = "main";
+  var RAW_BASE = "https://raw.githubusercontent.com/" + GH_OWNER + "/" + GH_REPO + "/" + GH_BRANCH + "/";
+  var API_TREE_URL = "https://api.github.com/repos/" + GH_OWNER + "/" + GH_REPO + "/git/trees/" + GH_BRANCH + "?recursive=1";
+
+  var DIR_NAME = "generated_maxpat";
+  var TITLE = "Effects";
+  var ROW_H = 20;
+  var PAD = 8;
+  var INDENT = 14;
+  var SAVE_DELAY = 250;
+  var KEY_DEDUPE_MS = 25;
+
+  // ---------- State ----------
+  var entries = [];        // [{ type: "dir", name, path, open, files: [...] }, ...]
+  var rows = [];           // flattened display list
+  var openDirs = {};       // dir name -> boolean
+  var dirPath = "";        // local base path in Max, or "generated_fx" in static mode
+  var statusMsg = "Loading effects...";
+  var selPath = null;
+  var hovPath = null;
+  var hovStar = 0;
+
+  var ratings = {};        // "Category/name.maxpat" -> 1..5
+  var sortMode = 0;        // 0 = A-Z, 1 = rating high->low, 2 = rating low->high
+  var filterMode = 0;      // 0 = all, -1 = unrated only, 1..5 = rated >= N
+  var searchQuery = "";
+  var matchCount = 0;
+  var loadedPath = null;   // relative key ("Category/name.maxpat")
+
+  var activeTab = "paraminfo"; // "paraminfo" | "code"
+  var currentEffectKey = null; // "Category/name" (without extension)
+  var paraminfoCache = {};     // "Category/name" -> text
+  var codeCache = {};          // "Category/name" -> text
+
+  var stateTimer = null;
+  var lastAction = "";
+  var lastActionAt = 0;
+  var keyDebug = false;
+  var mouseOver = false;
+  var hasFocus = false;
+
+  // ---------- DOM Elements ----------
+  var listPane = document.getElementById("list-pane");
+  var headerTitleEl = document.getElementById("header-title");
+  var infoToggleChip = document.getElementById("info-toggle-chip");
+  var sortChip = document.getElementById("sort-chip");
+  var unratedChip = document.getElementById("unrated-chip");
+  var allChip = document.getElementById("all-chip");
+  var filterStarsEl = document.getElementById("filter-stars");
+  var searchInput = document.getElementById("search-input");
+  var searchClear = document.getElementById("search-clear");
+  var rowsContainer = document.getElementById("rows-container");
+  var detailTitleEl = document.getElementById("detail-title");
+  var metaBadgeEl = document.getElementById("meta-badge");
+  var tabParaminfoBtn = document.getElementById("tab-paraminfo");
+  var tabCodeBtn = document.getElementById("tab-code");
+  var paraminfoContentEl = document.getElementById("paraminfo-content");
+
+  // ---------- Responsive Layout ----------
+  function checkCompactLayout() {
+    if (window.innerWidth < 580) {
+      document.body.classList.add("compact");
+    } else {
+      document.body.classList.remove("compact");
+    }
+  }
+  window.addEventListener("resize", checkCompactLayout);
+  checkCompactLayout();
+
+  infoToggleChip.addEventListener("click", function (e) {
+    e.stopPropagation();
+    document.body.classList.toggle("show-info");
+    infoToggleChip.classList.toggle("active", document.body.classList.contains("show-info"));
+  });
+
+  // ---------- SVG Helpers ----------
+  function starPoints(cx, cy, radius) {
+    var inner = radius * 0.45;
+    var pts = [];
+    for (var i = 0; i < 10; i++) {
+      var ang = -Math.PI / 2 + i * Math.PI / 5;
+      var rad = (i % 2 === 0) ? radius : inner;
+      var x = cx + Math.cos(ang) * rad;
+      var y = cy + Math.sin(ang) * rad;
+      pts.push(x.toFixed(2) + "," + y.toFixed(2));
+    }
+    return pts.join(" ");
+  }
+
+  var STAR_PTS_6 = starPoints(6, 6, 5.5);
+  var STAR_PTS_5 = starPoints(6, 6, 5.0);
+
+  function createStarSvg(filled, small) {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 12 12");
+    svg.setAttribute("class", "star-svg " + (filled ? "filled" : "hollow"));
+    var poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    poly.setAttribute("points", small ? STAR_PTS_5 : STAR_PTS_6);
+    svg.appendChild(poly);
+    return svg;
+  }
+
+  function createTriangleSvg(open) {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 10 10");
+    var poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    if (open) {
+      poly.setAttribute("points", "1,3 9,3 5,9");
+    } else {
+      poly.setAttribute("points", "2,1 2,9 7,5");
+    }
+    svg.appendChild(poly);
+    return svg;
+  }
+
+  // ---------- Normalize Effect Keys ----------
+  function byName(a, b) {
+    return a.toLowerCase() < b.toLowerCase() ? -1 : (a.toLowerCase() > b.toLowerCase() ? 1 : 0);
+  }
+
+  function relKey(path) {
+    if (!path) return "";
+    if (dirPath && path.indexOf(dirPath + "/") === 0) {
+      return path.substring(dirPath.length + 1);
+    }
+    return path;
+  }
+
+  // Strips .maxpat or .txt to get canonical "Category/effect_name"
+  function canonicalBaseKey(keyOrPath) {
+    var k = relKey(keyOrPath);
+    return k.replace(/\.(maxpat|txt)$/i, "");
+  }
+
+  // Ratings are stored under "Category/name.maxpat"
+  function ratingKeyForPath(path) {
+    var base = canonicalBaseKey(path);
+    return base ? base + ".maxpat" : "";
+  }
+
+  function ratingOf(path) {
+    if (!path) return 0;
+    var rk = ratingKeyForPath(path);
+    if (ratings[rk]) return ratings[rk];
+    var raw = relKey(path);
+    if (ratings[raw]) return ratings[raw];
+    var base = canonicalBaseKey(path);
+    return ratings[base] || 0;
+  }
+
+  // ---------- Persistence ----------
+  function saveRatings() {
+    if (isMax) {
+      window.max.outlet("save_ratings", JSON.stringify(ratings));
+    } else {
+      try {
+        localStorage.setItem("sousa_fx_ratings_override", JSON.stringify(ratings));
+      } catch (e) {}
+    }
+  }
+
+  function saveStateNow() {
+    var open = [];
+    for (var k in openDirs) {
+      if (openDirs[k]) open.push(k);
+    }
+    open.sort();
+    var stateObj = {
+      open: open,
+      scroll: Math.round(rowsContainer.scrollTop),
+      sel: selPath ? relKey(selPath) : "",
+      loaded: loadedPath || "",
+      sort: sortMode,
+      filter: filterMode
+    };
+    if (isMax) {
+      window.max.outlet("save_state", JSON.stringify(stateObj));
+    } else {
+      try {
+        localStorage.setItem("sousa_fx_state", JSON.stringify(stateObj));
+      } catch (e) {}
+    }
+  }
+
+  function scheduleStateSave() {
+    if (stateTimer) clearTimeout(stateTimer);
+    stateTimer = setTimeout(saveStateNow, SAVE_DELAY);
+  }
+
+  function applyStateObject(o) {
+    if (!o || typeof o !== "object") return;
+    openDirs = {};
+    if (Array.isArray(o.open)) {
+      for (var i = 0; i < o.open.length; i++) {
+        openDirs[String(o.open[i])] = true;
+      }
+    }
+    for (var j = 0; j < entries.length; j++) {
+      if (entries[j].type === "dir") {
+        entries[j].open = !!openDirs[entries[j].name];
+      }
+    }
+    if (typeof o.sort === "number" && o.sort >= 0 && o.sort <= 2) {
+      sortMode = Math.round(o.sort);
+    }
+    if (typeof o.filter === "number" && o.filter >= -1 && o.filter <= 5) {
+      filterMode = Math.round(o.filter);
+    }
+    if (o.loaded) {
+      loadedPath = String(o.loaded);
+    }
+    if (o.sel) {
+      selPath = dirPath ? (dirPath + "/" + String(o.sel)) : String(o.sel);
+    }
+    rebuildRows();
+    if (typeof o.scroll === "number" && o.scroll >= 0) {
+      rowsContainer.scrollTop = o.scroll;
+    }
+    if (selPath) {
+      inspectEffectForPath(selPath);
+    } else if (loadedPath) {
+      inspectEffectForPath(dirPath ? (dirPath + "/" + loadedPath) : loadedPath);
+    }
+  }
+
+  // ---------- Parameter Info & Code Inspection ----------
+  function encodeRepoPath(relPath) {
+    return relPath.split("/").map(encodeURIComponent).join("/");
+  }
+
+  function renderDetailView() {
+    tabParaminfoBtn.classList.toggle("active", activeTab === "paraminfo");
+    tabCodeBtn.classList.toggle("active", activeTab === "code");
+
+    if (!currentEffectKey) {
+      detailTitleEl.textContent = "Select an effect to view parameter documentation";
+      metaBadgeEl.textContent = "";
+      paraminfoContentEl.className = "empty-detail";
+      paraminfoContentEl.textContent = "Click any effect in the list to inspect its parameter guide (_paraminfo.txt) and RNBO codebox~ source.";
+      return;
+    }
+
+    var parts = currentEffectKey.split("/");
+    var fxName = parts[parts.length - 1];
+    var catName = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+    detailTitleEl.textContent = catName ? (catName + " / " + fxName) : fxName;
+
+    var r = ratingOf(currentEffectKey + ".maxpat");
+    metaBadgeEl.textContent = r > 0 ? ("\u2605".repeat(r) + "\u2606".repeat(5 - r)) : "Unrated";
+
+    var cache = (activeTab === "paraminfo") ? paraminfoCache : codeCache;
+    if (Object.prototype.hasOwnProperty.call(cache, currentEffectKey)) {
+      paraminfoContentEl.className = "";
+      paraminfoContentEl.textContent = cache[currentEffectKey] || "(No documentation found for this effect)";
+    } else {
+      paraminfoContentEl.className = "empty-detail";
+      paraminfoContentEl.textContent = "Loading " + (activeTab === "paraminfo" ? "parameter documentation" : "DSP code") + "...";
+    }
+  }
+
+  function fetchFromGitHubRaw(baseKey) {
+    var paramRel = "generated_fx/" + baseKey + "_paraminfo.txt";
+    var codeRel = "generated_fx/" + baseKey + ".txt";
+
+    if (!Object.prototype.hasOwnProperty.call(paraminfoCache, baseKey)) {
+      fetch(RAW_BASE + encodeRepoPath(paramRel))
+        .then(function (res) {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          return res.text();
+        })
+        .then(function (txt) {
+          paraminfoCache[baseKey] = txt;
+          if (currentEffectKey === baseKey) renderDetailView();
+        })
+        .catch(function () {
+          paraminfoCache[baseKey] = "(No _paraminfo.txt found on main branch for " + baseKey + ")";
+          if (currentEffectKey === baseKey) renderDetailView();
+        });
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(codeCache, baseKey)) {
+      fetch(RAW_BASE + encodeRepoPath(codeRel))
+        .then(function (res) {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          return res.text();
+        })
+        .then(function (txt) {
+          codeCache[baseKey] = txt;
+          if (currentEffectKey === baseKey) renderDetailView();
+        })
+        .catch(function () {
+          codeCache[baseKey] = "(No .txt DSP source found on main branch for " + baseKey + ")";
+          if (currentEffectKey === baseKey) renderDetailView();
+        });
+    }
+  }
+
+  function inspectEffectForPath(path) {
+    if (!path) return;
+    // Check if path is a directory
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].type === "dir" && entries[i].path === path) {
+        return;
+      }
+    }
+    var baseKey = canonicalBaseKey(path);
+    if (!baseKey) return;
+    currentEffectKey = baseKey;
+    renderDetailView();
+
+    if (isMax) {
+      if (!Object.prototype.hasOwnProperty.call(paraminfoCache, baseKey) ||
+          !Object.prototype.hasOwnProperty.call(codeCache, baseKey)) {
+        window.max.outlet("request_effect_docs", baseKey);
+      }
+    } else {
+      fetchFromGitHubRaw(baseKey);
+    }
+  }
+
+  tabParaminfoBtn.addEventListener("click", function () {
+    activeTab = "paraminfo";
+    renderDetailView();
+  });
+
+  tabCodeBtn.addEventListener("click", function () {
+    activeTab = "code";
+    renderDetailView();
+  });
+
+  // ---------- Filtering & Sorting ----------
+  function matchesFilter(path, label, dirName) {
+    if (searchQuery) {
+      var q = searchQuery.toLowerCase();
+      var hay = ((dirName ? dirName + " " : "") + (label || "")).toLowerCase();
+      if (hay.indexOf(q) === -1) return false;
+    }
+    if (filterMode === 0) return true;
+    var r = ratingOf(path);
+    if (filterMode === -1) return r === 0;
+    return r >= filterMode;
+  }
+
+  function compareRanked(na, nb, ra, rb) {
+    if (ra !== rb) return sortMode === 1 ? rb - ra : ra - rb;
+    return byName(na, nb);
+  }
+
+  function dirRank(entry) {
+    var files = entry.files || [];
+    var best = 0;
+    for (var i = 0; i < files.length; i++) {
+      var r = ratingOf(entry.name + "/" + files[i]);
+      if (r > best) best = r;
+    }
+    return best;
+  }
+
+  function sortedFiles(entry) {
+    var list = (entry.files || []).slice();
+    if (sortMode === 0) return list;
+    list.sort(function (a, b) {
+      return compareRanked(
+        a,
+        b,
+        ratingOf(entry.name + "/" + a),
+        ratingOf(entry.name + "/" + b)
+      );
+    });
+    return list;
+  }
+
+  function orderedEntries() {
+    var dirs = [];
+    var files = [];
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].type === "dir") dirs.push(entries[i]);
+      else files.push(entries[i]);
+    }
+    if (sortMode !== 0) {
+      dirs.sort(function (a, b) {
+        return compareRanked(a.name, b.name, dirRank(a), dirRank(b));
+      });
+      files.sort(function (a, b) {
+        return compareRanked(a.name, b.name, ratingOf(a.path), ratingOf(b.path));
+      });
+    }
+    return dirs.concat(files);
+  }
+
+  function rebuildRows() {
+    rows = [];
+    matchCount = 0;
+    var filtering = (filterMode !== 0) || (searchQuery.length > 0);
+    var ordered = orderedEntries();
+
+    for (var i = 0; i < ordered.length; i++) {
+      var e = ordered[i];
+      if (e.type === "dir") {
+        var files = sortedFiles(e);
+        if (filtering) {
+          var hits = [];
+          for (var j = 0; j < files.length; j++) {
+            var fp = e.path + "/" + files[j];
+            if (matchesFilter(fp, files[j], e.name)) hits.push(files[j]);
+          }
+          matchCount += hits.length;
+          if (hits.length === 0) continue;
+          rows.push({ type: "dir", label: e.name, path: e.path, depth: 0, open: true, entry: e });
+          for (var k = 0; k < hits.length; k++) {
+            rows.push({ type: "file", label: hits[k], path: e.path + "/" + hits[k], depth: 1 });
+          }
+        } else {
+          matchCount += files.length;
+          rows.push({ type: "dir", label: e.name, path: e.path, depth: 0, open: e.open, entry: e });
+          if (e.open) {
+            for (var m = 0; m < files.length; m++) {
+              rows.push({ type: "file", label: files[m], path: e.path + "/" + files[m], depth: 1 });
+            }
+            if (files.length === 0) {
+              rows.push({ type: "empty", label: "(empty)", path: null, depth: 1 });
+            }
+          }
+        }
+      } else {
+        if (filtering && !matchesFilter(e.path, e.name, "")) continue;
+        matchCount += 1;
+        rows.push({ type: "file", label: e.name, path: e.path, depth: 0 });
+      }
+    }
+
+    if (!dirPath && entries.length === 0) {
+      // Keep current statusMsg while loading or if patcher unsaved
+    } else if (filtering && rows.length === 0) {
+      if (searchQuery) {
+        statusMsg = 'No effects matching "' + searchQuery + '"';
+      } else if (filterMode === -1) {
+        statusMsg = "No unrated effects";
+      } else {
+        statusMsg = "No effects rated " + filterMode + "+";
+      }
+    } else if (!filtering && entries.length === 0) {
+      statusMsg = "No files in " + DIR_NAME;
+    } else {
+      statusMsg = "";
+    }
+
+    renderHeader();
+    renderRows();
+  }
+
+  // ---------- Rendering ----------
+  function headerTitleText() {
+    if (filterMode === -1) return "Unrated (" + matchCount + ")";
+    if (filterMode > 0) return "Rated " + filterMode + "+ (" + matchCount + ")";
+    return TITLE + " (" + matchCount + ")";
+  }
+
+  function renderHeader() {
+    headerTitleEl.textContent = headerTitleText();
+
+    // Sort chip
+    sortChip.innerHTML = "";
+    if (sortMode === 0) {
+      sortChip.textContent = "A-Z";
+    } else {
+      sortChip.appendChild(createStarSvg(true, true));
+      var arrow = document.createElement("span");
+      arrow.textContent = (sortMode === 1) ? "\u25BC" : "\u25B2";
+      arrow.style.fontSize = "8px";
+      sortChip.appendChild(arrow);
+    }
+
+    // Unrated chip
+    unratedChip.innerHTML = "";
+    unratedChip.classList.toggle("active", filterMode === -1);
+    unratedChip.appendChild(createStarSvg(false, true));
+
+    // All chip
+    allChip.classList.toggle("active", filterMode === 0);
+
+    // Filter stars 1..5
+    filterStarsEl.innerHTML = "";
+    var minShown = filterMode > 0 ? filterMode : 0;
+    for (var s = 1; s <= 5; s++) {
+      (function (starNum) {
+        var btn = document.createElement("button");
+        btn.className = "star-btn";
+        btn.appendChild(createStarSvg(starNum <= minShown, false));
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          setFilter(filterMode === starNum ? 0 : starNum);
+        });
+        filterStarsEl.appendChild(btn);
+      })(s);
+    }
+  }
+
+  function renderRows() {
+    rowsContainer.innerHTML = "";
+
+    if (rows.length === 0) {
+      var msg = document.createElement("div");
+      msg.className = "status-msg";
+      msg.textContent = statusMsg || "Empty";
+      rowsContainer.appendChild(msg);
+      return;
+    }
+
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < rows.length; i++) {
+      (function (idx) {
+        var row = rows[idx];
+        var el = document.createElement("div");
+        var isLoaded = row.type === "file" && row.path && loadedPath &&
+          (relKey(row.path) === loadedPath || canonicalBaseKey(row.path) === canonicalBaseKey(loadedPath));
+        var isSelected = row.path && row.path === selPath;
+
+        el.className = "row " + row.type +
+          (isLoaded ? " loaded" : "") +
+          (isSelected ? " selected" : "");
+        el.style.paddingLeft = (PAD + row.depth * INDENT) + "px";
+        el.dataset.index = String(idx);
+
+        if (row.type === "dir") {
+          var tri = document.createElement("span");
+          tri.className = "row-triangle";
+          tri.appendChild(createTriangleSvg(row.open));
+          el.appendChild(tri);
+        }
+
+        var lbl = document.createElement("span");
+        lbl.className = "row-label";
+        lbl.textContent = row.label;
+        el.appendChild(lbl);
+
+        if (row.type === "file" && row.path) {
+          var starsWrap = document.createElement("div");
+          starsWrap.className = "row-stars";
+          var rating = ratingOf(row.path);
+          var preview = (row.path === hovPath) ? hovStar : 0;
+          var shown = preview > 0 ? preview : rating;
+
+          for (var s = 1; s <= 5; s++) {
+            (function (starNum) {
+              var sBtn = document.createElement("button");
+              sBtn.className = "star-btn";
+              sBtn.title = "Rate " + starNum + "/5";
+              sBtn.appendChild(createStarSvg(starNum <= shown, true));
+
+              sBtn.addEventListener("mouseenter", function () {
+                hovPath = row.path;
+                hovStar = starNum;
+                updateRowStars(starsWrap, row.path);
+              });
+              sBtn.addEventListener("mouseleave", function () {
+                hovStar = 0;
+                updateRowStars(starsWrap, row.path);
+              });
+              sBtn.addEventListener("click", function (ev) {
+                ev.stopPropagation();
+                setRating(row, starNum);
+              });
+              starsWrap.appendChild(sBtn);
+            })(s);
+          }
+          el.appendChild(starsWrap);
+        }
+
+        el.addEventListener("click", function () {
+          openRow(row);
+        });
+
+        frag.appendChild(el);
+      })(i);
+    }
+
+    rowsContainer.appendChild(frag);
+  }
+
+  function updateRowStars(starsWrap, path) {
+    var rating = ratingOf(path);
+    var preview = (path === hovPath) ? hovStar : 0;
+    var shown = preview > 0 ? preview : rating;
+    var btns = starsWrap.querySelectorAll(".star-btn");
+    for (var i = 0; i < btns.length; i++) {
+      var s = i + 1;
+      btns[i].innerHTML = "";
+      btns[i].appendChild(createStarSvg(s <= shown, true));
+    }
+  }
+
+  // ---------- Actions ----------
+  function setRating(row, n) {
+    if (!row || !row.path) return;
+    var key = ratingKeyForPath(row.path);
+    var current = ratingOf(row.path);
+    var next = (current === n) ? 0 : n;
+    if (next > 0) ratings[key] = next;
+    else delete ratings[key];
+    hovStar = 0;
+    saveRatings();
+    rebuildRows();
+    if (currentEffectKey === canonicalBaseKey(row.path)) {
+      renderDetailView();
+    }
+  }
+
+  function toggleDir(entry) {
+    entry.open = !entry.open;
+    if (entry.open) openDirs[entry.name] = true;
+    else delete openDirs[entry.name];
+    rebuildRows();
+    scheduleStateSave();
+  }
+
+  function setAllDirs(open) {
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      if (e.type !== "dir") continue;
+      e.open = open;
+      if (open) openDirs[e.name] = true;
+      else delete openDirs[e.name];
+    }
+    rebuildRows();
+    scheduleStateSave();
+  }
+
+  function setSort(mode) {
+    var next = ((Math.round(mode) % 3) + 3) % 3;
+    var enteringRating = (sortMode === 0 && next !== 0);
+    sortMode = next;
+    if (enteringRating) {
+      setAllDirs(true);
+      return;
+    }
+    rebuildRows();
+    scheduleStateSave();
+  }
+
+  function cycleSort() {
+    setSort(sortMode + 1);
+  }
+
+  function setFilter(n) {
+    var v = Math.round(n);
+    filterMode = Math.min(Math.max(v, -1), 5);
+    rebuildRows();
+    scheduleStateSave();
+  }
+
+  function rowIndexForPath(path) {
+    if (!path) return -1;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].path === path) return i;
+    }
+    return -1;
+  }
+
+  function ensureVisible(i) {
+    var top = i * ROW_H;
+    var bottom = top + ROW_H;
+    var viewH = rowsContainer.clientHeight;
+    if (top < rowsContainer.scrollTop) {
+      rowsContainer.scrollTop = top;
+    } else if (bottom > rowsContainer.scrollTop + viewH) {
+      rowsContainer.scrollTop = bottom - viewH;
+    }
+  }
+
+  function selectIndex(i, reveal) {
+    if (i < 0 || i >= rows.length || !rows[i].path) return;
+    selPath = rows[i].path;
+    if (reveal) ensureVisible(i);
+    rebuildRows();
+    if (rows[i].type === "file") {
+      inspectEffectForPath(rows[i].path);
+    }
+  }
+
+  function moveSelection(dir) {
+    if (!rows.length) return;
+    var i = rowIndexForPath(selPath);
+    if (i < 0) i = dir > 0 ? -1 : rows.length;
+    var j = i + dir;
+    while (j >= 0 && j < rows.length && !rows[j].path) j += dir;
+    if (j < 0 || j >= rows.length) return;
+    selectIndex(j, true);
+    scheduleStateSave();
+  }
+
+  function moveByPage(dir) {
+    if (!rows.length) return;
+    var perPage = Math.max(1, Math.floor(rowsContainer.clientHeight / ROW_H) - 1);
+    var i = rowIndexForPath(selPath);
+    if (i < 0) i = dir > 0 ? -1 : rows.length;
+    var j = i + dir * perPage;
+    if (j < 0) j = 0;
+    if (j >= rows.length) j = rows.length - 1;
+    while (j >= 0 && j < rows.length && !rows[j].path) j += dir;
+    if (j < 0 || j >= rows.length) return;
+    selectIndex(j, true);
+    scheduleStateSave();
+  }
+
+  function selectEdge(dir) {
+    if (!rows.length) return;
+    var i = dir < 0 ? 0 : rows.length - 1;
+    var step = dir < 0 ? 1 : -1;
+    while (i >= 0 && i < rows.length && !rows[i].path) i += step;
+    if (i < 0 || i >= rows.length) return;
+    selectIndex(i, true);
+    scheduleStateSave();
+  }
+
+  function jumpToLetter(ch) {
+    var n = rows.length;
+    if (!n) return;
+    var start = rowIndexForPath(selPath);
+    var lower = ch.toLowerCase();
+    for (var step = 1; step <= n; step++) {
+      var i = ((start + step) % n + n) % n;
+      var row = rows[i];
+      if (row.type !== "file") continue;
+      if (row.label.toLowerCase().charAt(0) === lower) {
+        selectIndex(i, true);
+        scheduleStateSave();
+        return;
+      }
+    }
+  }
+
+  function collapseOrParent() {
+    var i = rowIndexForPath(selPath);
+    if (i < 0) return;
+    var row = rows[i];
+    if (row.type === "dir") {
+      if (row.open && filterMode === 0 && !searchQuery) toggleDir(row.entry);
+      return;
+    }
+    if (row.depth > 0) {
+      for (var j = i; j >= 0; j--) {
+        if (rows[j].type === "dir") {
+          selectIndex(j, true);
+          scheduleStateSave();
+          return;
+        }
+      }
+    }
+  }
+
+  function expandOrChild() {
+    var i = rowIndexForPath(selPath);
+    if (i < 0) return;
+    var row = rows[i];
+    if (row.type !== "dir") return;
+    if (!row.open && filterMode === 0 && !searchQuery) {
+      toggleDir(row.entry);
+      return;
+    }
+    if (i + 1 < rows.length && rows[i + 1].path) {
+      selectIndex(i + 1, true);
+      scheduleStateSave();
+    }
+  }
+
+  function openRow(row) {
+    if (!row) return;
+    if (row.type === "dir") {
+      selPath = row.path;
+      if (filterMode === 0 && !searchQuery) toggleDir(row.entry);
+      else {
+        rebuildRows();
+        scheduleStateSave();
+      }
+      return;
+    }
+    if (!row.path) return;
+    selPath = row.path;
+    loadedPath = relKey(row.path);
+    inspectEffectForPath(row.path);
+    if (isMax) {
+      window.max.outlet("select_file", row.path);
+    }
+    rebuildRows();
+    scheduleStateSave();
+  }
+
+  function activateSelected() {
+    var i = rowIndexForPath(selPath);
+    if (i < 0) {
+      moveSelection(1);
+      return;
+    }
+    openRow(rows[i]);
+  }
+
+  function rateSelected(n) {
+    var i = rowIndexForPath(selPath);
+    if (i < 0 || rows[i].type !== "file") return;
+    setRating(rows[i], n);
+  }
+
+  // ---------- Header Controls & Search ----------
+  sortChip.addEventListener("click", function (e) {
+    e.stopPropagation();
+    cycleSort();
+  });
+
+  unratedChip.addEventListener("click", function (e) {
+    e.stopPropagation();
+    setFilter(filterMode === -1 ? 0 : -1);
+  });
+
+  allChip.addEventListener("click", function (e) {
+    e.stopPropagation();
+    setFilter(0);
+  });
+
+  searchInput.addEventListener("input", function () {
+    searchQuery = searchInput.value.trim();
+    searchClear.style.display = searchQuery ? "inline-block" : "none";
+    rebuildRows();
+  });
+
+  searchClear.addEventListener("click", function () {
+    searchInput.value = "";
+    searchQuery = "";
+    searchClear.style.display = "none";
+    rebuildRows();
+  });
+
+  rowsContainer.addEventListener("scroll", function () {
+    scheduleStateSave();
+  });
+
+  rowsContainer.addEventListener("click", function (e) {
+    if (e.target === rowsContainer) {
+      selPath = null;
+      rebuildRows();
+      scheduleStateSave();
+    }
+  });
+
+  // ---------- Keyboard Navigation ----------
+  function specialKeyAction(code) {
+    switch (code) {
+      case 126: case 63232: case -9: case 38: return "up";
+      case 125: case 63233: case -10: case 40: return "down";
+      case 123: case 63234: case -11: case 37: return "left";
+      case 124: case 63235: case -12: case 39: return "right";
+      case 115: case 63273: case -15: case 36: return "home";
+      case 119: case 63275: case -16: case 35: return "end";
+      case 116: case 63276: case -13: case 33: return "pageup";
+      case 121: case 63277: case -14: case 34: return "pagedown";
+      case 13: case 76: case 10: case -4: return "activate";
+      case 32: case 49: case -2: return "activate";
+      case 27: case 53: case -3: return "escape";
+      default: return "";
+    }
+  }
+
+  function performAction(action) {
+    if (!action) return;
+    var now = Date.now();
+    if (action === lastAction && now - lastActionAt < KEY_DEDUPE_MS) return;
+    lastAction = action;
+    lastActionAt = now;
+
+    if (action === "up") { moveSelection(-1); return; }
+    if (action === "down") { moveSelection(1); return; }
+    if (action === "left") { collapseOrParent(); return; }
+    if (action === "right") { expandOrChild(); return; }
+    if (action === "home") { selectEdge(-1); return; }
+    if (action === "end") { selectEdge(1); return; }
+    if (action === "pageup") { moveByPage(-1); return; }
+    if (action === "pagedown") { moveByPage(1); return; }
+    if (action === "activate") { activateSelected(); return; }
+    if (action === "escape") {
+      if (searchQuery) {
+        searchInput.value = "";
+        searchQuery = "";
+        searchClear.style.display = "none";
+        rebuildRows();
+      } else if (filterMode !== 0) {
+        setFilter(0);
+      } else {
+        selPath = null;
+        rebuildRows();
+        scheduleStateSave();
+      }
+      return;
+    }
+    if (action.indexOf("rate:") === 0) { rateSelected(Number(action.substring(5))); return; }
+    if (action.indexOf("letter:") === 0) { jumpToLetter(action.substring(7)); return; }
+  }
+
+  window.addEventListener("keydown", function (e) {
+    if (document.activeElement === searchInput) {
+      if (e.key === "Escape") {
+        searchInput.blur();
+        performAction("escape");
+      } else if (e.key === "ArrowDown" || e.key === "Enter") {
+        e.preventDefault();
+        listPane.focus();
+        performAction(e.key === "ArrowDown" ? "down" : "activate");
+      }
+      return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+    var action = "";
+    if (e.key === "ArrowUp") action = "up";
+    else if (e.key === "ArrowDown") action = "down";
+    else if (e.key === "ArrowLeft") action = "left";
+    else if (e.key === "ArrowRight") action = "right";
+    else if (e.key === "Home") action = "home";
+    else if (e.key === "End") action = "end";
+    else if (e.key === "PageUp") action = "pageup";
+    else if (e.key === "PageDown") action = "pagedown";
+    else if (e.key === "Enter" || e.key === " ") action = "activate";
+    else if (e.key === "Escape") action = "escape";
+    else if (e.key >= "1" && e.key <= "5") action = "rate:" + e.key;
+    else if (e.key === "0") action = "rate:0";
+    else if (e.key && e.key.length === 1) {
+      var low = e.key.toLowerCase();
+      if (low >= "a" && low <= "z") action = "letter:" + low;
+    }
+
+    if (action) {
+      e.preventDefault();
+      performAction(action);
+    }
+  });
+
+  document.addEventListener("mouseenter", function () { mouseOver = true; });
+  document.addEventListener("mouseleave", function () { mouseOver = false; });
+  window.addEventListener("focus", function () {
+    hasFocus = true;
+    document.body.classList.add("focused");
+  });
+  window.addEventListener("blur", function () {
+    hasFocus = false;
+    document.body.classList.remove("focused");
+  });
+
+  // ---------- Max jweb Bridge ----------
+  function setupMaxBridge() {
+    window.max.bindInlet("init_data", function (jsonStr) {
+      try {
+        var payload = typeof jsonStr === "string" ? JSON.parse(jsonStr) : jsonStr;
+        dirPath = payload.dirPath || "";
+        statusMsg = payload.statusMsg || "";
+        ratings = payload.ratings || {};
+        entries = payload.entries || [];
+        if (payload.state) {
+          applyStateObject(payload.state);
+        } else {
+          rebuildRows();
+        }
+      } catch (e) {
+        statusMsg = "Error parsing init_data";
+        rebuildRows();
+      }
+    });
+
+    window.max.bindInlet("effect_docs", function (baseKey, paraminfoTxt, codeTxt) {
+      if (!baseKey) return;
+      paraminfoCache[baseKey] = paraminfoTxt || "";
+      codeCache[baseKey] = codeTxt || "";
+      if (currentEffectKey === baseKey) {
+        renderDetailView();
+      }
+    });
+
+    window.max.bindInlet("bang", function () {
+      window.max.outlet("request_refresh", 0);
+    });
+
+    window.max.bindInlet("loadbang", function () {
+      window.max.outlet("request_refresh", 1);
+    });
+
+    window.max.bindInlet("scroll", function (v) {
+      rowsContainer.scrollTop = Number(v) || 0;
+      scheduleStateSave();
+    });
+
+    window.max.bindInlet("expandall", function () {
+      setAllDirs(true);
+    });
+
+    window.max.bindInlet("collapseall", function () {
+      setAllDirs(false);
+    });
+
+    window.max.bindInlet("toggle", function (name) {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].type === "dir" && entries[i].name === String(name)) {
+          toggleDir(entries[i]);
+          return;
+        }
+      }
+    });
+
+    window.max.bindInlet("filter", function (v) {
+      setFilter(Number(v));
+    });
+
+    window.max.bindInlet("sort", function (v) {
+      setSort(Number(v));
+    });
+
+    window.max.bindInlet("rating", function (path, n) {
+      var rk = ratingKeyForPath(String(path));
+      var v = Math.round(Number(n));
+      if (v >= 1 && v <= 5) ratings[rk] = Math.min(v, 5);
+      else delete ratings[rk];
+      saveRatings();
+      rebuildRows();
+    });
+
+    window.max.bindInlet("loaded", function (path) {
+      var key = (path === undefined || path === null) ? "" : String(path);
+      if (!key || key === "none") {
+        loadedPath = null;
+      } else {
+        loadedPath = relKey(key);
+      }
+      rebuildRows();
+      scheduleStateSave();
+    });
+
+    window.max.bindInlet("savestate", function () {
+      saveStateNow();
+    });
+
+    window.max.bindInlet("keydebug", function (v) {
+      keyDebug = Boolean(Number(v));
+    });
+
+    window.max.bindInlet("kbd", function (v) {
+      if (!mouseOver && !hasFocus) return;
+      var n = Math.round(Number(v));
+      if (!isFinite(n) || n === 0) return;
+      var action = "";
+      if (n < 0 || n >= 63232) {
+        action = specialKeyAction(n);
+      } else if (n === 13 || n === 10 || n === 27 || n === 32) {
+        action = specialKeyAction(n);
+      } else {
+        var ch = String.fromCharCode(n);
+        if (ch >= "1" && ch <= "5") action = "rate:" + ch;
+        else if (ch === "0") action = "rate:0";
+        var low = ch.toLowerCase();
+        if (low >= "a" && low <= "z") action = "letter:" + low;
+      }
+      if (action) performAction(action);
+    });
+
+    // Notify Max host that jweb DOM is ready
+    window.max.outlet("ready");
+  }
+
+  // ---------- Static / GitHub Pages Loader ----------
+  function loadStaticFromGitHub() {
+    dirPath = "generated_maxpat";
+    statusMsg = "Fetching effect tree & ratings from GitHub (main)...";
+    rebuildRows();
+
+    var ratingsPromise = fetch(RAW_BASE + "ratings.json", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : {}; })
+      .catch(function () {
+        // Fallback to local ratings.json if served locally via HTTP
+        return fetch("ratings.json", { cache: "no-store" })
+          .then(function (r2) { return r2.ok ? r2.json() : {}; })
+          .catch(function () { return {}; });
+      });
+
+    var treePromise = fetch(API_TREE_URL)
+      .then(function (r) {
+        if (!r.ok) throw new Error("GitHub API status " + r.status);
+        return r.json();
+      });
+
+    Promise.all([ratingsPromise, treePromise])
+      .then(function (results) {
+        var remoteRatings = results[0] || {};
+        var treeData = results[1] || {};
+
+        ratings = {};
+        for (var k in remoteRatings) {
+          var v = parseInt(remoteRatings[k], 10);
+          if (v >= 1 && v <= 5) ratings[k] = v;
+        }
+
+        // Merge any local browser rating overrides
+        try {
+          var localOverride = localStorage.getItem("sousa_fx_ratings_override");
+          if (localOverride) {
+            var ov = JSON.parse(localOverride);
+            for (var ok in ov) {
+              var ovVal = parseInt(ov[ok], 10);
+              if (ovVal >= 1 && ovVal <= 5) ratings[ok] = ovVal;
+            }
+          }
+        } catch (e) {}
+
+        var dirMap = {};
+        var loose = [];
+        var tree = treeData.tree || [];
+
+        for (var i = 0; i < tree.length; i++) {
+          var item = tree[i];
+          if (item.type !== "blob") continue;
+          if (item.path.indexOf("generated_fx/") !== 0) continue;
+          var rel = item.path.substring("generated_fx/".length);
+          if (!rel.endsWith(".txt") || rel.endsWith("_paraminfo.txt")) continue;
+
+          var parts = rel.split("/");
+          var fxBase = parts[parts.length - 1].replace(/\.txt$/i, "");
+          var maxpatName = fxBase + ".maxpat";
+
+          if (parts.length === 1) {
+            loose.push(maxpatName);
+          } else {
+            var cat = parts[0];
+            if (!dirMap[cat]) dirMap[cat] = [];
+            dirMap[cat].push(maxpatName);
+          }
+        }
+
+        var folderNames = Object.keys(dirMap).sort(byName);
+        entries = [];
+        for (var f = 0; f < folderNames.length; f++) {
+          var catName = folderNames[f];
+          var fileList = dirMap[catName].sort(byName);
+          entries.push({
+            type: "dir",
+            name: catName,
+            path: dirPath + "/" + catName,
+            open: true,
+            files: fileList
+          });
+          openDirs[catName] = true;
+        }
+        loose.sort(byName);
+        for (var l = 0; l < loose.length; l++) {
+          entries.push({
+            type: "file",
+            name: loose[l],
+            path: dirPath + "/" + loose[l]
+          });
+        }
+
+        // Restore saved browser workspace state if present, otherwise default to open & sorted by rating or A-Z
+        var savedState = null;
+        try {
+          var rawState = localStorage.getItem("sousa_fx_state");
+          if (rawState) savedState = JSON.parse(rawState);
+        } catch (e) {}
+
+        if (savedState) {
+          applyStateObject(savedState);
+        } else {
+          rebuildRows();
+          // Select first effect by default so the ParamInfo panel is immediately populated
+          for (var rIdx = 0; rIdx < rows.length; rIdx++) {
+            if (rows[rIdx].type === "file" && rows[rIdx].path) {
+              selectIndex(rIdx, false);
+              break;
+            }
+          }
+        }
+      })
+      .catch(function (err) {
+        statusMsg = "Could not load from GitHub API: " + err.message;
+        rebuildRows();
+      });
+  }
+
+  // ---------- Boot ----------
+  renderHeader();
+  if (isMax) {
+    setupMaxBridge();
+  } else {
+    loadStaticFromGitHub();
+  }
+})();
+</script>
+</body>
+</html>
