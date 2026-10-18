@@ -3,6 +3,8 @@ Page: https://mrelwood5.wixsite.com/plugins
 (GoldComp4 has no individual page on the site; it is listed and distributed
 inside the free mrelwood_PluginPack.)
 
+Only a sliver less CPU than GoldComp4 set to 4x oversampling.
+
 What it is: mrelwood's "latest go-to compressor for everything": a stereo
 (or M/S) program compressor with knee, ratio, attack/release, an
 FET-vs-opto release flavor switch, detector HP, RMS-target makeup, negative

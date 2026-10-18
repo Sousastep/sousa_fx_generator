@@ -57,8 +57,8 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 - chorus_leslie_doppler_sdf.maxpat 				** super nice with all params maxed
 
 - comp_crest_flux_autoballistic.maxpat 			** excellent compressor, needs gain staging
-- comp_ssl_g384_bus_vca.maxpat 					** classic glue buss compressor?
-- comp_fairchild_6386_varimu.maxpat 			** sounds great and auto-gain stages well
+- comp_ssl_g384_bus_vca.maxpat 					** classic glue buss compressor? sounds excellent, might be the best. low cpu. "Widely known in the music industry as the ultimate "mix bus glue" machine", 2026 paper
+- comp_fairchild_6386_varimu.maxpat 			** sounds great and auto-gain stages well. makes the tuba sound better, has character
 
 - even_odd_harmonic_comb_splitter.maxpat 		* very good, does it well
 
@@ -113,3 +113,73 @@ This repository contains ai-generated rnbo codebox~ effects made from DAFx paper
 - filter_buchla292_vactrol_lowpass_gate.txt 	broken, no sound
 - filter_edp_wasp_cmos_ota_svf.txt 				broken, no sound
 - filter_korg_ms50_diode_ring_sallen_key.txt 	broken, no sound
+
+## previous ports
+
+### Clipper
+
+- ADClip9 - super nice
+- ClipOnly3 - useful
+- ZOutputStage - for drums maybe
+- RCInflator2_Ideal
+
+
+### Limiter
+
+- mrelwood_Sky_is_the_limit_3v2_BETA
+
+
+### Compressor
+
+- mrelwood_GoldComp4 - excellent gain staging, higher cpu
+- Density3
+- Dynamics3
+- ButterComp2
+- PurestSquish
+- VariMu
+
+
+### Sidechain Bass Comp
+
+- mrelwood_BandbAss - sounds very good
+
+
+### 4-band Gate
+
+- mrelwood_GateIQ
+
+
+### Reverb
+
+- TakeCare
+- Ultralight2
+- VerbTiny
+- VerbThic
+- mrelwood_Chmahastic_Reverb_2
+
+
+### Tape
+
+- TapeHack2
+- ToTape9
+
+
+### mixbus
+
+- X2Buss
+- ChannelX
+
+
+### Crossover Filter
+
+- mrelwood_HP-LP_LR4_Filters
+
+
+### Acid Filter
+
+- ZAcidLowpass
+
+
+## Dither
+
+- PaulWide
