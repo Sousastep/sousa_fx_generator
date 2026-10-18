@@ -9,7 +9,8 @@
             "modernui": 1
         },
         "classnamespace": "box",
-        "rect": [ 34.0, 240.0, 1544.0, 1263.0 ],
+        "rect": [ 58.0, 87.0, 1544.0, 1263.0 ],
+        "isolateaudio": 1,
         "boxes": [
             {
                 "box": {
@@ -303,7 +304,7 @@
                     "lockeddragscroll": 0,
                     "lockedsize": 0,
                     "maxclass": "bpatcher",
-                    "name": "even_odd_harmonic_comb_splitter.maxpat",
+                    "name": "comp_ssl_g384_bus_vca.maxpat",
                     "numinlets": 0,
                     "numoutlets": 0,
                     "offset": [ 0.0, 0.0 ],
@@ -701,8 +702,8 @@
                                     "rnbo_extra_attributes": {
                                         "nocache": 0,
                                         "code": "// ============================================================================\n// 00_tuba_freq_tracker.txt\n// Hybrid IFT (Instantaneous Frequency Tracking) + Recursive YIN (CMNDF)\n// + Phase-Locked Loop (PLL) Pitch & Analytic Phasor Tracker for Live Tuba\n// ============================================================================\n// Why this beats standalone YinFFT (fluid.pitch~) for live tuba dubstep:\n//   1. YinFFT requires a 2048-to-4096 sample FFT window (~46 to 93 ms latency)\n//      to resolve a 29 Hz pedal Bb0, and only updates once per hop.\n//   2. This tracker combines TWO complementary real-time engines:\n//      (A) Recursive Sliding-Window YIN (de Cheveigne & Kawahara 2002) with\n//          O(1) per-sample running lag updates, evaluated every 32 samples\n//          (< 0.7 ms hop) with parabolic sub-sample interpolation and octave-\n//          subharmonic preference to guarantee unambiguous octave lock.\n//      (B) IFT (Instantaneous Frequency Tracking) via an adaptive\n//          narrowband SVF isolator + 4-stage Quadrature IIR Hilbert Transform\n//          that differentiates the instantaneous analytic phase d(theta)/dt\n//          EVERY SAMPLE (0 ms latency) for ultra-fast lip bends & vibrato.\n//   3. A Type-II Phase-Locked Loop (PLL) fuses the unambiguous YIN coarse\n//      fundamental with the zero-latency IFT instantaneous frequency,\n//      outputting sample-accurate Hz, confidence, a locked [0..1) phasor,\n//      and a pure unit-amplitude fundamental sine wave!\n// ============================================================================\n// Inlets:\n//   in1: Left Audio Input (Tuba)\n//   in2: Right Audio Input (Tuba; if unpatched, mono in1 is used automatically)\n//   in3: Optional External Pitch Hint in Hz (e.g. fluid.pitch~; if >20 Hz, blends with YIN)\n// Outlets:\n//   out1: Tracked Fundamental Frequency f0 in Hz (Audio-rate, sample-accurate)\n//   out2: Pitch Confidence / Periodicity [0.0 .. 1.0]\n//   out3: Phase-Locked Tuba Phasor [0.0 .. 1.0) (Drop-in replacement for phasor~)\n//   out4: Pure Phase-Locked Fundamental Sine Wave [-1.0 .. 1.0]\n\n@param({ min: 24.0, max: 120.0 }) min_freq_hz = 28.0;\n@param({ min: 150.0, max: 700.0 }) max_freq_hz = 420.0;\n@param({ min: 0.0, max: 1.0 }) IFT_speed = 0.65;\n@param({ min: -60.0, max: -18.0 }) gate_thresh_db = -42.0;\n\n// --- Pre-Conditioning Filters (Isolate 25..450 Hz brass fundamental region) ---\n@state preHp = new svf();\n@state preLp1 = new onepole();\n@state preLp2 = new onepole();\n\n// --- Recursive Sliding YIN (CMNDF) State ---\n// Downsampled by 4x (e.g. 12 kHz at 48 kHz SR) so lags 25..430 cover 28 Hz..480 Hz\n// with only a 512-sample circular buffer and 4x lower CPU cost!\n@state yinBuf = new FixedSampleArray(1024);\n@state runDiff = new FixedSampleArray(440);\n@state yinWrite: Int = 0;\n@state decCount: Int = 0;\n@state hopCount: Int = 0;\n@state yinFreq = 58.27; // Default Bb1\n@state yinConf = 0.0;\n\n// 3-point Median filter history on YIN pitch to reject transient tongue clicks\n@state med0 = 58.27;\n@state med1 = 58.27;\n@state med2 = 58.27;\n\n// --- IFT (Instantaneous Frequency Tracking) State ---\n// Adaptive narrowband SVF tracks the fundamental, followed by a 4-stage Hilbert pair\n@state IFTSvf1 = new svf();\n@state IFTSvf2 = new svf();\n@state hReX = new FixedSampleArray(4);\n@state hReY = new FixedSampleArray(4);\n@state hImX = new FixedSampleArray(4);\n@state hImY = new FixedSampleArray(4);\n@state hDelRe = 0.0;\n@state prevTheta = 0.0;\n@state IFTInstHz = 58.27;\n\n// --- Fusion & Phase-Locked Loop (PLL) State ---\n@state fusedF0 = 58.27;\n@state smoothConf = 0.0;\n@state envRms = 0.0;\n@state pllPhase = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet xL = in1;\nlet xR = in2;\nlet extHint = in3;\n\n// Sum stereo (or mono if in2 is silent)\nlet rawMono = (abs(xR) > 0.0000001) ? (0.5 * (xL + xR)) : xL;\n\n// ============================================================================\n// 1. RMS ENVELOPE & SILENCE GATE\n// ============================================================================\nlet envCoeff = 1.0 - exp(-1.0 / (0.008 * sr));\nenvRms += (rawMono * rawMono - envRms) * envCoeff;\nlet rmsAmp = sqrt(maximum(envRms, 0.0));\nlet threshLin = dbtoa(clamp(gate_thresh_db, -60.0, -18.0));\nlet isPlaying = (rmsAmp > threshLin) ? 1.0 : 0.0;\n\n// ============================================================================\n// 2. PRE-CONDITIONING FOR RECURSIVE YIN\n// Highpass at 22 Hz (remove breath thumps/DC) + 2-stage lowpass at 280 Hz\n// ============================================================================\nlet hpSig = preHp.next(rawMono, 22.0, 0.707)[1];\nlet condSig = preLp2.next(preLp1.next(hpSig, 260.0), 260.0);\n\n// ============================================================================\n// 3. 4x DECIMATED RECURSIVE YIN (CMNDF) ENGINE\n// ============================================================================\ndecCount = (decCount + 1) % 4;\nif (decCount == 0) {\n\tlet dSr = sr * 0.25;\n\tlet winSize: Int = floor(clamp(dSr * 0.028, 128.0, 400.0)); // ~28 ms integration window\n\tlet minLag: Int = floor(clamp(dSr / clamp(max_freq_hz, 150.0, 700.0), 12.0, 120.0));\n\tlet maxLag: Int = floor(clamp(dSr / clamp(min_freq_hz, 24.0, 120.0), 130.0, 430.0));\n\n\tyinBuf[yinWrite] = condSig;\n\tlet oldIdx: Int = (yinWrite - winSize + 1024) % 1024;\n\tlet xNew = condSig;\n\tlet xOld = yinBuf[oldIdx];\n\n\t// Update running squared difference d_t(tau) recursively\n\tfor (let tau: Int = 1; tau <= maxLag; tau++) {\n\t\tlet idxNewTau: Int = (yinWrite - tau + 1024) % 1024;\n\t\tlet idxOldTau: Int = (oldIdx - tau + 1024) % 1024;\n\t\tlet diffNew = xNew - yinBuf[idxNewTau];\n\t\tlet diffOld = xOld - yinBuf[idxOldTau];\n\t\tlet updated = runDiff[tau] + diffNew * diffNew - diffOld * diffOld;\n\t\trunDiff[tau] = maximum(updated, 0.0);\n\t}\n\n\t// Evaluate Cumulative Mean Normalized Difference Function d'(tau) every 8 decimated samples (32 audio samples = 0.66 ms)\n\thopCount = (hopCount + 1) % 8;\n\tif (hopCount == 0 && isPlaying > 0.5) {\n\t\tlet cumSum = 0.0;\n\t\tlet bestTau: Int = minLag;\n\t\tlet bestVal = 10.0;\n\t\tlet thresh = 0.14; // YIN absolute threshold for first subharmonic dip\n\t\tlet foundDip: Int = 0;\n\n\t\tfor (let tau: Int = 1; tau <= maxLag; tau++) {\n\t\t\tcumSum += runDiff[tau];\n\t\t\tlet cmndf = (cumSum > 0.0000001) ? (runDiff[tau] * tau / cumSum) : 1.0;\n\n\t\t\tif (tau >= minLag) {\n\t\t\t\tif (foundDip == 0) {\n\t\t\t\t\tif (cmndf < bestVal) {\n\t\t\t\t\t\tbestVal = cmndf;\n\t\t\t\t\t\tbestTau = tau;\n\t\t\t\t\t}\n\t\t\t\t\t// Once we enter a dip below threshold and start rising, lock to this fundamental!\n\t\t\t\t\t// This prevents YIN from picking the 2*tau sub-octave while rejecting 0.5*tau 2nd harmonic\n\t\t\t\t\tif (bestVal < thresh && cmndf > bestVal + 0.02) {\n\t\t\t\t\t\tfoundDip = 1;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\n\t\t// Parabolic interpolation around bestTau for sub-sample accuracy\n\t\tlet tauM1: Int = maximum(bestTau - 1, 1);\n\t\tlet tauP1: Int = minimum(bestTau + 1, maxLag);\n\t\tlet y1 = runDiff[tauM1];\n\t\tlet y2 = runDiff[bestTau];\n\t\tlet y3 = runDiff[tauP1];\n\t\tlet denom = 2.0 * (2.0 * y2 - y1 - y3);\n\t\tlet delta = (abs(denom) > 0.0000001) ? clamp((y1 - y3) / denom, -0.5, 0.5) : 0.0;\n\n\t\tlet refinedLag = bestTau + delta;\n\t\tlet rawYinHz = clamp(dSr / refinedLag, min_freq_hz, max_freq_hz);\n\t\tlet rawConf = clamp(1.0 - bestVal, 0.0, 1.0);\n\n\t\t// 3-point median filter to strip brass valve/tongue transient spikes\n\t\tif (rawConf > 0.45) {\n\t\t\tmed2 = med1;\n\t\t\tmed1 = med0;\n\t\t\tmed0 = rawYinHz;\n\t\t\tlet a = med0; let b = med1; let c = med2;\n\t\t\tlet medianHz = maximum(minimum(a, b), minimum(maximum(a, b), c));\n\t\t\tyinFreq = medianHz;\n\t\t}\n\t\tyinConf = rawConf;\n\t}\n\tyinWrite = (yinWrite + 1) % 1024;\n}\n\n// Optional blend with external fluid.pitch~ hint on in3 if user patches it\nlet anchorHz = (extHint > 20.0 && extHint < 1000.0) ? linearinterp(0.5, yinFreq, extHint) : yinFreq;\n\n// ============================================================================\n// 4. IFT (Instantaneous FREQUENCY TRACKING) ENGINE\n// Isolates the fundamental partial using a dual-stage SVF centered at fusedF0,\n// extracts the analytic signal via a 4-stage quadrature Hilbert transform,\n// and differentiates instantaneous phase d(theta)/dt every single sample!\n// ============================================================================\nlet trackCenter = clamp(fusedF0, min_freq_hz, max_freq_hz);\nlet bp1 = IFTSvf1.next(hpSig, trackCenter, 0.86)[2];\nlet isoFund = IFTSvf2.next(bp1, trackCenter, 0.86)[2];\n\n// 4-Stage Quadrature IIR Hilbert Allpass Pair\nlet cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;\nlet cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;\n\nlet sRe = isoFund;\nlet yRe0 = cRe0 * (sRe - hReY[0]) + hReX[0]; hReX[0] = sRe; hReY[0] = yRe0; sRe = yRe0;\nlet yRe1 = cRe1 * (sRe - hReY[1]) + hReX[1]; hReX[1] = sRe; hReY[1] = yRe1; sRe = yRe1;\nlet yRe2 = cRe2 * (sRe - hReY[2]) + hReX[2]; hReX[2] = sRe; hReY[2] = yRe2; sRe = yRe2;\nlet yRe3 = cRe3 * (sRe - hReY[3]) + hReX[3]; hReX[3] = sRe; hReY[3] = yRe3;\nlet outRe = hDelRe; hDelRe = yRe3;\n\nlet sIm = isoFund;\nlet yIm0 = cIm0 * (sIm - hImY[0]) + hImX[0]; hImX[0] = sIm; hImY[0] = yIm0; sIm = yIm0;\nlet yIm1 = cIm1 * (sIm - hImY[1]) + hImX[1]; hImX[1] = sIm; hImY[1] = yIm1; sIm = yIm1;\nlet yIm2 = cIm2 * (sIm - hImY[2]) + hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm = yIm2;\nlet yIm3 = cIm3 * (sIm - hImY[3]) + hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;\nlet outIm = yIm3;\n\nlet pol = cartopol(outRe, outIm);\nlet instAmp = pol[0];\nlet theta = pol[1];\n\n// Unwrap single-sample phase difference dTheta in [-pi, pi]\nlet dTheta = theta - prevTheta;\nif (dTheta < -pi) { dTheta += 2.0 * pi; }\nelse if (dTheta > pi) { dTheta -= 2.0 * pi; }\nprevTheta = theta;\n\n// Instantaneous frequency f_inst(t) = (dTheta / (2*pi)) * sr\nlet rawInstHz = (dTheta / (2.0 * pi)) * sr;\n\n// Gate IFT instantaneous frequency: only trust when within +/- 18% of the YIN octave anchor\n// This gives 0-latency tracking of vibrato/glissandi while making octave errors impossible!\nlet devRatio = abs(rawInstHz - anchorHz) / maximum(anchorHz, 20.0);\nif (devRatio < 0.18 && instAmp > 0.0002) {\n\tlet IFTSlew = 1.0 - exp(-1.0 / (0.0018 * sr));\n\tIFTInstHz += (rawInstHz - IFTInstHz) * IFTSlew;\n} else {\n\tlet anchorSlew = 1.0 - exp(-1.0 / (0.006 * sr));\n\tIFTInstHz += (anchorHz - IFTInstHz) * anchorSlew;\n}\n\n// ============================================================================\n// 5. YIN + IFT KALMAN-STYLE FUSION & PHASE-LOCKED LOOP (PLL) OSCILLATOR\n// ============================================================================\nlet speed = clamp(IFT_speed, 0.0, 1.0);\nlet targetF0 = linearinterp(speed, anchorHz, IFTInstHz);\n\n// Hold last valid pitch when player stops blowing (zero pitch drop on note release!)\nif (isPlaying > 0.5 && yinConf > 0.35) {\n\tlet trackSlew = 1.0 - exp(-1.0 / ((0.010 - 0.0085 * speed) * sr));\n\tfusedF0 += (targetF0 - fusedF0) * trackSlew;\n}\nfusedF0 = clamp(fusedF0, min_freq_hz, max_freq_hz);\n\n// Smooth confidence output [0..1]\nlet targetConf = isPlaying * yinConf;\nsmoothConf += (targetConf - smoothConf) * (1.0 - exp(-1.0 / (0.010 * sr)));\n\n// Advance PLL Phasor & gently phase-lock to the analytic phase of the tuba fundamental\nlet targetPh = wrap((theta + pi) / (2.0 * pi), 0.0, 1.0);\nlet phErr = targetPh - pllPhase;\nif (phErr > 0.5) { phErr -= 1.0; }\nelse if (phErr < -0.5) { phErr += 1.0; }\n\nlet pllLockStrength = 0.015 * smoothConf;\npllPhase = wrap(pllPhase + (fusedF0 / sr) + pllLockStrength * phErr, 0.0, 1.0);\n\nout1 = fusedF0;\nout2 = smoothConf;\nout3 = pllPhase;\nout4 = sin(2.0 * pi * pllPhase) * smoothConf;\n",
-                                        "expr": "",
-                                        "safemath": 1
+                                        "safemath": 1,
+                                        "expr": ""
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -976,8 +977,8 @@
                                     "patching_rect": [ 30.0, 70.0, 70.0, 23.0 ],
                                     "rnbo_classname": "in~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "audio_in_1",
@@ -1070,8 +1071,8 @@
                                     "patching_rect": [ 317.5, 70.0, 70.0, 23.0 ],
                                     "rnbo_classname": "in~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "audio_in_2",
@@ -1164,8 +1165,8 @@
                                     "patching_rect": [ 605.0, 70.0, 70.0, 23.0 ],
                                     "rnbo_classname": "in~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "audio_in_3",
@@ -1257,8 +1258,8 @@
                                     "patching_rect": [ 30.0, 490.0, 70.0, 23.0 ],
                                     "rnbo_classname": "out~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "audio_out_1",
@@ -1351,8 +1352,8 @@
                                     "patching_rect": [ 222.0, 490.0, 69.99999999999997, 23.0 ],
                                     "rnbo_classname": "out~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "audio_out_2",
@@ -1445,8 +1446,8 @@
                                     "patching_rect": [ 413.0, 490.0, 70.0, 23.0 ],
                                     "rnbo_classname": "out~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "audio_out_3",
@@ -1539,8 +1540,8 @@
                                     "patching_rect": [ 605.0, 490.0, 70.0, 23.0 ],
                                     "rnbo_classname": "out~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "audio_out_4",
@@ -1645,11 +1646,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
+                                        "minimum": "<none>",
                                         "initialFormat": "float",
-                                        "preset": 0,
                                         "order": "",
-                                        "maximum": "<none>",
-                                        "minimum": "<none>"
+                                        "preset": 0,
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_min_freq_hz",
@@ -1817,11 +1818,11 @@
                                     "patching_rect": [ 890.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
+                                        "minimum": "<none>",
                                         "initialFormat": "float",
-                                        "preset": 0,
                                         "order": "",
-                                        "maximum": "<none>",
-                                        "minimum": "<none>"
+                                        "preset": 0,
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_max_freq_hz",
@@ -1989,11 +1990,11 @@
                                     "patching_rect": [ 1080.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
+                                        "minimum": "<none>",
                                         "initialFormat": "float",
-                                        "preset": 0,
                                         "order": "",
-                                        "maximum": "<none>",
-                                        "minimum": "<none>"
+                                        "preset": 0,
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "value_sift_speed",
@@ -2161,11 +2162,11 @@
                                     "patching_rect": [ 1270.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
+                                        "minimum": "<none>",
                                         "initialFormat": "float",
-                                        "preset": 0,
                                         "order": "",
-                                        "maximum": "<none>",
-                                        "minimum": "<none>"
+                                        "preset": 0,
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "value_gate_thresh_db",
@@ -2590,8 +2591,8 @@
                                     "rnbo_extra_attributes": {
                                         "nocache": 0,
                                         "code": "// ============================================================================\n// 01_harmonic_isolator.txt\n// Unix-Style Effect 1: Pitch-Tracking Harmonic Isolator & Sine-ifier\n// Isolates the fundamental or a chosen harmonic of the stereo tuba signal\n// using a cascaded resonant bell boost + SVF bandpass, and outputs a clean,\n// normalized stereo sine-approximated carrier/modulator on out3 & out4.\n// ============================================================================\n// Inlets:\n//   in1: Left Audio Input\n//   in2: Right Audio Input\n//   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~ YinFFT; <=0 uses internal tracker)\n// Outlets:\n//   out1: Left Audio Output (Filtered / Boosted Harmonic)\n//   out2: Right Audio Output (Filtered / Boosted Harmonic)\n//   out3: Left Normalized Sine-ified Carrier/Modulator [-1, 1]\n//   out4: Right Normalized Sine-ified Carrier/Modulator [-1, 1]\n\n@param({ min: 1.0, max: 16.0 }) harmonic = 1.0;\n@param({ min: 0.0, max: 48.0 }) boost_db = 24.0;\n@param({ min: 0.0, max: 1.0 }) focus = 0.65;\n@param({ min: 0.0, max: 1.0 }) norm_amount = 0.75;\n\n// Biquad peak EQ states (Left and Right)\n@state bqL = new biquad();\n@state bqR = new biquad();\n\n// Cascaded 2-stage SVF bandpass states for steep harmonic isolation\n@state svfL1 = new svf();\n@state svfR1 = new svf();\n@state svfL2 = new svf();\n@state svfR2 = new svf();\n\n// Internal fallback zero-crossing pitch tracker & conditioning state\n@state lpTrack = new onepole();\n@state prevTrackSig = 0.0;\n@state zcCounter = 0.0;\n@state zcFreq = 55.0;\n@state smoothF0 = 55.0;\n\n// Envelope followers for dynamic decoupling / amplitude normalization\n@state envFastL = 0.0;\n@state envFastR = 0.0;\n@state envSlowL = 0.0;\n@state envSlowR = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet xL = in1;\nlet xR = in2;\nlet extPitch = in3;\n\n// --- 1. Pitch Conditioning (External YinFFT or Internal Zero-Crossing Fallback) ---\nlet monoLow = lpTrack.next(0.5 * (xL + xR), 180.0);\nzcCounter += 1.0;\nif (prevTrackSig <= 0.0 && monoLow > 0.0) {\n\tif (zcCounter > sr / 500.0 && zcCounter < sr / 22.0) {\n\t\tzcFreq = sr / zcCounter;\n\t}\n\tzcCounter = 0.0;\n}\nprevTrackSig = monoLow;\n\nlet rawF0 = (extPitch > 20.0 && extPitch < 1000.0) ? extPitch : zcFreq;\n// Slew-limit pitch in log/Hz domain to suppress tracker glitches\nlet pitchSlew = 1.0 - exp(-1.0 / (0.008 * sr));\nsmoothF0 += (rawF0 - smoothF0) * pitchSlew;\nlet targetHz = clamp(smoothF0 * harmonic, 24.0, sr * 0.42);\n\n// --- 2. Musical Tapers ---\n// focus (0..1) maps exponentially to Q from 1.0 (gentle) to 28.0 (surgical harmonic lock)\nlet qVal = 1.0 * pow(28.0, pow(clamp(focus, 0.0, 1.0), 1.4));\n// boost_db (0..48 dB) maps to RBJ peaking filter linear gain A = 10^(dB/40)\nlet A = pow(10.0, clamp(boost_db, 0.0, 48.0) / 40.0);\n\n// --- 3. RBJ Peaking EQ Coefficients at targetHz ---\nlet w0 = 2.0 * pi * targetHz / sr;\nlet cosw = cos(w0);\nlet sinw = sin(w0);\nlet alpha = sinw / (2.0 * maximum(qVal * 0.5, 0.5));\n\nlet b0 = 1.0 + alpha * A;\nlet b1 = -2.0 * cosw;\nlet b2 = 1.0 - alpha * A;\nlet a0_inv = 1.0 / (1.0 + alpha / A);\nlet a1 = (-2.0 * cosw) * a0_inv;\nlet a2 = (1.0 - alpha / A) * a0_inv;\n\nlet c_b0 = b0 * a0_inv;\nlet c_b1 = b1 * a0_inv;\nlet c_b2 = b2 * a0_inv;\n\n// Compensate peak gain so +48 dB doesn't clip wildly before normalization\nlet compGain = 1.0 / pow(A, 1.35);\nlet peakedL = bqL.next(xL, c_b0, c_b1, c_b2, a1, a2) * compGain;\nlet peakedR = bqR.next(xR, c_b0, c_b1, c_b2, a1, a2) * compGain;\n\n// --- 4. Cascaded SVF Bandpass Isolation ---\n// svf.next(x, freq, Q) returns [lp, hp, bp, notch]\nlet svfQ = clamp(0.5 + focus * 0.45, 0.5, 0.96);\nlet bpL1 = svfL1.next(peakedL, targetHz, svfQ)[2];\nlet bpR1 = svfR1.next(peakedR, targetHz, svfQ)[2];\nlet bpL2 = svfL2.next(bpL1, targetHz, svfQ)[2];\nlet bpR2 = svfR2.next(bpR1, targetHz, svfQ)[2];\n\n// Crossfade between bell-boosted tuba and pure isolated harmonic bandpass with focus\nlet isoL = linearinterp(focus, peakedL, bpL2 * 2.2);\nlet isoR = linearinterp(focus, peakedR, bpR2 * 2.2);\n\n// --- 5. Instantaneous Envelope & Dynamic Decoupling ---\nlet absL = abs(isoL);\nlet absR = abs(isoR);\nlet fastAtk = 1.0 - exp(-1.0 / (0.0015 * sr));\nlet fastRel = 1.0 - exp(-1.0 / (0.025 * sr));\nlet slowCoeff = 1.0 - exp(-1.0 / (0.060 * sr));\n\nenvFastL = (absL > envFastL) ? (envFastL + (absL - envFastL) * fastAtk) : (envFastL + (absL - envFastL) * fastRel);\nenvFastR = (absR > envFastR) ? (envFastR + (absR - envFastR) * fastAtk) : (envFastR + (absR - envFastR) * fastRel);\nenvSlowL += (absL - envSlowL) * slowCoeff;\nenvSlowR += (absR - envSlowR) * slowCoeff;\n\n// Gate threshold to prevent noise floor amplification during silence\nlet gateL = clamp((envSlowL - 0.0008) * 250.0, 0.0, 1.0);\nlet gateR = clamp((envSlowR - 0.0008) * 250.0, 0.0, 1.0);\n\nlet unitSinL = (isoL / (envFastL * 1.25 + 0.0005)) * gateL;\nlet unitSinR = (isoR / (envFastR * 1.25 + 0.0005)) * gateR;\nunitSinL = tanh(unitSinL);\nunitSinR = tanh(unitSinR);\n\nlet nAmt = pow(clamp(norm_amount, 0.0, 1.0), 1.2);\nout1 = linearinterp(nAmt, isoL, unitSinL);\nout2 = linearinterp(nAmt, isoR, unitSinR);\nout3 = unitSinL;\nout4 = unitSinR;\n",
-                                        "expr": "",
-                                        "safemath": 1
+                                        "safemath": 1,
+                                        "expr": ""
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -2865,8 +2866,8 @@
                                     "patching_rect": [ 30.0, 70.0, 70.0, 23.0 ],
                                     "rnbo_classname": "in~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "audio_in_1",
@@ -2959,8 +2960,8 @@
                                     "patching_rect": [ 317.5, 70.0, 70.0, 23.0 ],
                                     "rnbo_classname": "in~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "audio_in_2",
@@ -3053,8 +3054,8 @@
                                     "patching_rect": [ 605.0, 70.0, 70.0, 23.0 ],
                                     "rnbo_classname": "in~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "audio_in_3",
@@ -3146,8 +3147,8 @@
                                     "patching_rect": [ 30.0, 520.0, 70.0, 23.0 ],
                                     "rnbo_classname": "out~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "audio_out_1",
@@ -3240,8 +3241,8 @@
                                     "patching_rect": [ 221.66666666666666, 520.0, 69.99999999999997, 23.0 ],
                                     "rnbo_classname": "out~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "audio_out_2",
@@ -3334,8 +3335,8 @@
                                     "patching_rect": [ 413.3333333333333, 520.0, 70.0, 23.0 ],
                                     "rnbo_classname": "out~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "audio_out_3",
@@ -3428,8 +3429,8 @@
                                     "patching_rect": [ 605.0, 520.0, 70.0, 23.0 ],
                                     "rnbo_classname": "out~",
                                     "rnbo_extra_attributes": {
-                                        "comment": "",
-                                        "meta": ""
+                                        "meta": "",
+                                        "comment": ""
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "audio_out_4",
@@ -3534,11 +3535,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
+                                        "minimum": "<none>",
                                         "initialFormat": "float",
-                                        "preset": 0,
                                         "order": "",
-                                        "maximum": "<none>",
-                                        "minimum": "<none>"
+                                        "preset": 0,
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_harmonic",
@@ -3706,11 +3707,11 @@
                                     "patching_rect": [ 890.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
+                                        "minimum": "<none>",
                                         "initialFormat": "float",
-                                        "preset": 0,
                                         "order": "",
-                                        "maximum": "<none>",
-                                        "minimum": "<none>"
+                                        "preset": 0,
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_boost_db",
@@ -3878,11 +3879,11 @@
                                     "patching_rect": [ 1080.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
+                                        "minimum": "<none>",
                                         "initialFormat": "float",
-                                        "preset": 0,
                                         "order": "",
-                                        "maximum": "<none>",
-                                        "minimum": "<none>"
+                                        "preset": 0,
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "value_focus",
@@ -4050,11 +4051,11 @@
                                     "patching_rect": [ 1270.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
+                                        "minimum": "<none>",
                                         "initialFormat": "float",
-                                        "preset": 0,
                                         "order": "",
-                                        "maximum": "<none>",
-                                        "minimum": "<none>"
+                                        "preset": 0,
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "value_norm_amount",
@@ -4703,7 +4704,7 @@
             }
         ],
         "parameters": {
-            "obj-21::obj-11": [ "rnbo~[1]", "rnbo~", 0 ],
+            "obj-21::obj-7": [ "rnbo~[1]", "rnbo~", 0 ],
             "obj-4": [ "rnbo~", "rnbo~", 0 ],
             "obj-51": [ "live.gain~", "live.gain~", 0 ],
             "obj-53": [ "live.gain~[2]", "live.gain~", 0 ],
