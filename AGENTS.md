@@ -1,0 +1,279 @@
+# AGENTS.md
+
+Guidance for AI agents (and humans) working in `sousa_fx_generator`.
+
+This repo produces stereo audio effects in **RNBO `codebox~`** (rnboscript, a
+JavaScript-like DSP language) for a live, amplified-tuba rig playing modern
+dubstep / riddim. Effects come from two sources: DSP **derived from DAFx papers**
+and **ports of existing plugins** (mrelwood JSFX, airwindows VST). Everything is
+verified by compiling with the real RNBO toolchain, converted into Max demo
+patchers, and then **auditioned by the human by ear in Max** — which is the only
+step an agent cannot do.
+
+---
+
+## 1. The loop
+
+```bash
+# 1. write the pair
+generated_fx/<Category>/<name>.txt            # the codebox~ source
+generated_fx/<Category>/<name>_paraminfo.txt  # parameter documentation
+
+# 2. must pass before you claim anything is done
+node tools/verify_codebox.js generated_fx/<Category>/<name>.txt   # exit 0 = pass
+
+# 3. convert to demo patchers (mirrors the generated_fx/ tree)
+python3 tools/generate_maxpats.py                       # all
+python3 tools/generate_maxpats.py --only <name>          # one effect
+python3 tools/generate_maxpats.py --list                 # dry run
+
+# 4. the human opens main_test_patcher.maxpat, picks the .maxpat in the browser,
+#    plays the tuba, and records a verdict in .github/README.md
+```
+
+Never hand-edit `generated_maxpat/` — it is generated **and git-ignored**
+(regenerating it is the only supported path; a previous agent deleted the
+hand-made examples by treating that directory as source-of-truth).
+
+`<Category>` is one of the existing directories — note the **spaces in two of
+them**, so always quote paths: `generated_fx/Compressor Limiter/…`,
+`generated_fx/Vowel Formant Comb Lowpass/…`, `generated_fx/Pitch Tracking/…`,
+plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
+
+---
+
+## 2. Repo map
+
+| Path | What it is |
+| --- | --- |
+| `generated_fx/<Cat>/<name>.txt` | codebox~ source (tracked) |
+| `generated_fx/<Cat>/<name>_paraminfo.txt` | parameter docs, paired by filename |
+| `generated_maxpat/<Cat>/<name>.maxpat` | **generated, git-ignored** demo patcher |
+| `tools/verify_codebox.js` | the acceptance test: real RNBO parse → codegen → C++ → `clang++ -fsyntax-only` |
+| `tools/generate_maxpats.py` | `.txt` → `.maxpat` (also embeds the paraminfo text) |
+| `tools/search.py` | search/read the DAFx corpus (two-tier: index → full text) |
+| `tools/build_corpus.py` | PDFs → searchable corpus (already built; re-run only for new PDFs) |
+| `tools/setup_env.sh` | installs the corpus toolchain (JDK 21, tesseract, `uv` venv, opendataloader-pdf) |
+| `docs/rnbo_codebox/` | the language reference + `example1`…`example16` (fundamentals) + `example17`…`example24` (**failure modes distilled from real breakage**) |
+| `docs/max_v8codebox/` | v8.codebox (Max's JS) examples + API reference |
+| `main_test_patcher.maxpat` | the human's audition rig: file browser (`file_list.js`), `s~ in1..in4` / `r~ out1..out2`, scope, rnbo~ slot with auto-build |
+| `file_list.js` | v8ui tree browser over `generated_maxpat/`; click → full path out |
+| `.github/README.md` | human-facing readme carrying the **listening verdicts** per effect |
+| `logs/prompts.md` | the prompt history that built this repo (git-ignored) |
+| `logs/freebuff-chat-*.md` | session logs; the later one has a **"Root Causes Found & Fixed"** section worth reading before debugging DSP |
+| `DAFx-proceedings/` | `index/` (built), `originals/` PDFs, `papers/` Markdown — index, originals and papers are git-ignored |
+
+---
+
+## 3. codebox~ rules that bite
+
+Read `docs/rnbo_codebox/Codebox_Reference.md` for the language and
+`example17`…`example24` for these specific traps. They are ordered by how
+expensive the mistake was.
+
+**Reserved identifiers — the declaration parses, every read becomes a literal.**
+`pi` (`PI`), `e`, `phi` (`PHI`), `twopi`, `sqrt2`, `sqrt1_2`, `degtorad`, `halfpi`,
+`invpi`, `log2e`, `log10e`, `ln2`, `ln10`, … are RNBO constants. Naming a variable
+or `@state` `phi` silently substitutes `1.618033988…` everywhere, which froze the
+carrier of four effects (`modfm_pulse_saw_formant`, `heterodyne_fof_resonator`,
+`vector_phaseshaper_lissajous`, `wave_pulse_phase_modulator`) so they output only
+a slow LFO. Rename (`phVal`, `phBase`, …) and confirm with
+`grep -c 1.618033988 /tmp/<keep-dir>/*.cpp` → `0`. Lowercase `pi`/`PI` *do*
+resolve to π (verified in generated C++), so `2 * pi * f` is fine.
+
+**No unary minus in a declaration whose initialiser is not a plain literal.**
+```js
+let atten = -grDb;          // ERROR: "Invalid negative Number."
+let atten = 0.0 - grDb;     // OK  (identical arithmetic, and what all working files do)
+let x = -1.0;               // OK  (negative literal)
+y = -in1;  out1 = max(-in1, 0.0);  return -x;   // OK (not declarators)
+```
+
+**Fixed-size arrays never travel as function arguments.**
+`function f(buf: FixedSampleArray)` → `Unexpected Token ':'`. Even untyped,
+`function f(buf)` parses and then fails the C++ stage ("subscripted value is not
+an array"). Read the `@state` array directly inside the helper, or inline the
+read at the call site. Allowed type annotations after a name/parameter:
+`number`, `Int`, `Index`, `list`, `BufferRef`, `DataRef` — nothing else. Return
+types may only be `number` or `list` (`: Int` is rejected, so type the receiving
+local instead), and any value used as an array index must be `Int`.
+
+**`delay` needs `step()`.** `write()` + `read()` without `step()` never advances
+the read pointer — no error, just no delay. Use `d.next(x, samples)` or the
+explicit `read` → `write` → `step` order, once per sample. Read/`next` sizes are
+in samples and are clamped to the constructor size.
+
+**Canonical operator names.** Write `maximum` / `minimum` — that is what the
+whole tracked corpus uses (`max`/`min` also compile, verified, but don't mix
+styles in a file). Available too: `abs`, `sqrt`, `exp2`, `trunc`, `clamp`,
+`wrap`, `linearinterp`, `cubicinterp`, `mstosamps`, `samplerate()`, `atodb`,
+`dbtoa`, `atan2`, `phasewrap`. `exp2(x)` is much cheaper than `pow(2, x)`.
+
+**EEL-derived ports (mrelwood) keep EEL's integer/zero semantics.** EEL division
+by zero returns 0 and RNBO arithmetic does not, so those files define
+```js
+function eelDivide(a,b) { return b == 0 ? 0 : a/b; }
+```
+and route every division through it. Keep that helper and its call sites when
+porting or editing an EEL/JSFX source.
+
+**DSP correctness patterns that were real bugs here** (see `example22`…`example24`):
+one-pole allpass is `y = c*(x - y1) + x1` (the `+ y1, - x1` sign slip turned 7
+Hilbert-based effects into sub-bass resonators); instantaneous frequency comes
+from the cross-product `arg(z[n]·conj(z[n-1]))` weighted by envelope confidence,
+not from a raw `atan2` difference; oscillator phase must be a monotonic
+integrated ramp (`pllPhase = wrap(pllPhase + f0/sr, 0.0, 1.0)`), never `atan2` of
+the audio, and any control latched from a signal that can legitimately be `0`
+needs a sample-and-hold.
+
+---
+
+## 4. Effect conventions
+
+- **≤ 8 parameters, fewer preferred.** Musical units (Hz, ms, dB, %), musical
+  tapers, extremes allowed if they sound good.
+- **`@param` names are user-visible.** `tools/generate_maxpats.py` uses the
+  name verbatim as the control label, the RNBO parameter id, and the
+  `setparam`/`loadmess` targets, so name params for a musician (`midside`,
+  `release_ms`) — never `slider3`. Always give explicit `min`/`max` and a
+  sensible default.
+- **Keep the `// Label` comment directly above each `@param`** and keep names
+  stable: renaming one changes the exposed RNBO parameter id.
+- **IO contract:** `in1`/`in2` = stereo in, `out1`/`out2` = stereo out;
+  `in3` = pitch in **Hz** (from the tuba tracker), `in4` = modulation / tempo /
+  bar signal in **Hz** (or document the exception in the header). Effects are
+  meant to compose — that is why the reference paper effects keep to one job.
+- **Header comment** naming the paper (`DAFx-YY, Paper N, Section/Eq`) and listing
+  inlets/outlets, or — for ports — the `/* Name — RNBO codebox~ port of <source>`
+  block with the licence. Existing styles: `// ===` banners (FMPD, Chorus),
+  `/* … */` (airwindows, mrelwood).
+- **Generated ports have a house style** (one statement per line, closing brace at
+  column 0, `let tmpN` scratch variables, `s_` state prefix). Match it and keep
+  diffs minimal instead of reformatting.
+
+`<name>_paraminfo.txt` is written for a musician: title + source, a short "what
+it is", then a bullet per parameter (original/idiomatic name, range, default,
+units, what it does musically), then any port quirks. `tools/generate_maxpats.py`
+pastes it into the patcher as a comment, so it is also the in-Max documentation.
+
+**Skeleton**
+
+```js
+// <name>.txt — <one-line job>
+// From: <DAFx-YY Paper N §x / plugin source>
+// in1/in2: stereo; in3: pitch (Hz); in4: mod (Hz); out1/out2: stereo
+@param({ min: 20, max: 2000 }) freq_hz = 440;      // centre frequency
+@param({ min: 0, max: 1 }) mix = 1;                // dry/wet
+@state filt = new onepole();
+
+let sr = maximum(samplerate(), 1.0);
+let f = clamp(freq_hz, 20.0, sr * 0.45);
+let wet = filt.next(in1, f);
+let w = clamp(mix, 0.0, 1.0);
+out1 = linearinterp(w, in1, wet);
+out2 = linearinterp(w, in2, filt.next(in2, f));
+```
+
+(that skeleton is verified: `node tools/verify_codebox.js` → PASS.)
+
+---
+
+## 5. Checklists
+
+**New effect derived from a paper**
+1. Search the corpus, read the relevant sections (`§1` below), cite them in the header.
+2. Write `<name>.txt` + `<name>_paraminfo.txt` in the right category.
+3. `node tools/verify_codebox.js <path>` until it passes (exit 0).
+4. `python3 tools/generate_maxpats.py --only <name>`.
+5. Report what you verified and hand the listening test to the human. Never claim
+   an effect "sounds good".
+
+**Porting a plugin (mrelwood / airwindows)**
+1. Port the DSP faithfully; keep original parameter units/defaults and say so in
+   the paraminfo.
+2. Preserve EEL semantics via `eelDivide`; keep the original slider→param name
+   mapping in the paraminfo.
+3. Drop GUI/metering code; keep the licence block.
+4. Same verify → generate → hand-off.
+
+**CPU / DSP optimization pass**
+1. Snapshot the file before editing; keep the pristine copy out of the repo.
+2. Classify every change: **exact** (dead algebra, hoisting parameter-only math
+   into a control-rate update) or **ulp-level** (`pow(x,2)`→`x*x`,
+   `pow(2,x)`→`exp2(x)`, `pow(x,.5)`→`sqrt(x)`).
+3. Prove it numerically before reporting — a C++ translation of the codebox,
+   driven with identical input at several parameter settings, comparing raw
+   output. Exact passes must show **0 differing samples**; ulp-level passes must
+   show a bounded, non-growing difference.
+4. Report measured ns/sample, not adjectives, and say which variant was measured.
+   Reference result: `mrelwood_GoldComp4_4x` (8 detector kernels, 16 calls/sample)
+   — hoisting + dead algebra gave −10…−16%, adding the `pow` rewrites −18…−26%,
+   with the first two passes bit-identical and the third ≤1 ulp
+   (2.2e-16 ≈ −313 dBFS, no growth over 2M frames).
+
+---
+
+## 6. Tools reference
+
+`verify_codebox.js` — runs the same compiler chain Max runs; requires a Max
+install shipping the RNBO package (auto-detected; override with
+`RNBO_PACKAGE_DIR`) and `clang++`.
+
+```bash
+node tools/verify_codebox.js                     # whole generated_fx/
+node tools/verify_codebox.js generated_fx/FMPD   # one category
+node tools/verify_codebox.js --docs              # plus the doc examples
+node tools/verify_codebox.js --keep /tmp/cbox    # keep generated C++ for inspection
+node tools/verify_codebox.js --no-cxx            # skip the clang++ stage
+```
+Exit status: `0` all pass, `1` at least one failure, `2` toolchain not found.
+A doc example may opt out with a `verify: skip` marker. When you filter its
+output through a pipe, keep the exit status (`set -o pipefail`) — a pretty
+`PASS` line is not proof on its own.
+
+It accepts any path, including files outside the repo, which makes it the
+cheapest way to settle a dialect question. Write the smallest probe that shows
+the construct and run it. The `max`/`min` note in §3 and the §4 skeleton were both
+confirmed that way:
+
+```bash
+printf 'let x = max(in1, 0.0);\nout1 = x;\n' > /tmp/probe.txt
+node tools/verify_codebox.js /tmp/probe.txt      # PASS / FAIL + line:col
+```
+
+`generate_maxpats.py` — `--src`, `--outdir`, `--only <names…>`, `--list`.
+
+`search.py` / `build_corpus.py` — the DAFx corpus is **already built**
+(`DAFx-proceedings/index/search.sqlite`); only re-run `./tools/build_corpus.py`
+for new PDFs. Research flow:
+
+```bash
+python3 tools/search.py "phase distortion oscillator" --limit 8
+python3 tools/search.py "waveguide" --year 2010 --author Roebel
+python3 tools/search.py --index 2010_Roebel_DAFx10_K3      # tier-1 record
+python3 tools/search.py --read  2010_Roebel_DAFx10_K3 --page 3
+```
+
+---
+
+## 7. What to claim, and what not to
+
+- Do: "`verify_codebox.js` → `N/N passed`, exit 0", "the loop body is
+  byte-identical to `<x>`", "max abs diff 2.2e-16 over 2M frames", "measured
+  −22% ns/sample on a translated harness".
+- Don't: "it sounds great/broken", "it is now faster" without a measurement,
+  "fixed" when only the compile passed.
+- The compiler passing only means it will load in Max. **Taste, clicks, level and
+  musical range are the human's call** — leave the verdict to them to put in
+  `.github/README.md`.
+- Numbers from a translated harness or a different compiler are indicative only;
+  label them as such. The ground truth for CPU is Max's own meter.
+
+## 8. Housekeeping
+
+- `git` — `generated_maxpat/`, `logs/`, `DAFx-proceedings/{index,originals,papers}`
+  and most of `docs/` are intentionally ignored: check `git status` before
+  assuming something you created is tracked.
+- Keep `docs/rnbo_codebox/example*.md` additive: when you discover a new silent
+  failure mode, add a numbered example that shows the broken and the correct
+  form, and reference it from this file.
