@@ -1,0 +1,9 @@
+[submodule "repos/JSFXClones"]
+	path = repos/JSFXClones
+	url = https://github.com/JClones/JSFXClones.git
+[submodule "repos/airwindows"]
+	path = repos/airwindows
+	url = https://github.com/airwindows/airwindows.git
+[submodule "repos/JSFX"]
+	path = repos/JSFX
+	url = https://github.com/ReaTeam/JSFX.git

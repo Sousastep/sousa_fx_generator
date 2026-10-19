@@ -8,11 +8,19 @@
 
 # :studio_microphone: Introduction
 
-This repository contains ai-generated rnbo codebox~ effects made from DAFx papers.
+This repository contains ai-generated rnbo codebox~ effects made from academic papers and open source effects.
 
 <a href="#books-documentation">![rainbow](./media/rainbow.png)</a>
 
-# :books:
+# :books: Disclaimer
+
+sousa-fx-generator is an independent project unaffiliated with, 
+endorsed by, or sponsored by any of the companies or their respective trademarks.
+
+All product names, trademarks, and registered trademarks mentioned or implied
+in the JClones project are the property of their respective owners. Any
+reference to commercial products is for descriptive purposes only and does
+not constitute an endorsement or affiliation.
 
 <a href="#control_knobs-effects">![rainbow](./media/rainbow.png)</a>
 

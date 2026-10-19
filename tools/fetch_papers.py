@@ -213,7 +213,7 @@ def _download_url_direct(url: str, dest_pdf: Path, timeout: int = 25) -> tuple[b
 # --------------------------------------------------------------------------- #
 WEB_SEARCH_RESULTS = 3        # only the first three hits of a query are considered
 WEB_SEARCH_MAX_MIRRORS = 3    # at most this many PDF candidates are tried
-WEB_SEARCH_PAUSE_S = 1.0      # minimum gap between search-engine requests
+WEB_SEARCH_PAUSE_S = 3.0      # minimum gap between search-engine requests
 
 TRUSTED_PDF_HOSTS = (
     "arxiv.org", "zenodo.org", "hal.science", "hal.archives-ouvertes.fr",
