@@ -105,6 +105,31 @@ def snippet(text: str, terms: list[str], width: int = 320) -> str:
     return ("… " if start else "") + out + (" …" if start + width < len(flat) else "")
 
 
+def source_pdf_path(paper_rel: str | None, source_pdf: str | None,
+                    corpus: str | None = None) -> Path | None:
+    """Absolute path of a paper's source PDF, ready for a file:// link.
+
+    The index stores source_pdf relative to paper.md, and older DAFx rows still
+    use the pre-corpus layout (`papers/<YearDir>/<id>` instead of
+    `papers/DAFx/<YearDir>/<id>`), so try the paper's own source.pdf symlink
+    first and repair the legacy layout from the corpus name.
+    """
+    paper_dir = (LIBRARY / paper_rel).parent if paper_rel else None
+    if paper_dir and not paper_dir.is_dir() and corpus and paper_rel:
+        parts = Path(paper_rel).parts
+        if len(parts) >= 3:
+            alt = LIBRARY / "papers" / corpus / parts[-3] / parts[-2]
+            if alt.is_dir():
+                paper_dir = alt
+    if paper_dir:
+        link = paper_dir / "source.pdf"      # symlink to the untouched original
+        if link.exists():
+            return link.resolve()
+    if source_pdf:
+        return ((paper_dir or LIBRARY) / source_pdf).resolve()
+    return None
+
+
 def paper_dirs() -> list[Path]:
     out = []
     for c_dir in sorted(p for p in PAPERS.iterdir() if p.is_dir() and not p.is_symlink()):
@@ -157,6 +182,9 @@ def cmd_search(args) -> int:
     for r in rows:
         rec = con.execute("SELECT corpus, venue, title, authors, path, source_pdf FROM papers WHERE id = ?",
                           (r["id"],)).fetchone()
+        src_path = source_pdf_path(rec["path"] if rec else None,
+                                   rec["source_pdf"] if rec else None,
+                                   rec["corpus"] if rec else None)
         out.append({
             "id": r["id"],
             "corpus": (rec["corpus"] if rec and rec["corpus"] else r["corpus"]) or "DAFx",
@@ -170,6 +198,7 @@ def cmd_search(args) -> int:
             "match": r["snip"] or snippet(r["text"], terms),
             "paper": rec["path"] if rec else None,
             "source_pdf": rec["source_pdf"] if rec else None,
+            "source_pdf_path": str(src_path) if src_path else None,
         })
 
     if args.json:
@@ -193,6 +222,8 @@ def cmd_search(args) -> int:
             print(f"    {hit['match']}")
         print(f"  full text: {h['paper']}")
         print(f"  source pdf: {h['source_pdf']}")
+        # file:// lets iTerm2 cmd-click open the PDF in the browser
+        print(f"  full file path: {Path(h['source_pdf_path']).as_uri() if h['source_pdf_path'] else '-'}")
         print()
     return 0
 
