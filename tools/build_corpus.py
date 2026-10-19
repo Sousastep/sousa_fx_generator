@@ -1,30 +1,34 @@
 #!/usr/bin/env python3
-"""Convert the DAFx proceedings PDFs into a corpus an LLM agent can search and read.
+"""Convert the audio DSP & music-computing library PDFs into a searchable corpus.
 
-For every PDF in DAFx-proceedings/originals/ this writes:
+For every PDF in papers_library/originals/<Corpus>/<Corpus>-<year>/ this writes:
 
-    DAFx-proceedings/papers/<year>/<paper-id>/
+    papers_library/papers/<Corpus>/<Corpus>-<year>/<paper-id>/
         paper.md        full text as Markdown: YAML front matter, real headings,
                         <!-- page: N --> anchors, in-text images, extracted tables
-        metadata.json   id/title/authors/year/venue/pages/sections/keywords/paths
+        metadata.json   id/title/authors/year/venue/corpus/pages/sections/keywords/paths
         structure.json  raw opendataloader-pdf output (bboxes, fonts, table cells)
         figures/        images pulled out of the PDF (PNG)
         tables/         one CSV (+ Markdown twin) per detected table
         source.pdf      symlink back to the untouched file in originals/
 
-and then builds the retrieval layer:
+and then builds the retrieval layer over all converted papers in the library:
 
-    DAFx-proceedings/index/INDEX.jsonl      one compact record per paper
-    DAFx-proceedings/index/INDEX.md         same records, human/agent readable
-    DAFx-proceedings/index/search.sqlite    SQLite FTS5 index over pages + tables
-    DAFx-proceedings/index/build_report.json
+    papers_library/index/INDEX.jsonl      one compact record per paper
+    papers_library/index/INDEX.md         same records, human/agent readable
+    papers_library/index/search.sqlite    SQLite FTS5 index over pages + tables
+    papers_library/index/build_report.json
+
+(`DAFx-proceedings` is symlinked to `papers_library`, and `papers/DAFx-<year>`
+symlinks to `papers/DAFx/DAFx-<year>`, preserving backwards compatibility.)
 
 Usage:
-    ./tools/build_corpus.py                 # convert everything (parallel)
-    ./tools/build_corpus.py --year 2026     # one year
-    ./tools/build_corpus.py --limit 20      # smoke test
-    ./tools/build_corpus.py --force         # redo papers already converted
-    ./tools/build_corpus.py --skip-convert  # only rebuild the index
+    ./tools/build_corpus.py                       # convert everything (parallel)
+    ./tools/build_corpus.py --corpus WASPAA       # one corpus
+    ./tools/build_corpus.py --year 2026           # one year (across or within corpus)
+    ./tools/build_corpus.py --limit 10            # smoke test
+    ./tools/build_corpus.py --force               # redo papers already converted
+    ./tools/build_corpus.py --skip-convert        # only rebuild the index
 """
 
 from __future__ import annotations
@@ -45,9 +49,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ORIGINALS = ROOT / "DAFx-proceedings" / "originals"
-PAPERS = ROOT / "DAFx-proceedings" / "papers"
-INDEX = ROOT / "DAFx-proceedings" / "index"
+LIBRARY = ROOT / "papers_library" if (ROOT / "papers_library").exists() else ROOT / "DAFx-proceedings"
+ORIGINALS = LIBRARY / "originals"
+PAPERS = LIBRARY / "papers"
+INDEX = LIBRARY / "index"
 CLI = ROOT / ".venv" / "bin" / "opendataloader-pdf"
 PAGE_SEP = "<!-- page: %page-number% -->"
 PAGE_RE = re.compile(r"^<!-- page: (\d+) -->\s*$", re.M)
@@ -119,23 +124,41 @@ def paper_id(filename: str) -> str:
     return stem.strip("._-") or stem
 
 
-def discover(originals: Path, years: set[str] | None) -> list[dict]:
+def discover(originals: Path, corpora: set[str] | None, years: set[str] | None) -> list[dict]:
     recs = []
-    for year_dir in sorted(p for p in originals.iterdir() if p.is_dir()):
-        if years and year_dir.name not in years:
+    corpus_dirs = sorted(
+        p for p in originals.iterdir()
+        if p.is_dir() and not p.is_symlink()
+    )
+    for c_dir in corpus_dirs:
+        corpus = c_dir.name
+        if corpora and corpus.lower() not in corpora:
             continue
-        m = re.search(r"(\d{4})", year_dir.name)
-        year = int(m.group(1)) if m else 0
-        pdfs = sorted((p for p in year_dir.iterdir() if p.suffix.lower() == ".pdf"),
-                      key=lambda p: p.name.lower())
-        for pdf in pdfs:
-            recs.append({
-                "pid": paper_id(pdf.name),
-                "year": year,
-                "year_dir": year_dir.name,
-                "pdf": pdf,
-                "filename": pdf.name,
-            })
+        for year_dir in sorted(p for p in c_dir.iterdir() if p.is_dir() and not p.is_symlink()):
+            m = re.search(r"(\d{4})", year_dir.name)
+            year = int(m.group(1)) if m else 0
+            if years and year_dir.name.lower() not in years and str(year) not in years:
+                continue
+            pdfs = sorted((p for p in year_dir.iterdir() if p.suffix.lower() == ".pdf"),
+                          key=lambda p: p.name.lower())
+            for pdf in pdfs:
+                pid = paper_id(pdf.name)
+                sidecar_path = year_dir / f"{pid}.meta.json"
+                sidecar = {}
+                if sidecar_path.exists():
+                    try:
+                        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        sidecar = {}
+                recs.append({
+                    "pid": pid,
+                    "corpus": corpus,
+                    "year": year or int(sidecar.get("year") or 0),
+                    "year_dir": year_dir.name,
+                    "pdf": pdf,
+                    "filename": pdf.name,
+                    "sidecar": sidecar,
+                })
     return recs
 
 
@@ -666,7 +689,9 @@ def strip_dead_image_refs(md: str, removed: list[str]) -> str:
 # --------------------------------------------------------------------------- #
 def build_paper(rec: dict, env: dict, force: bool, timeout: int) -> dict:
     pid, year = rec["pid"], rec["year"]
-    dest = PAPERS / rec["year_dir"] / pid
+    corpus = rec.get("corpus", "DAFx")
+    sidecar = rec.get("sidecar") or {}
+    dest = PAPERS / corpus / rec["year_dir"] / pid
     md_path = dest / "paper.md"
     meta_path = dest / "metadata.json"
 
@@ -754,9 +779,13 @@ def build_paper(rec: dict, env: dict, force: bool, timeout: int) -> dict:
 
     pages = split_pages(md)
     body = PAGE_RE.sub("", md)
-    title = pick_title(structure, pages, pid)
+    title = sidecar.get("title") or pick_title(structure, pages, pid)
     authors, author_list, authors_raw = pick_authors(structure, pages)
-    abstract = pick_abstract(md)
+    if sidecar.get("authors"):
+        author_list = sidecar["authors"]
+        authors = ", ".join(author_list)
+    abstract = pick_abstract(md) or sidecar.get("abstract")
+    venue = sidecar.get("venue") or f"{corpus} {year}"
     sections = heading_list(structure) or [
         {"level": len(m.group(1)), "title": m.group(2).strip(), "page": None}
         for m in re.finditer(r"^(#{1,6})\s+(.+)$", md, re.M)
@@ -811,7 +840,8 @@ def build_paper(rec: dict, env: dict, force: bool, timeout: int) -> dict:
         f"title: {yaml_str(title)}",
         f"authors: {json.dumps(author_list or ([authors] if authors else []), ensure_ascii=False)}",
         f"year: {year}",
-        f'venue: "DAFx {year}"',
+        f"corpus: {yaml_str(corpus)}",
+        f"venue: {yaml_str(venue)}",
         f"pages: {page_count}",
         f"paper_file: {yaml_str(rec['filename'])}",
         f"source_pdf: {yaml_str(os.path.relpath(rec['pdf'], dest))}",
@@ -824,21 +854,23 @@ def build_paper(rec: dict, env: dict, force: bool, timeout: int) -> dict:
 
     if not (dest / "source.pdf").exists():
         try:
-            os.symlink(os.path.relpath(rec["pdf"], dest), dest / "source.pdf")
+            os.symlink(os.path.relpath(rec['pdf'], dest), dest / "source.pdf")
         except OSError:
             pass
 
     words = len(re.findall(r"\S+", body))
     meta = {
         "id": pid,
+        "corpus": corpus,
         "title": title,
         "authors": author_list,
         "author_string": authors,
         "authors_raw": authors_raw,
         "year": year,
-        "venue": f"DAFx {year}",
-        "doi": None,
-        "arxiv_id": None,
+        "year_dir": rec["year_dir"],
+        "venue": venue,
+        "doi": sidecar.get("doi"),
+        "arxiv_id": sidecar.get("arxiv_id"),
         "paper_file": rec["filename"],
         "page_count": page_count,
         "language": "en",
@@ -866,22 +898,51 @@ def build_paper(rec: dict, env: dict, force: bool, timeout: int) -> dict:
 
 
 def rec_base(rec: dict) -> dict:
-    return {"id": rec["pid"], "year": rec["year"], "paper_file": rec["filename"],
+    return {"id": rec["pid"], "corpus": rec.get("corpus", "DAFx"), "year": rec["year"],
+            "year_dir": rec.get("year_dir"), "paper_file": rec["filename"],
             "title": None, "authors": [], "abstract": None}
 
 
 # --------------------------------------------------------------------------- #
 # index layer
 # --------------------------------------------------------------------------- #
+def infer_corpus_and_ydir(m: dict) -> tuple[str, str]:
+    corpus = m.get("corpus")
+    if not corpus:
+        v = (m.get("venue") or "DAFx").split()[0]
+        corpus = v if v else "DAFx"
+    ydir = m.get("year_dir") or f"{corpus}-{m.get('year', 0)}"
+    return corpus, ydir
+
+
+def all_saved_metas() -> list[dict]:
+    """Load metadata.json for every converted paper across all corpora in PAPERS."""
+    out: list[dict] = []
+    for c_dir in sorted(p for p in PAPERS.iterdir() if p.is_dir() and not p.is_symlink()):
+        for mf in sorted(c_dir.glob("*/*/metadata.json")):
+            try:
+                m = json.loads(mf.read_text(encoding="utf-8"))
+                m.setdefault("corpus", c_dir.name)
+                m.setdefault("year_dir", mf.parent.parent.name)
+                out.append(m)
+            except Exception:
+                pass
+    return out
+
+
 def write_indexes(metas: list[dict]) -> dict:
     INDEX.mkdir(parents=True, exist_ok=True)
-    ok = sorted([m for m in metas if m.get("status") == "ok"], key=lambda m: (m["year"], m["id"]))
+    ok = sorted([m for m in metas if m.get("status") == "ok"],
+                key=lambda m: (m.get("corpus", "DAFx"), m["year"], m["id"]))
     bad = [m for m in metas if m.get("status") != "ok"]
 
     records = []
     for m in ok:
+        corpus, ydir = infer_corpus_and_ydir(m)
+        rel_prefix = f"papers/{corpus}/{ydir}/{m['id']}" if corpus != "DAFx" else f"papers/DAFx-{m['year']}/{m['id']}"
         records.append({
             "id": m["id"],
+            "corpus": corpus,
             "title": m["title"],
             "authors": m["authors"] or ([m["author_string"]] if m.get("author_string") else []),
             "year": m["year"],
@@ -892,8 +953,8 @@ def write_indexes(metas: list[dict]) -> dict:
             "figures": m.get("figure_count", 0),
             "tables": len(m.get("tables", [])),
             "abstract": m.get("abstract"),
-            "path": f"papers/DAFx-{m['year']}/{m['id']}/paper.md",
-            "metadata": f"papers/DAFx-{m['year']}/{m['id']}/metadata.json",
+            "path": f"{rel_prefix}/paper.md",
+            "metadata": f"{rel_prefix}/metadata.json",
             "source_pdf": m["source_pdf"],
         })
 
@@ -901,12 +962,12 @@ def write_indexes(metas: list[dict]) -> dict:
         for r in records:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    lines = [f"# DAFx proceedings index ({len(records)} papers)", "",
-             "Compact record per paper. Full text: `papers/DAFx-<year>/<id>/paper.md`.",
+    lines = [f"# Audio DSP & Music Computing Library Index ({len(records)} papers)", "",
+             "Compact record per paper. Full text: `papers/<Corpus>/<Corpus>-<year>/<id>/paper.md`.",
              "Machine-readable: `INDEX.jsonl`. Search: `tools/search.py \"terms\"`.", ""]
     for r in records:
         authors = ", ".join(r["authors"][:4]) if r["authors"] else "?"
-        lines.append(f"## {r['id']} — {r['title']}")
+        lines.append(f"## [{r['corpus']}] {r['id']} — {r['title']}")
         lines.append(f"- **Year/Venue**: {r['year']} ({r['venue']})")
         lines.append(f"- **Authors**: {authors}")
         lines.append(f"- **Pages**: {r['pages']} · **Figures**: {r['figures']} · **Tables**: {r['tables']}")
@@ -933,16 +994,16 @@ def build_fts(records: list[dict], metas: list[dict]) -> None:
         """
         PRAGMA journal_mode=OFF;
         CREATE TABLE papers(
-            id TEXT PRIMARY KEY, title TEXT, authors TEXT, year INT,
+            id TEXT PRIMARY KEY, corpus TEXT, title TEXT, authors TEXT, year INT,
             venue TEXT, pages INT, keywords TEXT, abstract TEXT,
             path TEXT, source_pdf TEXT, tables INT, figures INT);
         CREATE VIRTUAL TABLE chunks USING fts5(
-            id UNINDEXED, year UNINDEXED, kind UNINDEXED, page UNINDEXED,
+            id UNINDEXED, corpus UNINDEXED, year UNINDEXED, kind UNINDEXED, page UNINDEXED,
             section, text, tokenize='porter unicode61');
         """
     )
     con.executemany(
-        "INSERT INTO papers VALUES(:id,:title,:authors,:year,:venue,:pages,:keywords,"
+        "INSERT INTO papers VALUES(:id,:corpus,:title,:authors,:year,:venue,:pages,:keywords,"
         ":abstract,:path,:source_pdf,:tables_v,:figures_v)",
         [{**r, "authors": ", ".join(r["authors"]), "keywords": ", ".join(r["keywords"]),
           "tables_v": r["tables"], "figures_v": r["figures"]} for r in records],
@@ -950,7 +1011,8 @@ def build_fts(records: list[dict], metas: list[dict]) -> None:
 
     rows = []
     for m in metas:
-        paper_dir = PAPERS / f"DAFx-{m['year']}" / m["id"]
+        corpus, ydir = infer_corpus_and_ydir(m)
+        paper_dir = PAPERS / corpus / ydir / m["id"]
         md_file = paper_dir / "paper.md"
         if not md_file.exists():
             continue
@@ -967,14 +1029,14 @@ def build_fts(records: list[dict], metas: list[dict]) -> None:
                 if hm:
                     section = re.sub(r"\s+", " ", hm.group(2)).strip()
                     current = section
-                rows.append((m["id"], m["year"], "page", page,
+                rows.append((m["id"], corpus, m["year"], "page", page,
                              section or "", re.sub(r"\s+", " ", block)[:20000]))
         for t in m.get("tables", []):
             csv_file = paper_dir / t["csv"]
             if csv_file.exists():
-                rows.append((m["id"], m["year"], "table", t["page"] or 0, f"table {t['id']}",
+                rows.append((m["id"], corpus, m["year"], "table", t["page"] or 0, f"table {t['id']}",
                              csv_file.read_text(encoding="utf-8", errors="replace")[:20000]))
-    con.executemany("INSERT INTO chunks VALUES(?,?,?,?,?,?)", rows)
+    con.executemany("INSERT INTO chunks VALUES(?,?,?,?,?,?,?)", rows)
     con.commit()
     con.execute("INSERT INTO chunks(chunks) VALUES('optimize')")
     con.commit()
@@ -989,8 +1051,10 @@ def main() -> int:
     ensure_venv()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--corpus", action="append", default=None,
+                    help="only this corpus, e.g. --corpus WASPAA --corpus SMC (repeatable)")
     ap.add_argument("--year", action="append", default=None,
-                    help="only this year dir, e.g. --year DAFx-2026 (repeatable)")
+                    help="only this year or year dir, e.g. --year 2026 or --year DAFx-2026 (repeatable)")
     ap.add_argument("--limit", type=int, default=None, help="only the first N papers")
     ap.add_argument("--only", action="append", default=None, metavar="SUBSTRING",
                     help="only papers whose id contains SUBSTRING (repeatable)")
@@ -1011,22 +1075,21 @@ def main() -> int:
         log(f"error: {CLI} not found. Run ./tools/setup_env.sh first.")
         return 1
 
+    corpora = {c.lower() for c in args.corpus} if args.corpus else None
     years = None
     if args.year:
-        years = set()
-        for y in args.year:
-            years.add(y if y.startswith("DAFx-") else f"DAFx-{y}")
+        years = {y.lower() for y in args.year}
 
     env = java_env()
     PAPERS.mkdir(parents=True, exist_ok=True)
     INDEX.mkdir(parents=True, exist_ok=True)
 
-    recs = discover(ORIGINALS, years)
+    recs = discover(ORIGINALS, corpora, years)
     if args.redo_fallbacks or args.redo_if_missing:
         field = args.redo_if_missing
         weak = []
         for r in recs:
-            mf = PAPERS / r["year_dir"] / r["pid"] / "metadata.json"
+            mf = PAPERS / r["corpus"] / r["year_dir"] / r["pid"] / "metadata.json"
             try:
                 meta = json.loads(mf.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -1046,14 +1109,11 @@ def main() -> int:
     if args.limit is not None:
         recs = recs[:args.limit]
     log(f"==> {len(recs)} PDFs to process "
-        f"({len(set(r['year'] for r in recs))} years, {args.workers} workers)")
+        f"({len(set(r['corpus'] for r in recs))} corpora, {len(set(r['year'] for r in recs))} years, {args.workers} workers)")
 
-    metas: list[dict] = []
+    run_metas: dict[str, dict] = {}
     started = time.time()
-    if args.skip_convert:
-        for f in sorted(PAPERS.glob("DAFx-*/*/metadata.json")):
-            metas.append(json.loads(f.read_text(encoding="utf-8")))
-    else:
+    if not args.skip_convert:
         done = 0
         with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
             futures = {pool.submit(build_paper, r, env, args.force, args.timeout): r for r in recs}
@@ -1063,13 +1123,13 @@ def main() -> int:
                     meta = fut.result()
                 except Exception as exc:                     # noqa: BLE001
                     meta = {**rec_base(r), "status": "failed", "error": f"crash: {exc}"}
-                metas.append(meta)
+                run_metas[meta["id"]] = meta
                 done += 1
                 if meta.get("status") == "ok":
                     if meta.get("_cached"):
                         continue
                     warn = f"  [{meta['extraction_warning']}]" if meta.get("extraction_warning") else ""
-                    log(f"  [{done}/{len(recs)}] {meta['id']} "
+                    log(f"  [{done}/{len(recs)}] [{meta.get('corpus', 'DAFx')}] {meta['id']} "
                         f"p{meta['page_count']} {meta['word_count']}w "
                         f"fig{meta['figure_count']} tab{len(meta['tables'])}{warn}")
                 else:
@@ -1078,6 +1138,12 @@ def main() -> int:
     elapsed = time.time() - started
     if not args.skip_convert:
         log(f"==> conversion finished in {elapsed/60:.1f} min")
+
+    # Merge newly converted papers with all previously converted papers on disk so
+    # partial runs (--corpus, --year, --limit) never wipe out the rest of the index.
+    by_id = {m["id"]: m for m in all_saved_metas()}
+    by_id.update(run_metas)
+    metas = list(by_id.values())
 
     report = write_indexes(metas)
     report.update({

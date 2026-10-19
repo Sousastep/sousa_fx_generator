@@ -1,9 +1,14 @@
 **/*.maxsnap
 /logs/
 .venv
+/DAFx-proceedings
 /DAFx-proceedings/index
 /DAFx-proceedings/originals
 /DAFx-proceedings/papers
+/papers_library/index
+/papers_library/originals
+/papers_library/papers
+/papers_library/manifests
 # docs/ is local scratch space, except the codebox examples
 /docs/*
 !/docs/rnbo_codebox/

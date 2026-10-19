@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Search and read the DAFx proceedings corpus.
+"""Search and read the audio DSP & music-computing papers library.
 
-The corpus is two-tier, so the agent can search cheaply and only then read:
+The library is two-tier, so the agent can search cheaply and only then read:
 
-    tier 1  DAFx-proceedings/index/INDEX.jsonl   compact record per paper
-    tier 2  DAFx-proceedings/papers/DAFx-<year>/<id>/paper.md   full text
+    tier 1  papers_library/index/INDEX.jsonl   compact record per paper
+    tier 2  papers_library/papers/<Corpus>/<Corpus>-<year>/<id>/paper.md   full text
 
 Examples
     ./tools/search.py "modal plate reverberation"
-    ./tools/search.py "waveguide" --year 2010 --limit 5
+    ./tools/search.py "waveguide" --corpus DAFx --year 2010 --limit 5
+    ./tools/search.py "modulation" --corpus AES
     ./tools/search.py "Vocoder" --author Roebel
-    ./tools/search.py --list --year 2026
+    ./tools/search.py --list --corpus WASPAA
     ./tools/search.py --index 2010_Roebel_DAFx10_K3      # tier-1 record
     ./tools/search.py --read  2010_Roebel_DAFx10_K3      # full paper.md
     ./tools/search.py --read  2010_Roebel_DAFx10_K3 --page 3
@@ -27,8 +28,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-INDEX_DIR = ROOT / "DAFx-proceedings" / "index"
-PAPERS = ROOT / "DAFx-proceedings" / "papers"
+LIBRARY = ROOT / "papers_library" if (ROOT / "papers_library").exists() else ROOT / "DAFx-proceedings"
+INDEX_DIR = LIBRARY / "index"
+PAPERS = LIBRARY / "papers"
 DB = INDEX_DIR / "search.sqlite"
 INDEX_MD = INDEX_DIR / "INDEX.md"
 PAGE_SEP = "<!-- page: %page-number% -->"
@@ -65,17 +67,30 @@ def rewrite_loose(terms: list[str]) -> str:
 
 
 def resolve_paper(name: str) -> Path | None:
-    """Resolve a paper id: exact directory name first, then unique substring."""
-    roots = PAPERS.glob("DAFx-*")
-    for root in roots:
-        exact = root / name
-        if exact.is_dir():
-            return exact
-    matches = [p for p in PAPERS.glob("DAFx-*/*") if p.is_dir() and name in p.name]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        print(f"ambiguous '{name}', matches: " + ", ".join(m.name for m in matches),
+    """Resolve a paper id across all corpora: exact directory name first, then unique substring."""
+    seen: set[Path] = set()
+    exact_matches: list[Path] = []
+    sub_matches: list[Path] = []
+    for c_dir in sorted(p for p in PAPERS.iterdir() if p.is_dir() and not p.is_symlink()):
+        for y_dir in sorted(p for p in c_dir.iterdir() if p.is_dir() and not p.is_symlink()):
+            exact = y_dir / name
+            if exact.is_dir():
+                rp = exact.resolve()
+                if rp not in seen:
+                    seen.add(rp)
+                    exact_matches.append(exact)
+            for p in y_dir.iterdir():
+                if p.is_dir() and name.lower() in p.name.lower():
+                    rp = p.resolve()
+                    if rp not in seen:
+                        seen.add(rp)
+                        sub_matches.append(p)
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(sub_matches) == 1:
+        return sub_matches[0]
+    if len(sub_matches) > 1:
+        print(f"ambiguous '{name}', matches: " + ", ".join(m.name for m in sub_matches[:15]),
               file=sys.stderr)
         return None
     return None
@@ -91,7 +106,10 @@ def snippet(text: str, terms: list[str], width: int = 320) -> str:
 
 
 def paper_dirs() -> list[Path]:
-    return sorted(p.parent for p in PAPERS.glob("DAFx-*/*/metadata.json"))
+    out = []
+    for c_dir in sorted(p for p in PAPERS.iterdir() if p.is_dir() and not p.is_symlink()):
+        out.extend(p.parent for p in sorted(c_dir.glob("*/*/metadata.json")))
+    return out
 
 
 def cmd_search(args) -> int:
@@ -103,13 +121,16 @@ def cmd_search(args) -> int:
     if not q:
         return die("empty query")
     sql = """
-        SELECT c.id, c.year, c.kind, c.page, c.section,
-               snippet(chunks, 5, '[', ']', '…', 24) AS snip,
+        SELECT c.id, c.corpus, c.year, c.kind, c.page, c.section,
+               snippet(chunks, 6, '[', ']', '…', 24) AS snip,
                bm25(chunks) AS score, c.text
         FROM chunks c
         WHERE chunks MATCH ?
     """
     params: list = [q]
+    if args.corpus:
+        sql += " AND LOWER(c.corpus) = LOWER(?)"
+        params.append(args.corpus)
     if args.year:
         sql += " AND c.year = ?"
         params.append(int(args.year))
@@ -134,10 +155,12 @@ def cmd_search(args) -> int:
 
     out = []
     for r in rows:
-        rec = con.execute("SELECT title, authors, path, source_pdf FROM papers WHERE id = ?",
+        rec = con.execute("SELECT corpus, venue, title, authors, path, source_pdf FROM papers WHERE id = ?",
                           (r["id"],)).fetchone()
         out.append({
             "id": r["id"],
+            "corpus": (rec["corpus"] if rec and rec["corpus"] else r["corpus"]) or "DAFx",
+            "venue": rec["venue"] if rec else None,
             "year": r["year"],
             "kind": r["kind"],
             "page": r["page"],
@@ -160,7 +183,7 @@ def cmd_search(args) -> int:
     print(f'{len(out)} hit(s) in {len(by_paper)} paper(s)  [fts: {used}]\n')
     for pid, hits in by_paper.items():
         h = hits[0]
-        print(f"● {pid} ({h['year']}) — {h['title']}")
+        print(f"● [{h['corpus']}] {pid} ({h['year']}) — {h['title']}")
         if h["authors"]:
             print(f"  {h['authors']}")
         for hit in hits[:3]:
@@ -211,22 +234,29 @@ def cmd_read(args) -> int:
 
 def cmd_list(args) -> int:
     con = connect()
-    sql = "SELECT id, year, title, authors, pages, figures, tables FROM papers"
+    sql = "SELECT id, corpus, venue, year, title, authors, pages, figures, tables FROM papers"
+    clauses: list[str] = []
     params: list = []
+    if args.corpus:
+        clauses.append("LOWER(corpus) = LOWER(?)")
+        params.append(args.corpus)
     if args.year:
-        sql += " WHERE year = ?"
+        clauses.append("year = ?")
         params.append(int(args.year))
     if args.author:
-        sql += (" AND" if args.year else " WHERE") + " authors LIKE ?"
+        clauses.append("authors LIKE ?")
         params.append(f"%{args.author}%")
-    sql += " ORDER BY year, id"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY corpus, year, id"
     rows = con.execute(sql, params).fetchall()
     if args.json:
         print(json.dumps([dict(r) for r in rows], indent=2, ensure_ascii=False))
         return 0
     print(f"{len(rows)} paper(s)")
     for r in rows:
-        print(f"  {r['id']:42s} {r['year']}  {r['pages']:>3}p  {(r['title'] or '')[:88]}")
+        c_tag = f"[{r['corpus'] or 'DAFx'}]"
+        print(f"  {c_tag:9s} {r['id']:42s} {r['year']}  {r['pages']:>3}p  {(r['title'] or '')[:80]}")
     return 0
 
 
@@ -236,6 +266,7 @@ def main() -> int:
     ap.add_argument("query", nargs="*", help="search terms")
     ap.add_argument("--mode", choices=["and", "or", "phrase"], default="and",
                     help="term combination (falls back to 'or' when 'and' finds nothing)")
+    ap.add_argument("--corpus", help="restrict to a corpus (e.g. DAFx, WASPAA, SMC, NIME, ISMIR, ICASSP, ICMC, AES, arXiv)")
     ap.add_argument("--year", help="restrict to a conference year")
     ap.add_argument("--author", help="substring match on the author list")
     ap.add_argument("--kind", choices=["page", "table"], help="search only prose or only tables")

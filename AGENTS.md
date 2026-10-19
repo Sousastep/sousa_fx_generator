@@ -51,17 +51,23 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 | `generated_maxpat/<Cat>/<name>.maxpat` | **generated, git-ignored** demo patcher |
 | `tools/verify_codebox.js` | the acceptance test: real RNBO parse → codegen → C++ → `clang++ -fsyntax-only` |
 | `tools/generate_maxpats.py` | `.txt` → `.maxpat` (also embeds the paraminfo text) |
-| `tools/search.py` | search/read the DAFx corpus (two-tier: index → full text) |
-| `tools/build_corpus.py` | PDFs → searchable corpus (already built; re-run only for new PDFs) |
+| `tools/search.py` | search/read the multi-corpus papers library (two-tier: index → full text) |
+| `tools/build_corpus.py` | PDFs → searchable corpus (incremental; run for new PDFs) |
+| `tools/fetch_papers.py` | search & download open-access PDFs (SMC, NIME, ISMIR, WASPAA, ICASSP, ICMC, AES, arXiv) with `<100 GB` cap |
 | `tools/setup_env.sh` | installs the corpus toolchain (JDK 21, tesseract, `uv` venv, opendataloader-pdf) |
 | `docs/rnbo_codebox/` | the language reference + `example1`…`example16` (fundamentals) + `example17`…`example24` (**failure modes distilled from real breakage**) |
 | `docs/max_v8codebox/` | v8.codebox (Max's JS) examples + API reference |
-| `main_test_patcher.maxpat` | the human's audition rig: file browser (`file_list.js`), `s~ in1..in4` / `r~ out1..out2`, scope, rnbo~ slot with auto-build |
+| `main_test_patcher.maxpat` | The human's audition rig. Never modify. The human is an expert maxer. Tell them what to change in main_test_patcher.maxpat and they will change it.  |
 | `file_list.js` | v8ui tree browser over `generated_maxpat/`; click → full path out |
+| `file_list.html` | html tree browser over `generated_maxpat/` |
 | `.github/README.md` | human-facing readme carrying the **listening verdicts** per effect |
 | `logs/prompts.md` | the prompt history that built this repo (git-ignored) |
 | `logs/freebuff-chat-*.md` | session logs; the later one has a **"Root Causes Found & Fixed"** section worth reading before debugging DSP |
-| `DAFx-proceedings/` | `index/` (built), `originals/` PDFs, `papers/` Markdown — index, originals and papers are git-ignored |
+| `papers_library/` | multi-corpus library (`DAFx`, `WASPAA`, `SMC`, `NIME`, `ISMIR`, `ICASSP`, `ICMC`, `AES`, `arXiv`): `index/`, `originals/`, `papers/`, `manifests/` (git-ignored except `README.md`; `DAFx-proceedings` is a compat symlink) |
+
+| Branch | What it is |
+| --- | --- |
+| gh-pages | html tree browser over `generated_maxpat/` |
 
 ---
 
@@ -243,15 +249,21 @@ node tools/verify_codebox.js /tmp/probe.txt      # PASS / FAIL + line:col
 
 `generate_maxpats.py` — `--src`, `--outdir`, `--only <names…>`, `--list`.
 
-`search.py` / `build_corpus.py` — the DAFx corpus is **already built**
-(`DAFx-proceedings/index/search.sqlite`); only re-run `./tools/build_corpus.py`
-for new PDFs. Research flow:
+`search.py` / `build_corpus.py` / `fetch_papers.py` — the multi-corpus library lives in
+`papers_library/` (with `DAFx-proceedings` symlinked to it for compatibility).
+`papers_library/index/search.sqlite` is pre-built; run `fetch_papers.py` to download
+more PDFs (enforces `<100 GB` cap) and `build_corpus.py` to index them. Research flow:
 
 ```bash
 python3 tools/search.py "phase distortion oscillator" --limit 8
-python3 tools/search.py "waveguide" --year 2010 --author Roebel
+python3 tools/search.py "waveguide" --corpus DAFx --year 2010 --author Roebel
+python3 tools/search.py "modulation" --corpus AES
+python3 tools/search.py --list --corpus WASPAA
 python3 tools/search.py --index 2010_Roebel_DAFx10_K3      # tier-1 record
 python3 tools/search.py --read  2010_Roebel_DAFx10_K3 --page 3
+python3 tools/fetch_papers.py --status
+python3 tools/fetch_papers.py --source arxiv --preset virtual_analog --limit 25
+python3 tools/build_corpus.py --corpus arXiv
 ```
 
 ---
