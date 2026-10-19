@@ -19,9 +19,6 @@ and then builds the retrieval layer over all converted papers in the library:
     papers_library/index/search.sqlite    SQLite FTS5 index over pages + tables
     papers_library/index/build_report.json
 
-(`DAFx-proceedings` is symlinked to `papers_library`, and `papers/DAFx-<year>`
-symlinks to `papers/DAFx/DAFx-<year>`, preserving backwards compatibility.)
-
 Usage:
     ./tools/build_corpus.py                       # convert everything (parallel)
     ./tools/build_corpus.py --corpus WASPAA       # one corpus
