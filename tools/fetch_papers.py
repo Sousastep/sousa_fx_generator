@@ -11,6 +11,11 @@ Organizes downloaded PDFs and metadata sidecars into the multi-corpus library:
 Enforces a hard disk budget across `papers_library/originals/` (default: 95 GB,
 well under the 100 GB cap).
 
+When a PDF link is dead or returns an HTML landing page, the downloader falls
+back to a web search for the PDF's filename and tries the top PDF-looking hits,
+most likely candidate first (`find_pdf_mirrors`). Disable with
+`--no-web-search`.
+
 Supported low-hanging-fruit sources:
   * smc      — Sound and Music Computing Conference (Zenodo `smc` community API)
   * nime     — New Interfaces for Musical Expression (official BibTeX archive + nime.org/Zenodo PDFs)
@@ -40,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import os
 import re
@@ -155,7 +161,7 @@ def http_get_text(url: str, timeout: int = 25) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
-def download_pdf(url: str, dest_pdf: Path, timeout: int = 25) -> tuple[bool, str]:
+def _download_url_direct(url: str, dest_pdf: Path, timeout: int = 25) -> tuple[bool, str]:
     """Download a PDF to dest_pdf, verifying the %PDF- magic header."""
     dest_pdf.parent.mkdir(parents=True, exist_ok=True)
     tmp_pdf = dest_pdf.with_suffix(".pdf.part")
@@ -202,6 +208,244 @@ def download_pdf(url: str, dest_pdf: Path, timeout: int = 25) -> tuple[bool, str
     return False, "not a PDF file or download blocked"
 
 
+# --------------------------------------------------------------------------- #
+# Web-search fallback for dead / blocked PDF links
+# --------------------------------------------------------------------------- #
+WEB_SEARCH_RESULTS = 3        # only the first three hits of a query are considered
+WEB_SEARCH_MAX_MIRRORS = 3    # at most this many PDF candidates are tried
+WEB_SEARCH_PAUSE_S = 1.0      # minimum gap between search-engine requests
+
+TRUSTED_PDF_HOSTS = (
+    "arxiv.org", "zenodo.org", "hal.science", "hal.archives-ouvertes.fr",
+    "nime.org", "smcnetwork.org", "dafx.de", "ismir.net", "aes.org",
+    "core.ac.uk", "semanticscholar.org", "ccrma.stanford.edu",
+)
+TRUSTED_PDF_SUFFIXES = (".edu", ".ac.uk", ".edu.au", ".ac.jp", ".ac.at", ".ac.nz")
+JUNK_PDF_HOSTS = (
+    "scribd.com", "studocu.", "coursehero.", "docsity.", "yumpu.", "pdfcoffee.",
+    "idoc.pub", "vdocuments.", "dokumen.pub", "gitcode.com", "slideshare.net",
+    "academia.edu", "pinterest.", "youtube.com", "facebook.com", "twitter.com",
+)
+JUNK_PDF_PATH_HINTS = ("/blob/", "/login", "/signin", "/checkout", "/cart")
+
+_last_web_search = 0.0
+
+
+def _host(url: str) -> str:
+    return (urllib.parse.urlsplit(url).hostname or "").lower()
+
+
+def _is_trusted_pdf_host(host: str) -> bool:
+    return host.endswith(TRUSTED_PDF_HOSTS) or host.endswith(TRUSTED_PDF_SUFFIXES)
+
+
+def _is_pdf_url(url: str) -> bool:
+    path = urllib.parse.unquote(urllib.parse.urlsplit(url).path).lower()
+    return path.endswith(".pdf") or "/pdf/" in path
+
+
+def _pdf_basename(url: str) -> str:
+    """Best guess at the PDF filename inside a URL (Zenodo appends /content)."""
+    path = urllib.parse.unquote(urllib.parse.urlsplit(url).path)
+    segments = [s for s in path.split("/") if s]
+    for seg in reversed(segments):
+        if seg.lower().endswith(".pdf") and seg.lower() != "pdf":
+            return seg
+    tail = next((s for s in reversed(segments)
+                 if s.lower() not in ("pdf", "download", "file", "files", "content")), "")
+    if tail and "." not in tail:
+        tail += ".pdf"
+    return tail
+
+
+def _pdf_filename_from_url(url: str) -> str:
+    """Filename to search for: the URL's PDF leaf, else its last path segment."""
+    name = _pdf_basename(url)
+    if not name or name.lower() in ("download", "file", "download.pdf", "file.pdf"):
+        return ""
+    return name
+
+
+def _decode_redirect(url: str) -> str:
+    """Unwrap DuckDuckGo /l/?uddg= redirect links."""
+    if "uddg=" in url:
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        if q.get("uddg"):
+            return q["uddg"][0]
+    return url
+
+
+def _html_text(fragment: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", fragment)
+    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+
+
+def _bing_rss_search(query: str, timeout: int = 20) -> list[dict]:
+    """Bing web results via its RSS output (plain XML, no API key)."""
+    url = "https://www.bing.com/search?" + urllib.parse.urlencode(
+        {"q": query, "format": "rss", "count": "10"}
+    )
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": BROWSER_UA,
+            "Accept": "application/rss+xml,application/xml,text/xml,*/*",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return []
+
+    hits: list[dict] = []
+    for item in re.findall(r"<item>(.*?)</item>", body, re.S):
+        link = re.search(r"<link>(.*?)</link>", item, re.S)
+        if not link:
+            continue
+        target = _decode_redirect(html.unescape(link.group(1)).strip())
+        if not target.startswith(("http://", "https://")):
+            continue
+        title_m = re.search(r"<title>(.*?)</title>", item, re.S)
+        desc_m = re.search(r"<description>(.*?)</description>", item, re.S)
+        title = _html_text(title_m.group(1)) if title_m else ""
+        snippet = _html_text(desc_m.group(1)) if desc_m else ""
+        hits.append({
+            "url": target,
+            "title": title,
+            "snippet": snippet,
+            "is_pdf": _is_pdf_url(target) or "pdf" in snippet.lower(),
+        })
+    return hits
+
+
+def _ddg_lite_search(query: str, timeout: int = 20) -> list[dict]:
+    """DuckDuckGo lite results (HTML form POST; bots may get a challenge page)."""
+    data = urllib.parse.urlencode({"q": query}).encode()
+    try:
+        req = urllib.request.Request(
+            "https://lite.duckduckgo.com/lite/", data=data,
+            headers={"User-Agent": BROWSER_UA, "Accept": "text/html",
+                     "Accept-Language": "en-US,en;q=0.9"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return []
+    if "anomaly" in body.lower() or "result-link" not in body:
+        return []
+
+    snippets = [_html_text(s) for s in re.findall(r"<td class=['\"]result-snippet['\"]>(.*?)</td>", body, re.S)]
+    hits: list[dict] = []
+    for i, m in enumerate(re.finditer(
+        r"<a[^>]+href=\"([^\"]+)\"[^>]*class=['\"]result-link['\"][^>]*>(.*?)</a>", body, re.S
+    )):
+        target = _decode_redirect(html.unescape(m.group(1)).strip())
+        if not target.startswith(("http://", "https://")):
+            continue
+        inner = m.group(2)
+        hits.append({
+            "url": target,
+            "title": _html_text(inner),
+            "snippet": snippets[i] if i < len(snippets) else "",
+            "is_pdf": bool(re.search(r"result__type[^>]*>\s*PDF", inner, re.I)) or _is_pdf_url(target),
+        })
+    return hits
+
+
+def _web_search(query: str, timeout: int = 20) -> list[dict]:
+    """Top web hits for query: Bing RSS first, DuckDuckGo lite as backup."""
+    global _last_web_search
+    gap = time.time() - _last_web_search
+    if gap < WEB_SEARCH_PAUSE_S:
+        time.sleep(WEB_SEARCH_PAUSE_S - gap)
+    _last_web_search = time.time()
+
+    hits = _bing_rss_search(query, timeout)
+    if not any(h.get("is_pdf") or _is_pdf_url(h["url"]) for h in hits[:WEB_SEARCH_RESULTS]):
+        alt = _ddg_lite_search(query, timeout)
+        if any(h.get("is_pdf") or _is_pdf_url(h["url"]) for h in alt[:WEB_SEARCH_RESULTS]):
+            hits = alt
+    for rank, hit in enumerate(hits):
+        hit["rank"] = rank
+    return hits[:WEB_SEARCH_RESULTS]
+
+
+def _score_pdf_candidate(hit: dict, filename: str, title: str | None) -> float | None:
+    """Score how likely a search hit is the wanted PDF; None means unusable."""
+    url = hit["url"]
+    host = _host(url)
+    path = urllib.parse.unquote(urllib.parse.urlsplit(url).path).lower()
+    if any(j in host for j in JUNK_PDF_HOSTS) or any(j in path for j in JUNK_PDF_PATH_HINTS):
+        return None
+    if not (_is_pdf_url(url) or hit.get("is_pdf")):
+        return None
+
+    score = 0.0
+    base = _pdf_basename(url).lower()
+    stem = filename.lower().rsplit(".pdf", 1)[0] if filename else ""
+    if filename and base == filename.lower():
+        score += 6.0
+    elif stem and stem in base:
+        score += 3.0
+    if path.endswith(".pdf"):
+        score += 2.0
+    if _is_trusted_pdf_host(host):
+        score += 3.0
+    if title:
+        wanted = set(re.findall(r"[a-z0-9]{4,}", title.lower()))
+        got = set(re.findall(r"[a-z0-9]{4,}", f"{hit.get('title', '')} {hit.get('snippet', '')}".lower()))
+        if wanted:
+            score += 3.0 * len(wanted & got) / len(wanted)
+    score -= 0.4 * hit.get("rank", 0)
+    return score
+
+
+def find_pdf_mirrors(filename: str, title: str | None = None, timeout: int = 20) -> list[str]:
+    """Search the web for filename.pdf; return PDF URLs, most likely first."""
+    queries: list[str] = []
+    if filename:
+        queries.append(f'"{filename}" filetype:pdf')
+    if title:
+        clean_title = re.sub(r"\s+", " ", title).strip()[:120]
+        queries.append(f'"{clean_title}" filetype:pdf')
+
+    scored: dict[str, tuple[float, int]] = {}
+    for qi, query in enumerate(queries):
+        log(f"  [WEB] searching: {query}")
+        for hit in _web_search(query, timeout):
+            score = _score_pdf_candidate(hit, filename, title)
+            if score is None:
+                continue
+            rank = qi * WEB_SEARCH_RESULTS + hit.get("rank", 0)
+            if hit["url"] not in scored or score > scored[hit["url"]][0]:
+                scored[hit["url"]] = (score, rank)
+        if scored:
+            break
+
+    ordered = sorted(scored.items(), key=lambda kv: (-kv[1][0], kv[1][1]))
+    return [url for url, _ in ordered[:WEB_SEARCH_MAX_MIRRORS]]
+
+
+def download_pdf(url: str, dest_pdf: Path, timeout: int = 25, title: str | None = None,
+                 web_search: bool = True) -> tuple[bool, str, str | None]:
+    """Download a PDF, verifying the %PDF- magic header.
+
+    If the URL is dead or serves HTML, search the web for the PDF's filename,
+    rank the top PDF-looking hits and try them. Returns (ok, detail, used_url).
+    """
+    ok, msg = _download_url_direct(url, dest_pdf, timeout)
+    if ok or not web_search:
+        return ok, msg, url if ok else None
+
+    filename = _pdf_filename_from_url(url)
+    for mirror in find_pdf_mirrors(filename, title, timeout):
+        if mirror == url:
+            continue
+        ok, msg = _download_url_direct(mirror, dest_pdf, timeout)
+        if ok:
+            log(f"  [MIRROR] {dest_pdf.name} via web search: {mirror} ({msg})")
+            return True, msg, mirror
+    return False, "not a PDF file or download blocked (no usable web-search mirror)", None
+
+
 def reconstruct_abstract(inv_idx: dict | None) -> str | None:
     if not inv_idx or not isinstance(inv_idx, dict):
         return None
@@ -223,7 +467,7 @@ def is_already_downloaded(corpus: str, year: int, pid: str) -> bool:
     return dest_pdf.exists() and dest_pdf.stat().st_size > 1024
 
 
-def save_candidate(cand: dict, max_gb: float, dry_run: bool = False) -> str:
+def save_candidate(cand: dict, max_gb: float, dry_run: bool = False, web_search: bool = True) -> str:
     """Save candidate PDF + .meta.json sidecar + manifest line. Returns 'downloaded'|'cached'|'skipped'|'failed'."""
     ok_budget, used_gb = check_budget(max_gb)
     if not ok_budget:
@@ -248,10 +492,16 @@ def save_candidate(cand: dict, max_gb: float, dry_run: bool = False) -> str:
         log(f"            Title: {cand.get('title', '')[:85]}")
         return "skipped"
 
-    ok, msg = download_pdf(cand["pdf_url"], dest_pdf)
+    ok, msg, used_url = download_pdf(cand["pdf_url"], dest_pdf, title=cand.get("title"),
+                                     web_search=web_search)
     if not ok:
         log(f"  [SKIP] {pid}: {msg} ({cand['pdf_url']})")
         return "failed"
+
+    if used_url and used_url != cand["pdf_url"]:
+        cand["pdf_url_original"] = cand["pdf_url"]
+        cand["pdf_url"] = used_url
+        cand["resolved_by"] = "web_search"
 
     cand["downloaded_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     cand["file_size_bytes"] = dest_pdf.stat().st_size
@@ -749,6 +999,8 @@ def main() -> int:
     ap.add_argument("--max-gb", type=float, default=DEFAULT_MAX_GB,
                     help=f"hard cap on papers_library/originals size in GB (default: {DEFAULT_MAX_GB})")
     ap.add_argument("--dry-run", action="store_true", help="list candidate papers without downloading PDFs")
+    ap.add_argument("--no-web-search", action="store_true",
+                    help="disable the web-search mirror fallback for dead/blocked PDF links")
     ap.add_argument("--status", action="store_true", help="show current library PDF counts and disk usage")
     args = ap.parse_args()
 
@@ -783,7 +1035,8 @@ def main() -> int:
 
         log(f"==> {src.upper()}: {len(cands)} candidate paper(s) found")
         for cand in cands:
-            res = save_candidate(cand, args.max_gb, dry_run=args.dry_run)
+            res = save_candidate(cand, args.max_gb, dry_run=args.dry_run,
+                                 web_search=not args.no_web_search)
             if res == "budget_exceeded":
                 break
             stats[res] = stats.get(res, 0) + 1
