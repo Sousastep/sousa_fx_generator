@@ -1,0 +1,46 @@
+JClones_FabModern_Limiter — RNBO codebox~ port of the JClones
+FabModern_Limiter JSFX
+Source: repos/JSFXClones/jsfx/JClones_FabModern_Limiter.jsfx (MIT, JClones)
+
+What it is: a modern look-ahead brickwall limiter with only two controls. Each
+channel gets an instantaneous gain-reduction estimate; the smaller of the two
+feeds a shared two-stage "S-shaped" release (a squared-ratio path at 25 ms and
+200 ms, plus a direct path at 150 ms and 1.5 s) and the two are combined with a
+min. A running minimum over the 0.18 ms look-ahead window, followed by two
+cascaded box averages of half that length, smooths the gain before it is
+multiplied in. Fixed internal timings — that is the whole design.
+
+Parameters (original slider names):
+
+- Input Gain — dB, -18 .. +18, default 0
+  Linear dB gain ahead of the limiter (0.1 dB steps). It does not change the
+  ceiling, it changes how much limiting happens: push it up to squash more, or
+  use it as a drive control going into the threshold.
+
+- Threshold — dB, -20 .. 0, default -1
+  The level the limiter holds. Linear in dB, 0.1 dB steps. There is no separate
+  output ceiling: the output sits at the threshold, so threshold is both "how
+  much" and "how loud". -1 dB (the default) leaves a little inter-sample
+  headroom; below about -6 dB it becomes an audible, dense brickwall; at 0 dB
+  it is a near-transparent safety net.
+
+Fixed internals: look-ahead 0.18 ms (8 samples at 44.1 kHz, 9 at 48 kHz,
+ 16 at 88.2 kHz, 17 at 96 kHz), slow attack 25 ms, slow release 200 ms,
+ expander-stage attack 150 ms, release 1.5 s, gain smoothing two box averages
+ of look-ahead/2+1 samples.
+
+Taper summary: both controls are plain linear-in-dB. There is no knee, ratio or
+release to learn, and no exponential taper on either control.
+
+Port notes:
+- The source reports `pdc_delay = lookahead_samples - 1` to the host (7 samples
+  at 44.1 kHz). RNBO codebox~ has no plug-in delay compensation, so that
+  sub-millisecond delay is real latency; align it in the patch if you run the
+  limiter in parallel.
+- The source's running-minimum structure is a full scan of the look-ahead
+  window each sample; the port does the same scan over its circular buffer, so
+  the result is identical rather than approximate.
+- The source's moving-average window is `lookahead/2 + 1`, which is not always
+  an integer (it is 5.5 at 48 kHz). The port rounds it down to an integer window
+  and divides by that integer. At 44.1 kHz the two agree exactly.
+- The gain-reduction meter (`ext_gr_meter` / `hold_max_gr`) was dropped.

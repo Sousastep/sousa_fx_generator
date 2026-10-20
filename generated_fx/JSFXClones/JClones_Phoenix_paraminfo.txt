@@ -1,0 +1,62 @@
+JClones_Phoenix — RNBO codebox~ port of the JClones Phoenix JSFX
+Source: repos/JSFXClones/jsfx/JClones_Phoenix.jsfx (MIT, JClones)
+
+What it is: a five-model tape emulation. A differentiator-style high-pass and a
+pre-emphasis shelf push the signal into one of three saturators (a 15-term
+polynomial, a four-term sine series, or a ^5 gaussian bump), then a post-
+emphasis and a de-emphasis low-pass bring the tone back. Type picks which model
+and its whole constant set (attack constant, shelf, pre/post emphasis and
+saturation type); Brightness picks the high-pass/low-pass pair within the model.
+The original had fixed 44.1/88.2/176.4 kHz scaling, kept here as
+1/floor(sampleRate/44100).
+
+Parameters (original slider names):
+
+- Input Trim — dB, -10 .. +10, default 0
+  Linear dB gain into the tape stage (0.01 dB steps). This is the "how hard do
+  I hit the tape" control — pushing it up increases saturation and compression
+  rather than just level.
+
+- Process — %, 0 .. 100, default 0
+  The amount of the tape effect, linear unipolar. It scales the internal
+  processing constants (processing * a3, which differs per Type) and the
+  pre/post emphasis. At 0 % the model is essentially bypassed (the dry signal
+  still goes through the trims); at 100 % you get the full model. This is the
+  main tone control.
+
+- Output Trim — dB, -6 .. +6, default 0
+  Linear dB output gain, for level matching after Process and Input Trim.
+
+- Brightness — opal / gold / sapphire, default gold
+  Selects the pair of high-pass and low-pass constants used in the model.
+  Opal is the darkest/most neutral, sapphire the brightest/most open, gold the
+  middle. The actual constants differ per Type, so the same Brightness setting
+  sounds different on Luminescent and on Radiant — that is the source design.
+
+- Type — luminiscent / iridescent / radiant / luster / dark essence, default
+  iridescent
+  The tape model. luminiscent (a3 0.25, gentle) and iridescent (a3 0.25, more
+  pre-emphasis) are bright and open. radiant (a3 0.375, sat_type 1 — the sine
+  series) is midrange-forward with more body. luster (a3 1.0, sat_type 2) is the
+  most compressed and smoothest; it is the only model where the saturator sees
+  the pre-emphasised signal and where the output is halved before the dry add.
+  dark essence (a3 0.375, sat_type 2, higher p20) is the darkest and most
+  saturated, emphasising low-end warmth. The source's menu order puts Luster
+  before Dark Essence; this port keeps that order.
+
+- Auto Gain — off / on, default off
+  JClones addition. On = multiplies the output by a per-Type quadratic fit,
+  1 + Process*a1 + Process^2*a2, so raising Process does not run away in level.
+  The coefficients differ per Type (e.g. -0.712/+0.172 for luster), so switching
+  Type also changes how much it compensates.
+
+Taper summary: both trims are linear in dB; Process is a linear percentage that
+maps into per-model constants, so its effect is model-dependent rather than a
+straight wet/dry; Brightness and Type are switches.
+
+Port notes: all five constant sets, the three saturation curves and the
+sample-rate scale are transcribed verbatim, including the odd 0.45629901
+high-pass values in radiant/luster/dark essence. The differentiator
+(hpf_k*x + (x - prev_x)) is kept as the source wrote it. The taper behaviour
+above 88.2 kHz is why the models get darker at high sample rates — that is
+intentional in the original.

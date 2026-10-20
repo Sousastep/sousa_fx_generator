@@ -1,0 +1,46 @@
+JClones_SatBuss — RNBO codebox~ port of the JClones SatBuss JSFX
+Source: repos/JSFXClones/jsfx/JClones_SatBuss.jsfx (MIT, JClones)
+
+What it is: the buss/master half of the same console emulation the SatChannel
+comes from. A larger feedback network wraps the cubic soft clipper
+(x^2+27)x/(9x^2+27), and the opposite channel is fed through a one-pole
+all-pass into that network to model inter-buss crosstalk. Fat retunes the whole
+network for low-end weight and Loud adds a 70 Hz shelf-ish path. There is no
+gain control: it is meant to sit on a bus and colour whatever hits it.
+
+Parameters (original slider names):
+
+- Crosstalk — off / modern / vintage, default modern
+  off = no crosstalk at all; the network runs with its crosstalk gains zero and
+  the only processing left is the saturation. modern = subtle, a tighter
+  all-pass contribution (G3_1 = 3.4, sample-rate-dependent crosstalk gains).
+  vintage = the same path but with a small G3_1 of 0.16, i.e. a much softer,
+  wider blend. Modern is the bolder of the two in level terms, vintage is the
+  more "smeared" one. The sample-rate-dependent gain table (from -5.81 dB at
+  44.1 kHz up to +7.48 dB above 176.4 kHz) is transcribed as in the source; it
+  exists to keep the crosstalk level consistent across sample rates, so the
+  setting should sound the same at 44.1 and 96 kHz.
+
+- Loud — off / on, default off
+  On = adds a 70 Hz one-pole path (scaled by 0.05) plus an extra feed around the
+  saturator input, which lifts the low end and the perceived level. It is a
+  "push the bus harder" switch, not a volume control; expect 1-2 dB of extra
+  bottom and a slightly denser midrange.
+
+- Fat — off / on, default off
+  Off = the buss network's normal tuning (a 220 Hz/2800 Hz pair, heavy
+  feedback, +11.8 dB static makeup at the output). On = the fat tuning (3500 Hz
+  and 4000 Hz poles, much less feedback, +1.2 dB makeup) which is noticeably
+  rounder and lower-mid heavy. Because the static makeup differs by ~10 dB
+  between the two modes, switching Fat changes level as well as tone — that is
+  the source behaviour, not a bug.
+
+Taper summary: all three controls are switches; there are no continuous
+parameters. Character comes from the switches plus how hard you drive the bus.
+
+Port notes: crosstalk is genuinely cross-channel — the left output depends on
+the right input and vice versa, and both channels read the *original* inputs
+before either is written, exactly as the source does. The output is
+high-passed (8 Hz non-Fat, 12 Hz Fat, 15/20 Hz in modern) by subtracting a
+one-pole, which removes the saturator's DC. The sample-rate-dependent crosstalk
+gain table is kept verbatim.

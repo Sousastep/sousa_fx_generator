@@ -1,0 +1,44 @@
+JClones_DuTape — RNBO codebox~ port of JClones_DuTape (JSFX)
+Source: repos/JSFXClones/jsfx/JClones_DuTape.jsfx (MIT, © JClones)
+
+WHAT IT IS
+A tape-saturation emulation: per-channel hiss, the machine's record/playback
+tone EQ (one-pole treble loss, bass bump and head bump), a measured 256-point
+transfer curve per machine, optional dither and a 3 Hz DC remover on the
+asymmetric machines. Two independent channels, each with its own noise
+generator, as in the source.
+
+PARAMETERS
+input_db — -12..+6 dB, default 0, linear taper. How hard the signal hits the
+  tape curve. +3..+6 is where the curve starts to genuinely squash a tuba;
+  negative values clean it up.
+
+output_db — -12..+6 dB, default 0, linear taper. Makeup only.
+
+machine — Ideal Tape / 80s 2 Tk. / 70s 24Tk. / 60s 2 Tk. / 60s Tube / 1/2 M.Tk.,
+  default Ideal Tape. Changes the transfer curve, the hiss level and its EQ, and
+  whether the DC remover runs (only 70s 24Tk. and later). Hiss at unity NR:
+  Ideal Tape is nearly silent (‑63 dBFS-ish), 60s Tube is the noisiest, 1/2 M.Tk.
+  has a bright/hissy top. "Ideal Tape" is the cleanest, most symmetric curve.
+
+speed — 30 ips / 15 ips / 7 1/2 ips, default 30 ips. Scales the tape's
+  record/playback response: 30 ips is the most extended and least coloured,
+  15 ips is the classic middle, 7 1/2 ips rolls off the top and adds the biggest
+  low-end bump. Stepped; switching mid-note is audible (that's the medium).
+
+noise_reduction — Off / Type 1 / Type 2 / Noiseless, default Noiseless. Scales
+  the hiss only: 100 % / 47 % / 22 % / 0 % of the machine's hiss. Does not change
+  the transfer curve. Noiseless is the sensible default on a loud stage.
+
+dither — Off / On, default On. The original plugin's internal dither: a tiny
+  random gain applied to negative noise half-cycles (≈-0.2..-0.7 % depending on
+  machine), which also slightly de-correlates L/R hiss. Purely a texture switch —
+  leave it on unless you want identical, "cleaner" hiss.
+
+NOTES
+- No wet/dry: the tape stage is meant to be the sound. Put it late in the chain.
+- The measured curves are stored in full (both polarities), so the asymmetric
+  machines keep their even-order behaviour; the DC remover that follows them is
+  part of the original and not optional.
+- Filter coefficient tables were calibrated at 44.1 kHz in the source and are
+  rescaled by 44100/samplerate here, so the response tracks your rate.

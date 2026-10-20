@@ -1,0 +1,224 @@
+/* JClones_SatChannel — RNBO codebox~ port of JClones_SatChannel (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_SatChannel.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. A console-channel
+ * saturation: a seven-stage feedback network whose output is soft-clipped by
+ * (x^2+27)x/(9x^2+27), with the "Fat" variant retuning the network for more
+ * low end, and a one-pole high-pass / low-pass around it. GUI omitted.
+ */
+// Gain (dB)
+@param({ min: -18, max: 18 }) gain = 0;
+// High Pass (Hz)
+@param({ min: 10, max: 1800, steps: 180 }) high_pass = 10;
+// High Pass Slope
+@param({ enum: ["6 dB/Oct", "12 dB/Oct"] }) high_pass_slope = 0;
+// Low Pass (kHz)
+@param({ min: 1, max: 20, steps: 20 }) low_pass = 20;
+// Sat
+@param({ enum: ["off", "on"] }) sat = 1;
+// Fat
+@param({ enum: ["off", "on"] }) fat = 0;
+// Compensation
+@param({ enum: ["off", "on"] }) compensation = 0;
+@state s_G1 = 0.4;
+@state s_G3 = 0.735;
+@state s_G4 = 1.3;
+@state s_Gfb1 = 0.4;
+@state s_Gfb3 = 0.6;
+@state s_Ghi3 = 0.15;
+@state s_Ghi3b = 0.6;
+@state s_Glo3 = 0.410706;
+@state s_lpf1K = 0;
+@state s_lpf2K = 0;
+@state s_lpf3K = 0;
+@state s_lpf4K = 0;
+@state s_lpf5K = 0;
+@state s_lpf6K = 0;
+@state s_lpf7K = 0;
+@state s_hpfK = 0;
+@state s_lpfK = 1;
+@state s_hpf12 = 0;
+@state s_satOn = 1;
+@state s_inGain = 1;
+@state s_outGain = 1;
+@state s_l1L = 0;
+@state s_l2L = 0;
+@state s_l3L = 0;
+@state s_l4L = 0;
+@state s_l5L = 0;
+@state s_l6L = 0;
+@state s_l7L = 0;
+@state s_fb1L = 0;
+@state s_fb2L = 0;
+@state s_fb3L = 0;
+@state s_hpf1L = 0;
+@state s_hpf2L = 0;
+@state s_lpL = 0;
+@state s_l1R = 0;
+@state s_l2R = 0;
+@state s_l3R = 0;
+@state s_l4R = 0;
+@state s_l5R = 0;
+@state s_l6R = 0;
+@state s_l7R = 0;
+@state s_fb1R = 0;
+@state s_fb2R = 0;
+@state s_fb3R = 0;
+@state s_hpf1R = 0;
+@state s_hpf2R = 0;
+@state s_lpR = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+// The source's one-pole coefficient helper (freq normalised to srate).
+function fnF1K(freqK) {
+    return 1.0 - exp(-2.0 * pi * freqK);
+}
+
+function fnSat(x) {
+    if (x < -3.0) return -1.0;
+    if (x > 3.0) return 1.0;
+    return (x * x + 27.0) * x / (x * x * 9.0 + 27.0);
+}
+
+function fnSaturateL(x1) {
+    s_l1L += (x1 * s_G1 - s_l1L) * s_lpf1K;
+    s_l2L += (0.0002135622 - s_l2L) * s_lpf2K;
+    let x2 = s_l1L + 1.4142135622 - s_l2L;
+    let x3 = x2 * x2 * 0.5 - 1.0;
+    let x4 = (s_G3 * x3 - s_l1L) * 5.8 + x1;
+    s_l3L += ((s_fb2L - s_fb3L) - s_l3L) * s_lpf3K;
+    let lo3 = s_l3L;
+    let hi3 = (s_fb2L - s_fb3L) - lo3;
+    let x5 = x4 - 0.01 - hi3 * s_Ghi3 - lo3 * s_Glo3;
+    s_l4L += (hi3 - s_l4L) * s_lpf4K;
+    let x6 = x5 - s_fb1L * s_Gfb1 - s_fb3L * s_Gfb3 + s_G4 * s_l4L;
+    s_fb2L = x6;
+    let x6s = fnSat(x6);
+    s_l5L += ((hi3 * s_Ghi3 * s_Ghi3b + x6s + 0.008) - s_l5L) * s_lpf5K;
+    s_fb3L = s_l5L;
+    s_l6L += (s_fb3L - s_l6L) * s_lpf6K;
+    s_l7L += ((s_fb3L - s_l6L) - s_l7L) * s_lpf7K;
+    s_fb1L = s_l7L;
+    return s_Gfb1 * s_fb1L * 0.85 + s_fb3L;
+}
+
+function fnSaturateR(x1) {
+    s_l1R += (x1 * s_G1 - s_l1R) * s_lpf1K;
+    s_l2R += (0.0002135622 - s_l2R) * s_lpf2K;
+    let x2 = s_l1R + 1.4142135622 - s_l2R;
+    let x3 = x2 * x2 * 0.5 - 1.0;
+    let x4 = (s_G3 * x3 - s_l1R) * 5.8 + x1;
+    s_l3R += ((s_fb2R - s_fb3R) - s_l3R) * s_lpf3K;
+    let lo3 = s_l3R;
+    let hi3 = (s_fb2R - s_fb3R) - lo3;
+    let x5 = x4 - 0.01 - hi3 * s_Ghi3 - lo3 * s_Glo3;
+    s_l4R += (hi3 - s_l4R) * s_lpf4K;
+    let x6 = x5 - s_fb1R * s_Gfb1 - s_fb3R * s_Gfb3 + s_G4 * s_l4R;
+    s_fb2R = x6;
+    let x6s = fnSat(x6);
+    s_l5R += ((hi3 * s_Ghi3 * s_Ghi3b + x6s + 0.008) - s_l5R) * s_lpf5K;
+    s_fb3R = s_l5R;
+    s_l6R += (s_fb3R - s_l6R) * s_lpf6K;
+    s_l7R += ((s_fb3R - s_l6R) - s_l7R) * s_lpf7K;
+    s_fb1R = s_l7R;
+    return s_Gfb1 * s_fb1R * 0.85 + s_fb3R;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    let satOn = sat;
+    let fatMode = fat;
+    let inDb = gain;
+    let comp = compensation;
+    let gainScale = 0.0;
+
+    if (satOn >= 0.5) {
+        if (fatMode < 0.5) {
+            s_Gfb3 = 0.6;
+            s_Ghi3b = 0.6;
+            s_Glo3 = 0.410706;
+            s_lpf5K = 0.512;
+            s_G4 = 1.3;
+            s_lpf1K = fnF1K(120.0 / sr);
+            s_lpf4K = fnF1K(80.0 / sr);
+            s_G3 = 0.735;
+            s_Gfb1 = 0.4;
+            s_Ghi3 = 0.15;
+            s_G1 = 0.4;
+            if (comp >= 0.5) {
+                if (inDb <= 0.0) gainScale = inDb * -1.0;
+                else gainScale = inDb * -0.92;
+            }
+            s_outGain = fnDbToK(gainScale + 11.654);
+            s_inGain = fnDbToK(-8.0);
+        } else {
+            s_Gfb3 = 0.1;
+            s_Ghi3 = 0.1;
+            s_Ghi3b = 0.4;
+            s_Glo3 = 0.408245;
+            s_lpf5K = 0.745;
+            s_lpf1K = fnF1K(400.0 / sr);
+            s_Gfb1 = 0.302;
+            s_G1 = 0.22;
+            s_G4 = 0.975;
+            s_G3 = 0.725;
+            s_lpf4K = fnF1K(28.0 / sr);
+            if (comp >= 0.5) {
+                if (inDb <= 0.0) gainScale = inDb * -1.0;
+                else gainScale = inDb * -0.79;
+            }
+            s_outGain = fnDbToK(gainScale + 1.15);
+            s_inGain = 1.0;
+        }
+        s_lpf6K = fnF1K(320.0 / sr);
+        s_lpf7K = fnF1K(20000.0 / sr);
+        s_lpf3K = fnF1K(5.0 / sr);
+        s_lpf2K = fnF1K(1.0);
+        s_inGain *= fnDbToK(inDb);
+    } else {
+        s_inGain = fnDbToK(inDb);
+        s_outGain = 1.0;
+        if (comp >= 0.5) s_outGain = 1.0 / s_inGain;
+    }
+    s_satOn = satOn;
+
+    // tone filters
+    s_hpfK = fnF1K(high_pass / sr);
+    s_hpf12 = high_pass_slope;
+    if (low_pass * 1000.0 < 20000.0) s_lpfK = fnF1K(low_pass * 1000.0 / sr);
+    else s_lpfK = 1.0;
+}
+
+// left
+let y = in1 * s_inGain;
+if (s_satOn >= 0.5) y = fnSaturateL(y);
+y *= s_outGain;
+s_hpf1L += (y - s_hpf1L) * s_hpfK;
+y -= s_hpf1L;
+if (s_hpf12 >= 0.5) {
+    s_hpf2L += (y - s_hpf2L) * s_hpfK;
+    y -= s_hpf2L;
+}
+s_lpL += (y - s_lpL) * s_lpfK;
+out1 = s_lpL;
+
+// right
+let yr = in2 * s_inGain;
+if (s_satOn >= 0.5) yr = fnSaturateR(yr);
+yr *= s_outGain;
+s_hpf1R += (yr - s_hpf1R) * s_hpfK;
+yr -= s_hpf1R;
+if (s_hpf12 >= 0.5) {
+    s_hpf2R += (yr - s_hpf2R) * s_hpfK;
+    yr -= s_hpf2R;
+}
+s_lpR += (yr - s_lpR) * s_lpfK;
+out2 = s_lpR;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

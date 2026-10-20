@@ -1,0 +1,241 @@
+/* JClones_Hyrax — RNBO codebox~ port of JClones_Hyrax (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_Hyrax.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. A linear-phase look-ahead
+ * brickwall from an automatic-mastering system, modified by JClones to run in
+ * realtime: a max-hold over the attack window, a forward/backward (zero-phase)
+ * IIR, a max-hold over the 1 ms hold window, then a hold and a release one-pole
+ * combined with a max. GUI and the GR meter are omitted.
+ */
+// Input Gain (dB)
+@param({ min: -18, max: 18 }) input_gain = 0;
+// Threshold (dB)
+@param({ min: -18, max: 0 }) threshold = -1;
+
+@state s_inGain = 1;
+@state s_thr = 0.9;
+@state s_aHoldBuf = new FixedFloat64Array(4096);
+@state s_aHoldHead: Int = 0;
+@state s_aHoldSize: Int = 89;
+@state s_hHoldBuf = new FixedFloat64Array(4096);
+@state s_hHoldHead: Int = 0;
+@state s_hHoldSize: Int = 44;
+@state s_lpIn = new FixedFloat64Array(4096);
+@state s_lpOut0 = new FixedFloat64Array(4096);
+@state s_lpOut1 = new FixedFloat64Array(4096);
+@state s_block: Int = 304;
+@state s_half: Int = 152;
+@state s_offset: Int = 0;
+@state s_outIdx: Int = 0;
+@state s_la0 = 0.0445;
+@state s_la1 = 0;
+@state s_lb1 = 0.9555;
+@state s_fx1 = 0;
+@state s_fy1 = 0;
+@state s_hA0 = 0;
+@state s_hA1 = 0;
+@state s_hB1 = 0;
+@state s_hx1 = 0;
+@state s_hy1 = 0;
+@state s_rA0 = 0;
+@state s_rA1 = 0;
+@state s_rB1 = 0;
+@state s_rx1 = 0;
+@state s_ry1 = 0;
+@state s_dSlided = new delay(0.05);
+@state s_dGr = new delay(0.05);
+@state s_dL = new delay(0.05);
+@state s_dR = new delay(0.05);
+@state s_nLpLat: Int = 456;
+@state s_nLat: Int = 500;
+@state s_yL = 0;
+@state s_yR = 0;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+// Filter1_ButLPFilter1: a bilinear one-pole, returns [a0, a1, b1].
+function fnButLp(freqK) {
+    let w0 = freqK * 2.0 * pi;
+    let kk = 1.0 / tan(w0 / 2.0);
+    let b0 = 1.0 + kk;
+    return [1.0 / b0, 1.0 / b0, -(1.0 - kk) / b0];
+}
+
+function fnAttackMaxPush(v) {
+    s_aHoldBuf[s_aHoldHead] = v;
+    s_aHoldHead += 1;
+    if (s_aHoldHead >= s_aHoldSize) s_aHoldHead = 0;
+    let m = s_aHoldBuf[0];
+    for (let i: Int = 1; i < s_aHoldSize; i++) m = maximum(m, s_aHoldBuf[i]);
+    return m;
+}
+
+function fnHoldMaxPush(v) {
+    s_hHoldBuf[s_hHoldHead] = v;
+    s_hHoldHead += 1;
+    if (s_hHoldHead >= s_hHoldSize) s_hHoldHead = 0;
+    let m = s_hHoldBuf[0];
+    for (let i: Int = 1; i < s_hHoldSize; i++) m = maximum(m, s_hHoldBuf[i]);
+    return m;
+}
+
+// Forward then backward one-pole over one block: zero-phase (linear-phase)
+// low-pass. Mirrors LinearPhaseIIR1_processSample exactly, including the
+// half-block overlap-add between the two buffers.
+function fnLinPhase(x) {
+    let y = 0.0;
+    if (s_outIdx == 0) {
+        y = s_lpOut0[s_offset];
+        if (s_offset < s_half) y += s_lpOut1[s_offset + s_block];
+    } else {
+        y = s_lpOut1[s_offset];
+        if (s_offset < s_half) y += s_lpOut0[s_offset + s_block];
+    }
+
+    s_lpIn[s_offset] = x;
+    s_offset += 1;
+
+    if (s_offset >= s_block) {
+        s_outIdx = 1 - s_outIdx;
+        if (s_outIdx == 0) {
+            for (let i: Int = 0; i < s_half; i++) s_lpOut0[i] = 0.0;
+            for (let i: Int = 0; i < s_block; i++) s_lpOut0[s_half + i] = s_lpIn[i];
+        } else {
+            for (let i: Int = 0; i < s_half; i++) s_lpOut1[i] = 0.0;
+            for (let i: Int = 0; i < s_block; i++) s_lpOut1[s_half + i] = s_lpIn[i];
+        }
+
+        // backward IIR: a fresh, reset filter instance
+        let bx = 0.0;
+        let by = 0.0;
+        let p: Int = s_block + s_half - 1;
+        for (let n: Int = 0; n < s_block; n++) {
+            let v = 0.0;
+            if (s_outIdx == 0) v = s_lpOut0[p];
+            else v = s_lpOut1[p];
+            let r = s_la0 * v + s_la1 * bx + s_lb1 * by;
+            bx = v;
+            by = r;
+            if (s_outIdx == 0) s_lpOut0[p] = r;
+            else s_lpOut1[p] = r;
+            p -= 1;
+        }
+        for (let n: Int = 0; n < s_half; n++) {
+            let r = s_la1 * bx + s_lb1 * by;
+            bx = 0.0;
+            by = r;
+            if (s_outIdx == 0) s_lpOut0[p] = r;
+            else s_lpOut1[p] = r;
+            p -= 1;
+        }
+        s_offset = 0;
+    }
+
+    // forward IIR part
+    let r = s_la0 * y + s_la1 * s_fx1 + s_lb1 * s_fy1;
+    s_fx1 = y;
+    s_fy1 = r;
+    return r;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) {
+        let atkSamples = floor(sr * 0.001);
+        if (atkSamples < 1.0) atkSamples = 1.0;
+
+        // window = 2*(odd attack length) - 1
+        let odd = atkSamples;
+        let isEven = (odd - floor(odd / 2.0) * 2.0) == 0.0;
+        if (isEven) odd += 1.0;
+        let winAttack = 2.0 * odd - 1.0;
+        if (winAttack > 4000.0) winAttack = 4000.0;
+        s_aHoldSize = winAttack;
+        for (let i: Int = 0; i < winAttack; i++) s_aHoldBuf[i] = 0.0;
+        s_aHoldHead = 0;
+
+        // forward/backward one-pole block length for a -120 dB tail
+        let coeff = exp(-2.0 / atkSamples);
+        let blockFloat = log(0.000001) / log(coeff);
+        let blk = floor(blockFloat + 0.5);
+        // keep the block even so the half-block overlap is exact
+        blk = 2.0 * floor(blk / 2.0);
+        if (blk < 2.0) blk = 2.0;
+        if (blk > 2600.0) blk = 2600.0;
+        s_block = blk;
+        s_half = floor(blk / 2.0);
+        s_la0 = 1.0 - coeff;
+        s_la1 = 0.0;
+        s_lb1 = coeff;
+        s_fx1 = 0.0;
+        s_fy1 = 0.0;
+        s_offset = 0;
+        s_outIdx = 0;
+        for (let i: Int = 0; i < 4096; i++) {
+            s_lpIn[i] = 0.0;
+            s_lpOut0[i] = 0.0;
+            s_lpOut1[i] = 0.0;
+        }
+        s_nLpLat = s_block + s_half;
+
+        // hold window
+        let holdWin = floor(sr * 0.001);
+        if (holdWin < 1.0) holdWin = 1.0;
+        if (holdWin > 4000.0) holdWin = 4000.0;
+        s_hHoldSize = holdWin;
+        for (let i: Int = 0; i < holdWin; i++) s_hHoldBuf[i] = 0.0;
+        s_hHoldHead = 0;
+
+        let c1 = fnButLp(7.0 / sr);
+        s_hA0 = c1[0];
+        s_hA1 = c1[1];
+        s_hB1 = c1[2];
+        let c2 = fnButLp((800.0 / 3000.0) / sr);
+        s_rA0 = c2[0];
+        s_rA1 = c2[1];
+        s_rB1 = c2[2];
+
+        s_nLat = floor(sr * 0.001) + s_nLpLat;
+        s_sr = sr;
+    }
+    s_inGain = fnDbToK(input_gain);
+    s_thr = fnDbToK(threshold);
+}
+
+let xL = in1 * s_inGain;
+let xR = in2 * s_inGain;
+
+let level = maximum(abs(xL), abs(xR));
+let flipGr = 1.0 - s_thr / maximum(level, s_thr);
+
+let slidedAttack = fnAttackMaxPush(flipGr);
+let attack = fnLinPhase(slidedAttack);
+slidedAttack = s_dSlided.next(slidedAttack, s_nLpLat);
+flipGr = s_dGr.next(flipGr, s_nLat);
+
+let slidedRelease = fnHoldMaxPush(slidedAttack);
+let holdOut = s_hA0 * slidedRelease + s_hA1 * s_hx1 + s_hB1 * s_hy1;
+s_hx1 = slidedRelease;
+s_hy1 = holdOut;
+let relIn = maximum(slidedRelease, holdOut);
+let relOut = s_rA0 * relIn + s_rA1 * s_rx1 + s_rB1 * s_ry1;
+s_rx1 = relIn;
+s_ry1 = relOut;
+let release = maximum(holdOut, relOut);
+
+s_yL = s_dL.next(xL, s_nLat);
+s_yR = s_dR.next(xR, s_nLat);
+
+let totalFlip = maximum(maximum(attack, release), flipGr);
+let gr = 1.0 - totalFlip;
+
+out1 = s_yL * gr;
+out2 = s_yR * gr;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

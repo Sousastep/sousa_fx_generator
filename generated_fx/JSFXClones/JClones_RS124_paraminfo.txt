@@ -1,0 +1,46 @@
+JClones_RS124 — RNBO codebox~ port of JClones_RS124 (JSFX)
+Source: repos/JSFXClones/jsfx/JClones_RS124.jsfx (MIT, © JClones)
+
+WHAT IT IS
+A vari-mu valve compressor — the first (RS124) unit, in the three measured
+variants JClones ships. Feedback topology: the sidechain is fed from the
+already-gained signal and its own gain-reduction multiplies the audio, so
+attack/release are program-dependent in the valve way, not in the clean-VCA
+way. The "box tone" stage is the input transformer + valve-head-room voice.
+
+PARAMETERS
+model — 0..2 (60050A / 61010B / 60070B), stepped. Three real units. They differ
+  in attack time (147 ms / 168 ms / 50 ms), sidechain high-pass (32.9 Hz / 32.9 Hz
+  / 10 Hz), presence peak (62 Hz @ +0.8 dB on the first two, flat on the third),
+  air shelf (12 kHz +2.8 dB / 13 kHz +4 dB / 13 kHz +4 dB) and in every
+  input/output/release curve. Switching it mid-phrase jumps the gain structure
+  (that's the unit, not a bug).
+
+input — -24..+24 dB, default 0, ~0.1 dB taper, applied through the unit's own
+  measured input-gain table (so the range is not perfectly linear in dB). Drives
+  the valve harder; more input = more squash and more THD.
+
+release — 1..6, default 4, stepped, not milliseconds. The six positions map to
+  roughly 3.4/6.5/11.4/22/38/64 ms equivalent release on 60050A, 2.9/5.0/8.1/15.6/
+  25.3/44 ms on 61010B, and 1.0/1.9/3.2/5.8/9.8/16.9 ms on 60070B. Position 6 sits
+  next to a "Hold" (3 s) point in the table, so the top of the travel is
+  effectively hold — good for sustained tuba drones, dangerous on staccato.
+
+superfuse — off/on, default off. Ties release to attack so the unit becomes a
+  near-symmetric squasher with almost no recovery memory. Use it as a
+  "broken/aggressive" mode; it is not an original RS124 control.
+
+output — -30..0 dB, default 0, through the measured output table (+30 dB offset
+  inside the table). Makeup only; it does not change the amount of compression.
+
+box_tone — off/on, default on. Inserts the 62 Hz presence peak, the 12–13 kHz
+  air shelf and the unit's 32.9 Hz (or 10 Hz) sidechain/audio high-pass. Off is
+  the flat "measuring" path — cleaner and a little brighter in the low mids.
+
+NOTES
+- Every curve here comes from the source's own table data, evaluated with its
+  cubic-spline segment generator, so the tapers match the JSFX exactly.
+- No look-ahead and no dry/wet: this is an insert compressor and the valve
+  feedback path is part of the sound. Put it before the modulation effects.
+- Unison/stereo: both channels share timing but have independent detector state,
+  as in the original.

@@ -1,0 +1,96 @@
+/* JClones_TapeHead — RNBO codebox~ port of JClones_TapeHead (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_TapeHead.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. A three-state trapezoidal
+ * resonator whose two states are soft-clipped (the tape "head bump"), with the
+ * source's optional hard clip around and after the stage, and the Color switch
+ * selecting the resonator frequency. GUI omitted.
+ */
+// Drive
+@param({ min: 1, max: 10, steps: 10 }) drive = 3.5;
+// Trim (dB)
+@param({ min: -21, max: 0, steps: 21 }) trim = -3;
+// Color
+@param({ enum: ["normal", "medium", "bright"] }) color = 0;
+// Clip
+@param({ enum: ["off", "on"] }) clip = 1;
+@state s_y1L = 0;
+@state s_y2L = 0;
+@state s_y3L = 0;
+@state s_y1R = 0;
+@state s_y2R = 0;
+@state s_y3R = 0;
+@state s_k1 = 0;
+@state s_k2 = 0;
+@state s_k3 = 0;
+@state s_g3 = 0;
+@state s_driveK = 0;
+@state s_trimK = 0;
+@state s_sr = 0;
+@state s_color = -1;
+@state frame: Int = 0;
+
+function fnClip(x) {
+    return clamp(x, -1.0, 1.0);
+}
+
+function fnSmoothstep(x) {
+    if (x < -1.0) return -1.0;
+    if (x > 1.0) return 1.0;
+    return x * 1.5 - x * x * x * 0.5;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    s_driveK = pow(10.0, (drive - 1.0) / 9.0) * 0.8;
+    s_trimK = pow(10.0, trim / 20.0) * 0.7;
+    let col = color;
+    if (col != s_color || sr != s_sr) {
+        let freqHz = 2100.0;
+        if (col >= 1.5) freqHz = 5000.0;
+        else if (col >= 0.5) freqHz = 3680.0;
+        s_k1 = 5.0 / 7.0;
+        s_k2 = 2.0 * sin(freqHz * pi / sr);
+        s_k3 = 1.4 * (s_k2 * -1.0);
+        let cg = 1.4;
+        if (sr >= 88200.0) cg = 2.0;
+        s_g3 = pow(10.0, cg * 3.0 / 20.0) * -1.0 * s_k1;
+        s_color = col;
+        s_sr = sr;
+    }
+}
+
+let hardClip = clip >= 0.5;
+
+// left
+let x = in1;
+if (hardClip) x = fnClip(x);
+s_y1L += s_y2L * s_k2;
+s_y3L = s_y1L * s_k1 + s_y2L - x;
+s_y2L += s_y3L * s_k3;
+let s1L = fnSmoothstep(s_y1L * s_driveK);
+let s2L = fnSmoothstep(s_y2L * s_driveK);
+let y3L = s_y3L;
+if (hardClip) y3L = fnClip(y3L);
+let yl = (y3L * s_g3 + s1L + s2L) * s_trimK;
+if (hardClip) yl = fnClip(yl);
+
+// right
+let xr = in2;
+if (hardClip) xr = fnClip(xr);
+s_y1R += s_y2R * s_k2;
+s_y3R = s_y1R * s_k1 + s_y2R - xr;
+s_y2R += s_y3R * s_k3;
+let s1R = fnSmoothstep(s_y1R * s_driveK);
+let s2R = fnSmoothstep(s_y2R * s_driveK);
+let y3R = s_y3R;
+if (hardClip) y3R = fnClip(y3R);
+let yr = (y3R * s_g3 + s1R + s2R) * s_trimK;
+if (hardClip) yr = fnClip(yr);
+
+out1 = yl;
+out2 = yr;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

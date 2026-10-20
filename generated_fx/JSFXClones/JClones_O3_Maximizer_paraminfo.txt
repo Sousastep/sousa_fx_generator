@@ -1,0 +1,60 @@
+JClones_O3_Maximizer — RNBO codebox~ port of the JClones O3_Maximizer JSFX
+Source: repos/JSFXClones/jsfx/JClones_O3_Maximizer.jsfx (MIT, JClones)
+
+What it is: the maximizer module from a mid-2000s all-in-one mastering suite. It
+works in the overshoot domain in dB: detect a level (optionally with 5x
+inter-sample-peak oversampling), subtract the threshold, max-hold over a
+look-ahead window, apply a zero-attack release and an auto-release driven by the
+*rate of change* of the gain reduction, then smooth the gain with a raised-cosine
+attack FIR and apply it to the delayed audio.
+
+Parameters (original slider names):
+
+- Threshold — dB, -20 .. 0, default 0
+  Drive into the maximizer, inverted: the input gain is 10^(-Threshold/20), so
+  lowering Threshold pushes the signal up into the fixed 0 dBFS internal
+  threshold. 0 dB is unity; -6 dB is +6 dB of drive; -20 dB is +20 dB, i.e. a
+  full loudness-war setting. Linear in dB, 0.1 dB steps. There is no separate
+  input gain.
+
+- Margin — dB, -6 .. 0, default 0
+  Plain output gain = 10^(Margin/20). Because the threshold is 0 dBFS
+  internally, Margin is the output ceiling: -0.1 to -0.3 dB for delivery,
+  -1 to -3 dB if you are going to encode to a lossy format.
+
+- Character — 0 .. 10, default 4
+  The shape/speed control, linear with 0.1 steps. Internally it becomes
+  `c = Character * 0.15` (0 .. 1.5), which sets three things at once: the
+  raised-cosine attack window (c below 0.3 shrinks the window, so low values =
+  fast, hard transient catching and slow values = long, smooth gain ramps), the
+  release coefficient (1 - sr/(exp(2c')*35)*(0.1/44100), where c' is doubled
+  above 1.0), and the auto-release depth/weight. Around 0-2 it is a fast
+  aggressive clipper-ish maximizer, 4-6 is the transparent middle, 8-10 is
+  slow and pumping.
+
+- Prevent ISP — off / on, default off
+  On = the detector additionally convolves the last 14 input samples with a
+  70-tap, 5-phase FIR to estimate 5x oversampled inter-sample peaks and limits
+  to the highest of them. This prevents the overshoot that appears after
+  reconstruction or lossy encoding, at the cost of more gain reduction on
+  bright material and noticeably more CPU. Off = sample peak limiting only.
+
+Taper summary: Threshold and Margin are linear in dB (one as inverse drive, one
+as output trim); Character is linear but maps to an exponential release and a
+variable-length attack window, so the audible change is not evenly spread — the
+bottom of the range tightens quickly and the top end is about long release
+shaping. Prevent ISP is a switch.
+
+Port notes:
+- Latency is `upsampling_len/2 + max_hold_len - 1 + auto_release_len` samples,
+  which is 688 at 44.1 kHz (~15.6 ms) and grows with the sample rate. The
+  source reports it via `pdc_delay`; RNBO codebox~ has no plug-in delay
+  compensation, so align it in the patcher.
+- The source's double-buffered "push a sample into the top of the array and
+  scan a contiguous window" idiom is reproduced literally for the oversampling,
+  max-hold and attack buffers, because the window origin matters to the result.
+- When the attack window equals the full look-ahead the source's internal
+  compensation delay is zero samples; that case is handled as a pass-through
+  rather than calling read(0) on a delay line.
+- The source's `& 1` odd-length test is written as a modulo test.
+- The GR meter and `this.gr` were dropped.

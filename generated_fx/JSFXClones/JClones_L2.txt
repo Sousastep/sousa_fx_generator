@@ -1,0 +1,304 @@
+/* JClones_L2 — RNBO codebox~ port of JClones_L2 (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_L2.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. A look-ahead brickwall
+ * limiter with manual or adaptive release, plus the source's 24..16-bit
+ * quantiser with two dither types and four noise-shaping curves (a 9-tap FIR
+ * bank per rate/shape). GUI and the GR meter are omitted.
+ */
+// Threshold (dB)
+@param({ min: -30, max: 0 }) threshold = 0;
+// Ceiling (dB)
+@param({ min: -30, max: 0 }) ceiling = 0;
+// Auto Release
+@param({ enum: ["off", "on"] }) auto_release = 1;
+// Release (ms)
+@param({ enum: ["0.01", "0.1", "1.0", "10.0", "100", "1000"] }) release = 2;
+// Quantize
+@param({ enum: ["16", "18", "20", "22", "24"] }) quantize = 4;
+// Dither
+@param({ enum: ["none", "type1", "type2"] }) dither = 1;
+// Shaping
+@param({ enum: ["none", "moderate", "normal", "ultra"] }) shaping = 2;
+
+@state s_inGain = 1;
+@state s_outGain = 1;
+@state s_auto = 1;
+@state s_fastG = 0;
+@state s_fastS = 1;
+@state s_slowS = 1;
+@state s_dynS = 1;
+@state s_dynRelG = 0;
+@state s_slowAtkG = 0;
+@state s_slowRelG = 0;
+@state s_dynG1 = 0;
+@state s_dynG2 = 0;
+@state s_dynG3 = 0;
+@state s_laSize: Int = 64;
+@state s_maSize: Int = 33;
+@state s_grMinBuf = new FixedFloat64Array(2048);
+@state s_grMinHead: Int = 0;
+@state s_ma1 = new FixedFloat64Array(2048);
+@state s_ma2 = new FixedFloat64Array(2048);
+@state s_ma1Head: Int = 0;
+@state s_ma2Head: Int = 0;
+@state s_ma1Sum = 0;
+@state s_ma2Sum = 0;
+@state s_dlyL = new delay(0.02);
+@state s_dlyR = new delay(0.02);
+@state s_table = new FixedFloat64Array(144);
+@state s_histL = new FixedFloat64Array(9);
+@state s_histR = new FixedFloat64Array(9);
+@state s_histIdx: Int = 0;
+@state s_t1State = 0;
+@state s_t2a = 0;
+@state s_t2b = 0.25;
+@state s_scaling = 1;
+@state s_srIdx: Int = 0;
+@state s_shaping: Int = 2;
+@state s_dithType: Int = 1;
+@state s_tableReady = 0;
+@state s_histReady = 0;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+function fnStepG(t) {
+    return exp(-1.0 / (t * (maximum(samplerate(), 1.0) / 2.302585093)));
+}
+
+// EEL's filter1_G(s, G, x): x + G*(s - x)
+function fnOnePole(s, g, x) {
+    return x + g * (s - x);
+}
+
+function fnInitTable() {
+    s_table[0] = 0.0; s_table[1] = 0.0; s_table[2] = 0.0; s_table[3] = 0.0;
+    s_table[4] = 0.0; s_table[5] = 0.0; s_table[6] = 0.0; s_table[7] = 0.0; s_table[8] = 0.0;
+    s_table[9] = -0.054383024; s_table[10] = -0.20654947; s_table[11] = -0.3822527;
+    s_table[12] = -0.39219186; s_table[13] = -0.36627461; s_table[14] = -0.49556099;
+    s_table[15] = -0.29294844; s_table[16] = 0.61599216; s_table[17] = 1.3177642;
+    s_table[18] = -0.070082023; s_table[19] = -0.29561589; s_table[20] = -0.5451639;
+    s_table[21] = -0.5487125; s_table[22] = -0.55320585; s_table[23] = -0.75886502;
+    s_table[24] = -0.25751337; s_table[25] = 1.2202875; s_table[26] = 1.9089777;
+    s_table[27] = -0.10739672; s_table[28] = -0.43569984; s_table[29] = -0.72708491;
+    s_table[30] = -0.66456244; s_table[31] = -0.73261389; s_table[32] = -1.0359325;
+    s_table[33] = -0.16065249; s_table[34] = 1.8239374; s_table[35] = 2.3525222;
+    s_table[36] = 0.0; s_table[37] = 0.0; s_table[38] = 0.0; s_table[39] = 0.0;
+    s_table[40] = 0.0; s_table[41] = 0.0; s_table[42] = 0.0; s_table[43] = 0.0; s_table[44] = 0.0;
+    s_table[45] = -0.1002716; s_table[46] = -0.29584958; s_table[47] = -0.40982519;
+    s_table[48] = -0.38606261; s_table[49] = -0.44715518; s_table[50] = -0.52985251;
+    s_table[51] = -0.10806594; s_table[52] = 0.82622085; s_table[53] = 1.3482654;
+    s_table[54] = -0.11617057; s_table[55] = -0.41429373; s_table[56] = -0.69819106;
+    s_table[57] = -0.84679904; s_table[58] = -0.99510928; s_table[59] = -0.8137319;
+    s_table[60] = 0.33485791; s_table[61] = 1.8264681; s_table[62] = 2.072573;
+    s_table[63] = -0.15380712; s_table[64] = -0.5469209; s_table[65] = -0.91673806;
+    s_table[66] = -1.1670967; s_table[67] = -1.4463654; s_table[68] = -1.0427872;
+    s_table[69] = 0.84138339; s_table[70] = 2.7803198; s_table[71] = 2.624423;
+    s_table[72] = 0.0; s_table[73] = 0.0; s_table[74] = 0.0; s_table[75] = 0.0;
+    s_table[76] = 0.0; s_table[77] = 0.0; s_table[78] = 0.0; s_table[79] = 0.0; s_table[80] = 0.0;
+    s_table[81] = 0.0; s_table[82] = 0.088072546; s_table[83] = 0.36459012;
+    s_table[84] = 0.88040251; s_table[85] = 1.5499839; s_table[86] = 2.1484938;
+    s_table[87] = 2.4151576; s_table[88] = 2.2070139; s_table[89] = 1.5982079;
+    s_table[90] = -0.00390274; s_table[91] = 0.1073065; s_table[92] = 0.63257259;
+    s_table[93] = 1.8682127; s_table[94] = 3.5575584; s_table[95] = 5.014459;
+    s_table[96] = 5.3379144; s_table[97] = 4.3814994; s_table[98] = 2.5787734;
+    s_table[99] = -0.021631265; s_table[100] = 0.1594025; s_table[101] = 1.0213817;
+    s_table[102] = 2.9718205; s_table[103] = 5.5339018; s_table[104] = 7.4154889;
+    s_table[105] = 7.5202313; s_table[106] = 5.7418745; s_table[107] = 3.1130463;
+    s_table[108] = 0.0; s_table[109] = 0.0; s_table[110] = 0.0; s_table[111] = 0.0;
+    s_table[112] = 0.0; s_table[113] = 0.0; s_table[114] = 0.0; s_table[115] = 0.0;
+    s_table[116] = 0.0; s_table[117] = 0.0; s_table[118] = 0.15717715;
+    s_table[119] = 0.54336716; s_table[120] = 1.1581471; s_table[121] = 1.8591082;
+    s_table[122] = 2.4045727; s_table[123] = 2.5688185; s_table[124] = 2.2673639;
+    s_table[125] = 1.6110487; s_table[126] = -0.011899905; s_table[127] = 0.12947208;
+    s_table[128] = 0.63891136; s_table[129] = 1.7815208; s_table[130] = 3.4063984;
+    s_table[131] = 4.8728995; s_table[132] = 5.2856435; s_table[133] = 4.3677134;
+    s_table[134] = 2.6052934; s_table[135] = -0.021628401; s_table[136] = 0.15915684;
+    s_table[137] = 1.0202237; s_table[138] = 2.9688732; s_table[139] = 5.5289454;
+    s_table[140] = 7.4093702; s_table[141] = 7.5145789; s_table[142] = 5.7382228;
+    s_table[143] = 3.1116338;
+}
+
+function fnRandType1() {
+    let st = 10368889.0 * s_t1State + 1.0;
+    st = st - floor(st / 4294967296.0) * 4294967296.0;
+    if (st > 2147483648.0) st = st - 4294967296.0;
+    s_t1State = st;
+    return st;
+}
+
+function fnDitherSample(input, r1, r2, ch) {
+    let tbl: Int = 9 * (s_shaping + 4 * s_srIdx);
+    let filtered = 0.0;
+    let k: Int = 0;
+    let i: Int = s_histIdx;
+    for (let n: Int = 0; n < 9; n++) {
+        let h = s_histL[i];
+        if (ch >= 0.5) h = s_histR[i];
+        filtered += h * s_table[tbl + k];
+        k += 1;
+        i += 1;
+        if (i >= 9) i -= 9;
+    }
+
+    input = clamp(input, -1.0, 1.0);
+    let x1 = input * 8388608.0;
+    let x2 = x1 + r2 * s_scaling;
+    let x3 = x2 + (r1 + 0.5) * s_scaling + filtered;
+    let outFp = floor(x3);
+    if (outFp > 8388607.0) outFp = 8388607.0;
+    if (outFp < -8388608.0) outFp = -8388608.0;
+    if (s_scaling != 1.0) outFp = floor(outFp / s_scaling) * s_scaling;
+
+    let err = x2 - outFp;
+    if (ch < 0.5) s_histL[s_histIdx] = err;
+    else s_histR[s_histIdx] = err;
+    return outFp / 8388608.0;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) {
+        let la = floor((0.0014 * sr) / 64.0 + 0.6) * 64.0;
+        if (la < 64.0) la = 64.0;
+        if (la > 2040.0) la = 2040.0;
+        s_laSize = la;
+        s_maSize = floor(la / 2.0 + 1.0);
+        for (let i: Int = 0; i < 2048; i++) {
+            s_grMinBuf[i] = 1.0;
+            s_ma1[i] = 1.0;
+            s_ma2[i] = 1.0;
+        }
+        s_grMinHead = 0;
+        s_ma1Head = 0;
+        s_ma2Head = 0;
+        s_ma1Sum = s_maSize;
+        s_ma2Sum = s_maSize;
+        s_slowAtkG = fnStepG(0.250);
+        s_slowRelG = fnStepG(0.500);
+        s_dynG1 = fnStepG(0.281);
+        s_dynG2 = fnStepG(0.057);
+        s_dynG3 = fnStepG(0.00054);
+        s_dynRelG = fnStepG(0.001);
+        if (sr <= 44100.0) s_srIdx = 0;
+        else if (sr <= 48000.0) s_srIdx = 1;
+        else if (sr <= 88200.0) s_srIdx = 2;
+        else s_srIdx = 3;
+        s_sr = sr;
+    }
+
+    if (s_tableReady == 0) {
+        fnInitTable();
+        s_tableReady = 1;
+    }
+    if (s_histReady == 0) {
+        for (let i: Int = 0; i < 9; i++) {
+            s_histL[i] = 0.0;
+            s_histR[i] = 0.0;
+        }
+        s_t1State = 0;
+        s_t2a = 0.0;
+        s_t2b = 0.25;
+        s_histIdx = 0;
+        s_histReady = 1;
+    }
+
+    s_inGain = 1.0 / fnDbToK(threshold);
+    s_outGain = fnDbToK(ceiling);
+    s_auto = auto_release;
+    s_fastG = fnStepG(pow(10.0, release - 5.0));
+    s_dithType = dither;
+    s_shaping = shaping;
+    s_scaling = pow(2.0, 24.0 - (16.0 + quantize * 2.0));
+}
+
+let lL = in1 * s_inGain;
+let lR = in2 * s_inGain;
+
+let level = maximum(abs(lL), abs(lR));
+let gr = 1.0;
+if (level >= 1.0) gr = 1.0 / level;
+
+// push and take the running minimum over the look-ahead window
+s_grMinBuf[s_grMinHead] = gr;
+s_grMinHead += 1;
+if (s_grMinHead >= s_laSize) s_grMinHead = 0;
+let minGr = s_grMinBuf[0];
+for (let i: Int = 1; i < s_laSize; i++) minGr = minimum(minGr, s_grMinBuf[i]);
+
+let outGr = 1.0;
+if (s_auto < 0.5) {
+    if (minGr < s_fastS) s_fastS = minGr;
+    else s_fastS = fnOnePole(s_fastS, s_fastG, minGr);
+    outGr = s_fastS;
+} else {
+    if (minGr < s_slowS) s_slowS = fnOnePole(s_slowS, s_slowAtkG, minGr);
+    else s_slowS = fnOnePole(s_slowS, s_slowRelG, minGr);
+
+    let combined = minimum(minGr, s_slowS);
+    if (combined < s_dynS) s_dynS = combined;
+    else s_dynS = fnOnePole(s_dynS, s_dynRelG, combined);
+    outGr = s_dynS;
+
+    let dynRelease = pow(1.0 - outGr, 4.0);
+    let dynRelG1 = maximum(fnStepG(dynRelease), 0.36787944117);
+
+    let dynFactor = minimum(s_slowS * 2.0 - outGr, 1.0);
+    let dynRelG2 = 1.0;
+    if (dynFactor < 0.25) dynRelG2 = 1.0;
+    else if (dynFactor < 0.5) dynRelG2 = (dynFactor - 0.25) / 0.25 * (s_dynG1 - 1.0) + 1.0;
+    else if (dynFactor < 0.71) dynRelG2 = (dynFactor - 0.5) / 0.21 * (s_dynG2 - s_dynG1) + s_dynG1;
+    else dynRelG2 = (dynFactor - 0.71) / 0.29 * (s_dynG3 - s_dynG2) + s_dynG2;
+
+    s_dynRelG = dynRelG1 * dynRelG2;
+}
+
+// two cascaded box averages
+s_ma1Sum -= s_ma1[s_ma1Head];
+s_ma1[s_ma1Head] = outGr;
+s_ma1Head += 1;
+if (s_ma1Head >= s_maSize) s_ma1Head = 0;
+s_ma1Sum += outGr;
+outGr = s_ma1Sum / s_maSize;
+
+s_ma2Sum -= s_ma2[s_ma2Head];
+s_ma2[s_ma2Head] = outGr;
+s_ma2Head += 1;
+if (s_ma2Head >= s_maSize) s_ma2Head = 0;
+s_ma2Sum += outGr;
+outGr = s_ma2Sum / s_maSize;
+
+let outL = s_dlyL.next(lL, s_laSize) * outGr * s_outGain;
+let outR = s_dlyR.next(lR, s_laSize) * outGr * s_outGain;
+
+// dither
+let r1L = 0.0;
+let r1R = 0.0;
+let r2L = 0.0;
+let r2R = 0.0;
+if (s_dithType == 1) {
+    let a = fnRandType1();
+    let b = fnRandType1();
+    r1L = (a + b) / 4294967296.0;
+    r1R = (a - b) / 4294967296.0;
+} else if (s_dithType == 2) {
+    s_t2a -= 0.16666667;
+    if (s_t2a < -0.16666667) s_t2a = 0.16666667;
+    s_t2b = -s_t2b;
+    r2L = s_t2a + s_t2b;
+    r2R = s_t2a - s_t2b;
+}
+
+out1 = fnDitherSample(outL, r1L, r2L, 0.0);
+out2 = fnDitherSample(outR, r1R, r2R, 1.0);
+
+s_histIdx += 1;
+if (s_histIdx >= 9) s_histIdx -= 9;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

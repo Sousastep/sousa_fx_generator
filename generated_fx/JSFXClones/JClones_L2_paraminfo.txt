@@ -1,0 +1,76 @@
+JClones_L2 — RNBO codebox~ port of the JClones L2 JSFX
+Source: repos/JSFXClones/jsfx/JClones_L2.jsfx (MIT, JClones)
+
+What it is: a look-ahead brickwall limiter with adaptive release, plus the
+original's mastering quantiser/dither section. The detector takes the max of
+both channels, holds a running minimum across the look-ahead window, smooths
+the resulting gain with two cascaded box averages, and applies it to the delayed
+signal. Release is either a single user time or the "auto release" algorithm,
+which picks a release from the gain-reduction depth and the crest factor and
+combines three pre-computed curves.
+
+Parameters (original slider names):
+
+- Threshold — dB, -30 .. 0, default 0
+  Ironically this is an *input* gain in the source: the stage is
+  `input_gain = 1 / 10^(Threshold/20)`, and the internal limiter threshold is
+  fixed at unity. So lowering Threshold by 6 dB doubles the level going into the
+  limiter, which is how much louder/more limited it gets. 0 dB is effectively
+  no drive; -6 to -12 dB is normal mastering limiting; below -20 dB it is a
+  wall. Linear in dB, 0.1 dB steps.
+
+- Ceiling — dB, -30 .. 0, default 0
+  Plain output gain = 10^(Ceiling/20). Set -0.1 to -0.3 dB for a real digital
+  ceiling; 0 dB means the limiter output can reach full scale.
+
+- Auto Release — off / on, default on
+  Off = the single Release time below is used. On = the adaptive algorithm:
+  a 250 ms attack / 500 ms release slow detector, a second stage with a
+  gain-derived release (1-GR)^4 seconds plus a crest-factor-dependent multiplier
+  built from three fixed curves (0.281 s, 0.057 s, 0.00054 s), clamped at
+  exp(-1). Adapts well on mixed programme material; expect less pumping than a
+  fixed short release on dense music.
+
+- Release — 0.01 / 0.1 / 1.0 / 10 / 100 / 1000 ms, default 1.0 ms
+  Only used when Auto Release is off. The six positions map to a true
+  exponential taper, 10^(position-5) seconds, so they are evenly spaced octave-
+  ish steps in time. 0.01-0.1 ms can distort sustained bass; 10-100 ms is the
+  usual musical range; 1000 ms is a slow level-rider that will pump on
+  transients. The slider is a switch, not continuous.
+
+- Quantize — 16 / 18 / 20 / 22 / 24 bit, default 24
+  Target word length for the output truncation. 24 = no reduction (and the
+  dither noise is then inaudible). 16-bit is CD; go lower only if you actually
+  want the grit. Implemented as the source does: scale to 24-bit, add dither and
+  shaped error, floor, clip, then floor to the target step.
+
+- Dither — none / type1 / type2, default type1
+  none = no dither at all (quantisation distortion audible at 16 bit).
+  type1 = a 32-bit LCG producing a triangular (sum of two) dither, decorrelated
+  between channels. type2 = a deterministic ±1/6 triangle with alternating
+  sign, which is more "patterned" and less noisy on very quiet material. Type 1
+  is the safe general choice.
+
+- Shaping — none / moderate / normal / ultra, default normal
+  Selects one of four 9-tap noise-shaping FIR curves, with separate coefficient
+  sets for 44.1, 48, 88.2 and 96 kHz (higher rates fall in the 96 kHz set). More
+  shaping pushes the quantisation noise up in frequency where it is less
+  audible; ultra is aggressive and can be heard as hiss on bright material at
+  16 bit. All 144 coefficients are transcribed verbatim.
+
+Taper summary: Threshold and Ceiling are linear in dB; Release is an
+exponential-in-seconds switch; Quantize, Dither and Shaping are discrete
+switches. There is no continuous release or ratio control.
+
+Port notes:
+- Look-ahead is `floor(0.0014*sr/64 + 0.6) * 64` samples — 64 at 44.1/48 kHz,
+  128 at 96 kHz. The source reports it via `pdc_delay`; RNBO codebox~ has no
+  plug-in delay compensation, so it is real latency (1.45 ms at 44.1 kHz).
+- The source builds a padded min-tree to read the window minimum; this port does
+  the equivalent full scan of the circular buffer, which returns the identical
+  value with simpler code.
+- The 9-tap noise-shaping histories are shared index-wise between L and R, as in
+  the source (both channels write the same slot then the index advances once).
+- The source's `1 << (24 - bits)` is written as `pow(2, 24 - bits)`; identical
+  for the five integer bit depths.
+- The gain-reduction meter and `ext_gr_meter` were dropped.

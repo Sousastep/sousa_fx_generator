@@ -1,0 +1,452 @@
+/* JClones_RS124 — RNBO codebox~ port of JClones_RS124 (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_RS124.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. The first vari-mu clone: a
+ * box-tone voice (8 Hz / 62 Hz / high shelf), a level-following detector with a
+ * 300 ms RMS warm-up, and three measured gain-reduction curves evaluated with
+ * the source's own cubic-spline segment generator. Three units (60050A, 61010B,
+ * 60070B) differ in attack time, filter settings and all curve tables.
+ *
+ * Table layout (s_tab): igX@0(11) ogX@11(6) rlX@17(7) grX@24(54)
+ *   igY@78(33) ogY@111(18) rlY@129(21) atk@150(3) grY@153(54)
+ * Segment layout (s_seg): ig@0+m*44 og@132+m*24 rl@204+m*28 gr@288+m*72
+ * Biquad slots: 0 L hpf 1 L pk 2 L hs 3 L sc / 4 R hpf 5 R pk 6 R hs 7 R sc
+ */
+// Model
+@param({ enum: ["60050A", "61010B", "60070B"] }) model = 0;
+// Input (dB)
+@param({ min: -24, max: 24 }) input = 0;
+// Release
+@param({ min: 1, max: 6 }) release = 4;
+// SuperFuse
+@param({ enum: ["off", "on"] }) superfuse = 0;
+// Output (dB)
+@param({ min: -30, max: 0 }) output = 0;
+// Box Tone
+@param({ enum: ["off", "on"] }) box_tone = 1;
+
+@state s_tab = new FixedFloat64Array(224);
+@state s_seg = new FixedFloat64Array(512);
+@state s_co = new FixedFloat64Array(48);
+@state s_st = new FixedFloat64Array(48);
+@state s_tablesReady = 0;
+@state s_inGainL = 1;
+@state s_inGainR = 1;
+@state s_outGainL = 1;
+@state s_outGainR = 1;
+@state s_atkKL = 0;
+@state s_atkKR = 0;
+@state s_relKL = 0;
+@state s_relKR = 0;
+@state s_lvlL = 0;
+@state s_lvlR = 0;
+@state s_fbGrL = 1;
+@state s_fbGrR = 1;
+@state s_startCntL = 0;
+@state s_startCntR = 0;
+@state s_startMaxL = 0;
+@state s_startMaxR = 0;
+@state s_startSumL = 0;
+@state s_startSumR = 0;
+@state s_boxToneL = 1;
+@state s_boxToneR = 1;
+@state s_model = 0;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+function fnSinh(x) {
+    return (exp(x) - exp(-x)) * 0.5;
+}
+
+function fnFilterCoef(t) {
+    return pow(0.2, 1.0 / (t * maximum(samplerate(), 1.0)));
+}
+
+function fnBq(x, k) {
+    let cb: Int = k * 5;
+    let sb: Int = k * 4;
+    let y = x * s_co[cb] + s_st[sb] * s_co[cb + 1] + s_st[sb + 1] * s_co[cb + 2] + s_st[sb + 2] * s_co[cb + 3] + s_st[sb + 3] * s_co[cb + 4];
+    s_st[sb + 1] = s_st[sb];
+    s_st[sb] = x;
+    s_st[sb + 3] = s_st[sb + 2];
+    s_st[sb + 2] = y;
+    return y;
+}
+
+function fnBqSet(k, a0, a1, a2, b1, b2) {
+    let cb: Int = k * 5;
+    s_co[cb] = a0;
+    s_co[cb + 1] = a1;
+    s_co[cb + 2] = a2;
+    s_co[cb + 3] = b1;
+    s_co[cb + 4] = b2;
+}
+
+function fnBqReset(k) {
+    let sb: Int = k * 4;
+    s_st[sb] = 0.0; s_st[sb + 1] = 0.0; s_st[sb + 2] = 0.0; s_st[sb + 3] = 0.0;
+}
+
+// Design helpers (each writes the coefficient slot directly).
+function fnPk(freqK, aDb, q, k) {
+    if (aDb == 0.0) {
+        fnBqSet(k, 1.0, 0.0, 0.0, 0.0, 0.0);
+        return;
+    }
+    let aLin = fnDbToK(aDb);
+    let saLin = fnDbToK(aDb / 2.0);
+    let w0 = freqK * 2.0 * pi;
+    let x1 = fnSinh(log(sqrt(1.0 / (q + q) * (1.0 / (q + q)) + 1.0) + 1.0 / (q + q)) * (sin(w0) / w0));
+    let x1w2 = x1 * w0 + x1 * w0;
+    let aLin2 = aLin * aLin;
+    let saLin2 = saLin * saLin;
+    let abs1 = abs(aLin2 - 1.0);
+    let abs2 = abs(saLin2 - 1.0);
+    let w02pi2 = (w0 * w0 - pi * pi) * (w0 * w0 - pi * pi);
+    let invAbs = 1.0 / abs(aLin2 - saLin2);
+    let x2 = invAbs * pi * pi * abs2 * x1w2 * x1w2;
+    let x3 = sqrt((aLin * x2 * aLin + w02pi2) / (x2 + w02pi2));
+    let x32 = x3 * x3;
+    let abs3 = abs(aLin2 - x32);
+    let abs4 = abs(saLin2 - x32);
+    let tanw12 = tan(w0 * 0.5);
+    let x4 = tanw12 * (sqrt(abs3 / abs1) * tanw12);
+    let x5 = (sqrt(abs2 / abs4) * x4 + 1.0) * tan(x1w2 * 0.5);
+    let abs5 = abs(saLin2 - x3);
+    let sabs42 = sqrt(abs4 * abs2);
+    let x6 = x5 * x5 * abs4 - ((abs5 - sabs42) * x4 + (abs5 - sabs42) * x4);
+    let abs6 = abs(aLin2 - x3);
+    let sabs31 = sqrt(abs3 * abs1);
+    let x7 = (abs6 - sabs31) * x4 + (abs6 - sabs31) * x4;
+    let x8 = sqrt((x7 + x6) * invAbs);
+    let x9 = sqrt((x7 * saLin * saLin + x6 * aLin * aLin) * invAbs);
+    let a0 = x4 + x9 + x3;
+    let a1 = (x3 - x4) * -2.0;
+    let a2 = x4 + x3 - x9;
+    let b0 = x8 + x4 + 1.0;
+    let b1 = (1.0 - x4) * -2.0;
+    let b2 = x4 + 1.0 - x8;
+    fnBqSet(k, a0 / b0, a1 / b0, a2 / b0, -b1 / b0, -b2 / b0);
+}
+
+function fnHs(freqK, aDb, q, k) {
+    let saLin = fnDbToK(aDb / 2.0);
+    let w0 = freqK * 2.0 * pi;
+    let saLinM = saLin - 1.0;
+    let cosw0 = cos(w0);
+    let sinw0 = sin(w0);
+    let xm = saLinM * cosw0;
+    let xs = sinw0 * sqrt((saLin * saLin + 1.0) / q - saLinM * saLinM);
+    let saLinP = saLin + 1.0;
+    let xp = saLinP * cosw0;
+    let xpm = saLinP - xm;
+    let a0 = (xs + saLinP + xm) * saLin;
+    let a1 = (xp + saLinM) * saLin * -2.0;
+    let a2 = (saLinP + xm - xs) * saLin;
+    let b0 = xpm + xs;
+    let b1 = saLinM - xp + saLinM - xp;
+    let b2 = xpm - xs;
+    fnBqSet(k, a0 / b0, a1 / b0, a2 / b0, -b1 / b0, -b2 / b0);
+}
+
+function fnHpf(freqK, q, k) {
+    let w0 = freqK * 2.0 * pi;
+    let cosw0 = cos(w0);
+    let sinw0 = sin(w0);
+    let sh = fnSinh(log(2.0) * (w0 / sinw0) * q * 0.5) * sinw0;
+    let a0 = 0.5 * (cosw0 + 1.0);
+    let a1 = 0.0 - (cosw0 + 1.0);
+    let b0 = sh + 1.0;
+    let b1 = cosw0 * -2.0;
+    let b2 = 1.0 - sh;
+    fnBqSet(k, a0 / b0, a1 / b0, a0 / b0, -b1 / b0, -b2 / b0);
+}
+
+function fnHpf1(freqK, k) {
+    let w0 = freqK * 2.0 * pi;
+    let kk = w0 / tan(w0 * 0.5);
+    let b0 = w0 + kk;
+    fnBqSet(k, kk / b0, -kk / b0, 0.0, -(w0 - kk) / b0, 0.0);
+}
+
+// Cubic-spline segment builder: 4 coefficients per segment, in absolute x.
+function fnGenSeg(xOff, yOff, len, segOff) {
+    let last: Int = len - 2;
+    for (let i: Int = 0; i <= last; i++) {
+        let x1 = s_tab[xOff + i];
+        let x2 = s_tab[xOff + i + 1];
+        let y1 = s_tab[yOff + i];
+        let y2 = s_tab[yOff + i + 1];
+        let dy1 = (y2 - y1) / (x2 - x1);
+        if (i - 1 >= 0) dy1 = (y2 - s_tab[yOff + i - 1]) / (x2 - s_tab[xOff + i - 1]);
+        let dy2 = (y2 - y1) / (x2 - x1);
+        if (i + 2 < len) dy2 = (s_tab[yOff + i + 2] - y1) / (s_tab[xOff + i + 2] - x1);
+
+        let dx = x2 - x1;
+        let dy = y2 - y1;
+        let sumDy = dy1 + dy2;
+        let dx2 = dx * dx;
+        let dx3 = dx2 * dx;
+        let s: Int = segOff + i * 4;
+        s_seg[s] = (dx * sumDy - 2.0 * dy) / dx3;
+        s_seg[s + 1] = -((dy1 + sumDy) * dx2 + (sumDy * x1 - dy) * 3.0 * dx - 6.0 * x1 * dy) / dx3;
+        s_seg[s + 2] = (dy1 * dx3 + (dy1 + sumDy) * 2.0 * x1 * dx2 + (sumDy * x1 - 2.0 * dy) * 3.0 * x1 * dx - 6.0 * x1 * x1 * dy) / dx3;
+        s_seg[s + 3] = -((x1 * dy1 - y1) * dx3 + (dy1 + sumDy) * x1 * x1 * dx2 + (sumDy * x1 - 3.0 * dy) * x1 * x1 * dx - 2.0 * x1 * x1 * x1 * dy) / dx3;
+    }
+
+    // straight lines for the first and last drawn segments
+    let a0 = s_tab[xOff];
+    let a1 = s_tab[xOff + 1];
+    let b0 = s_tab[yOff];
+    let b1 = s_tab[yOff + 1];
+    s_seg[segOff] = 0.0;
+    s_seg[segOff + 1] = 0.0;
+    s_seg[segOff + 2] = (b1 - b0) / (a1 - a0);
+    s_seg[segOff + 3] = (a1 * b0 - b1 * a0) / (a1 - a0);
+
+    let c0 = s_tab[xOff + last];
+    let c1 = s_tab[xOff + last + 1];
+    let d0 = s_tab[yOff + last];
+    let d1 = s_tab[yOff + last + 1];
+    let se: Int = segOff + last * 4;
+    s_seg[se] = 0.0;
+    s_seg[se + 1] = 0.0;
+    s_seg[se + 2] = (d1 - d0) / (c1 - c0);
+    s_seg[se + 3] = (c1 * d0 - d1 * c0) / (c1 - c0);
+}
+
+function fnInterp(xOff, segOff, len, x) {
+    let xa = s_tab[xOff];
+    let xb = s_tab[xOff + len - 1];
+    if (x < xa) x = xa;
+    if (x > xb) x = xb;
+
+    let left: Int = 0;
+    let right: Int = len - 1;
+    let guard: Int = 0;
+    while (true) {
+        let mid: Int = floor((left + right) / 2.0);
+        if (x < s_tab[xOff + mid]) right = mid;
+        else left = mid;
+        if (right - left <= 1) break;
+        guard += 1;
+        if (guard > 64) break;
+    }
+    let s: Int = segOff + left * 4;
+    return x * x * x * s_seg[s] + x * x * s_seg[s + 1] + x * s_seg[s + 2] + s_seg[s + 3];
+}
+
+function fnInitTables() {
+    s_tab[0] = 0.0; s_tab[1] = 1.0; s_tab[2] = 2.0; s_tab[3] = 3.0;
+    s_tab[4] = 4.0; s_tab[5] = 5.0; s_tab[6] = 6.0; s_tab[7] = 7.0;
+    s_tab[8] = 8.0; s_tab[9] = 9.0; s_tab[10] = 10.0;
+    s_tab[11] = -30.0; s_tab[12] = -20.0; s_tab[13] = -15.0; s_tab[14] = -10.0;
+    s_tab[15] = -5.0; s_tab[16] = 0.0;
+    s_tab[17] = 1.0; s_tab[18] = 2.0; s_tab[19] = 3.0; s_tab[20] = 4.0;
+    s_tab[21] = 5.0; s_tab[22] = 6.0; s_tab[23] = 7.0;
+    s_tab[24] = 0.0; s_tab[25] = 0.0002106149709; s_tab[26] = 0.0003686990847; s_tab[27] = 0.0006501130364;
+    s_tab[28] = 0.0011044513; s_tab[29] = 0.001680478835; s_tab[30] = 0.002325149047; s_tab[31] = 0.002997362402;
+    s_tab[32] = 0.003684230496; s_tab[33] = 0.00436895643; s_tab[34] = 0.005128938044; s_tab[35] = 0.006141180343;
+    s_tab[36] = 0.007452476626; s_tab[37] = 0.008964750509; s_tab[38] = 0.01080515317; s_tab[39] = 0.01351626565;
+    s_tab[40] = 0.01751888654; s_tab[41] = 1.0; s_tab[42] = 0.0; s_tab[43] = 0.0001822577969;
+    s_tab[44] = 0.0003190966185; s_tab[45] = 0.0005625128294; s_tab[46] = 0.0009804053352; s_tab[47] = 0.001553825818;
+    s_tab[48] = 0.002212665944; s_tab[49] = 0.002898854095; s_tab[50] = 0.003563451128; s_tab[51] = 0.004212885788;
+    s_tab[52] = 0.004907883027; s_tab[53] = 0.005728056155; s_tab[54] = 0.006885035921; s_tab[55] = 0.008336452181;
+    s_tab[56] = 0.0104270474; s_tab[57] = 0.01349886814; s_tab[58] = 0.01667035506; s_tab[59] = 1.0;
+    s_tab[60] = 0.0; s_tab[61] = 0.0002118388963; s_tab[62] = 0.000368310694; s_tab[63] = 0.0006512028181;
+    s_tab[64] = 0.001126745739; s_tab[65] = 0.001714159674; s_tab[66] = 0.002367415285; s_tab[67] = 0.003052725536;
+    s_tab[68] = 0.003758107197; s_tab[69] = 0.004528969678; s_tab[70] = 0.005470673294; s_tab[71] = 0.006695451765;
+    s_tab[72] = 0.008144287892; s_tab[73] = 0.009658456391; s_tab[74] = 0.01118185522; s_tab[75] = 0.01392286758;
+    s_tab[76] = 0.01725797359; s_tab[77] = 1.0;
+    s_tab[78] = -90.5; s_tab[79] = -49.4; s_tab[80] = -35.5; s_tab[81] = -27.6;
+    s_tab[82] = -24.7; s_tab[83] = -22.1; s_tab[84] = -16.6; s_tab[85] = -9.8;
+    s_tab[86] = -5.6; s_tab[87] = -2.1; s_tab[88] = 0.0; s_tab[89] = -105.0;
+    s_tab[90] = -47.3; s_tab[91] = -38.7; s_tab[92] = -30.1; s_tab[93] = -25.6;
+    s_tab[94] = -21.5; s_tab[95] = -15.0; s_tab[96] = -10.0; s_tab[97] = -5.0;
+    s_tab[98] = -1.3; s_tab[99] = 0.0; s_tab[100] = -92.5; s_tab[101] = -48.9;
+    s_tab[102] = -33.8; s_tab[103] = -26.6; s_tab[104] = -23.6; s_tab[105] = -21.3;
+    s_tab[106] = -16.3; s_tab[107] = -11.1; s_tab[108] = -6.0; s_tab[109] = -3.0;
+    s_tab[110] = 0.0;
+    s_tab[111] = -30.0; s_tab[112] = -19.97; s_tab[113] = -15.029; s_tab[114] = -9.979;
+    s_tab[115] = -4.94; s_tab[116] = -0.452; s_tab[117] = -30.0; s_tab[118] = -20.06;
+    s_tab[119] = -15.163; s_tab[120] = -10.239; s_tab[121] = -5.11; s_tab[122] = -0.47;
+    s_tab[123] = -30.0; s_tab[124] = -20.369; s_tab[125] = -15.3; s_tab[126] = -10.24;
+    s_tab[127] = -5.328; s_tab[128] = -0.603;
+    s_tab[129] = 3.4; s_tab[130] = 6.5; s_tab[131] = 11.4; s_tab[132] = 22.0;
+    s_tab[133] = 38.0; s_tab[134] = 64.0; s_tab[135] = 3000.0; s_tab[136] = 2.9;
+    s_tab[137] = 5.0; s_tab[138] = 8.1; s_tab[139] = 15.6; s_tab[140] = 25.3;
+    s_tab[141] = 44.0; s_tab[142] = 3000.0; s_tab[143] = 1.0; s_tab[144] = 1.9;
+    s_tab[145] = 3.2; s_tab[146] = 5.8; s_tab[147] = 9.8; s_tab[148] = 16.9;
+    s_tab[149] = 3000.0;
+    s_tab[150] = 0.147; s_tab[151] = 0.168; s_tab[152] = 0.05;
+    s_tab[153] = 1.194413347; s_tab[154] = 1.194413347; s_tab[155] = 1.175149541; s_tab[156] = 1.164569953;
+    s_tab[157] = 1.11193381; s_tab[158] = 0.9508697703; s_tab[159] = 0.7394255054; s_tab[160] = 0.5357208076;
+    s_tab[161] = 0.3700851771; s_tab[162] = 0.2466540476; s_tab[163] = 0.1627397424; s_tab[164] = 0.1095150134;
+    s_tab[165] = 0.0746926852; s_tab[166] = 0.05049766445; s_tab[167] = 0.03420736713; s_tab[168] = 0.02404922493;
+    s_tab[169] = 0.01751888654; s_tab[170] = 0.0; s_tab[171] = 1.033597679; s_tab[172] = 1.033597679;
+    s_tab[173] = 1.01705228; s_tab[174] = 1.007648674; s_tab[175] = 0.9870474497; s_tab[176] = 0.8792053594;
+    s_tab[177] = 0.7036545186; s_tab[178] = 0.5181143448; s_tab[179] = 0.3579527511; s_tab[180] = 0.2378429147;
+    s_tab[181] = 0.1557257297; s_tab[182] = 0.1021478139; s_tab[183] = 0.0690054926; s_tab[184] = 0.04695851429;
+    s_tab[185] = 0.03301034542; s_tab[186] = 0.02401826988; s_tab[187] = 0.01667035506; s_tab[188] = 0.0;
+    s_tab[189] = 1.20135432; s_tab[190] = 1.20135432; s_tab[191] = 1.173911629; s_tab[192] = 1.166522116;
+    s_tab[193] = 1.134379291; s_tab[194] = 0.9699274878; s_tab[195] = 0.7528666798; s_tab[196] = 0.5456159017;
+    s_tab[197] = 0.3775061764; s_tab[198] = 0.2556877644; s_tab[199] = 0.1735829044; s_tab[200] = 0.1193992765;
+    s_tab[201] = 0.08162638572; s_tab[202] = 0.0544052497; s_tab[203] = 0.03539994489; s_tab[204] = 0.02477268373;
+    s_tab[205] = 0.01725797359; s_tab[206] = 0.0;
+}
+
+function fnSetParameters(mdl, inPos, relPos, sf, outPos, boxTone) {
+    let sr = maximum(samplerate(), 1.0);
+    let m: Int = mdl;
+    let mIg: Int = m * 44;
+    let mOg: Int = 132 + m * 24;
+    let mRl: Int = 204 + m * 28;
+    let mGr: Int = 288 + m * 72;
+
+    let igDb = fnInterp(0, mIg, 11, inPos);
+    let ogDb = fnInterp(11, mOg, 6, outPos) + 30.0;
+    s_inGainL = fnDbToK(igDb);
+    s_inGainR = fnDbToK(igDb);
+    s_outGainL = fnDbToK(ogDb);
+    s_outGainR = fnDbToK(ogDb);
+
+    if (m == 2) {
+        fnPk(62.0 / sr, 0.0, 1.0, 1.0);
+        fnHpf1(10.0 / sr, 3.0);
+    } else {
+        fnPk(62.0 / sr, 0.8, 1.0, 1.0);
+        fnHpf1(32.9 / sr, 3.0);
+    }
+    fnPk(62.0 / sr, 0.0, 1.0, 5.0);
+    if (m != 0) {
+        if (m == 2) fnHpf1(10.0 / sr, 7.0);
+        else { fnPk(62.0 / sr, 0.8, 1.0, 5.0); fnHpf1(32.9 / sr, 7.0); }
+    } else {
+        fnPk(62.0 / sr, 0.8, 1.0, 5.0);
+        fnHpf1(32.9 / sr, 7.0);
+    }
+    if (m != 0) {
+        fnHs(13000.0 / sr, 4.0, 0.6, 2.0);
+        fnHs(13000.0 / sr, 4.0, 0.6, 6.0);
+    } else {
+        fnHs(12000.0 / sr, 2.8, 0.6, 2.0);
+        fnHs(12000.0 / sr, 2.8, 0.6, 6.0);
+    }
+
+    let atk = fnFilterCoef(s_tab[150 + m]);
+    s_atkKL = atk;
+    s_atkKR = atk;
+    if (sf >= 0.5) {
+        s_relKL = atk;
+        s_relKR = atk;
+    } else {
+        let rk = fnFilterCoef(fnInterp(17, mRl, 7, relPos));
+        s_relKL = rk;
+        s_relKR = rk;
+    }
+
+    s_model = mdl;
+    s_boxToneL = boxTone;
+    s_boxToneR = boxTone;
+}
+
+function fnGetLevel(x, ch) {
+    let lvl = s_lvlL;
+    let cnt = s_startCntL;
+    let sum = s_startSumL;
+    let lvlS = s_lvlL;
+    if (ch >= 0.5) {
+        lvlS = s_lvlR; cnt = s_startCntR; sum = s_startSumR;
+    }
+    lvl = abs(x);
+    if (lvl > 1.0) lvl = 1.0;
+    if (lvl < 5.623413251903491e-4) lvl = 5.623413251903491e-4;
+
+    let atk = s_atkKL;
+    let rel = s_relKL;
+    if (ch >= 0.5) { atk = s_atkKR; rel = s_relKR; }
+
+    let k = rel;
+    if (lvl > lvlS) k = atk;
+
+    let maxCnt = s_startMaxL;
+    if (ch >= 0.5) maxCnt = s_startMaxR;
+
+    if (cnt >= maxCnt) {
+        lvlS = (1.0 - k) * lvl + lvlS * k;
+    } else {
+        sum += lvl * lvl;
+        cnt += 1;
+        lvlS = sqrt(sum / cnt);
+    }
+
+    if (ch < 0.5) {
+        s_lvlL = lvlS; s_startCntL = cnt; s_startSumL = sum;
+    } else {
+        s_lvlR = lvlS; s_startCntR = cnt; s_startSumR = sum;
+    }
+    return lvlS;
+}
+
+function fnProcess(x, ch) {
+    let xa = x;
+    let xc = x;
+    let bt = s_boxToneL;
+    if (ch >= 0.5) bt = s_boxToneR;
+    if (bt >= 0.5) {
+        xa = fnBq(x, 4.0 * ch);
+        let xb = fnBq(xa, 4.0 * ch + 1.0);
+        xc = fnBq(xb, 4.0 * ch + 2.0);
+    }
+
+    let inK = s_inGainL;
+    let fb = s_fbGrL;
+    let outK = s_outGainL;
+    if (ch >= 0.5) { inK = s_inGainR; fb = s_fbGrR; outK = s_outGainR; }
+
+    let y = xc * inK * fb;
+    let sc = fnBq(y, 4.0 * ch + 3.0);
+    let lvl = fnGetLevel(sc, ch);
+
+    let m = trunc(s_model);
+    let gr = fnInterp(24 + m * 18, 288 + m * 72, 18, lvl * 1.1);
+    if (ch < 0.5) s_fbGrL = gr;
+    else s_fbGrR = gr;
+
+    return y * outK;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (s_tablesReady == 0) {
+        fnInitTables();
+        let mIg = 0;
+        while (mIg < 3) {
+            fnGenSeg(0, 78 + 11 * mIg, 11, mIg * 44);
+            fnGenSeg(11, 111 + 6 * mIg, 6, 132 + mIg * 24);
+            fnGenSeg(17, 129 + 7 * mIg, 7, 204 + mIg * 28);
+            fnGenSeg(24 + 18 * mIg, 153 + 18 * mIg, 18, 288 + mIg * 72);
+            mIg += 1;
+        }
+        s_tablesReady = 1;
+    }
+    if (sr != s_sr) {
+        fnHpf(8.0 / sr, 0.7, 0.0);
+        fnHpf(8.0 / sr, 0.7, 4.0);
+        s_startMaxL = floor(sr * 0.300);
+        s_startMaxR = s_startMaxL;
+        s_sr = sr;
+    }
+    fnSetParameters(model, (input / 24.0 + 1.0) * 5.0, release, superfuse, output, box_tone);
+}
+
+out1 = fnProcess(in1, 0.0);
+out2 = fnProcess(in2, 1.0);
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

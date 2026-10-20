@@ -1,0 +1,48 @@
+JClones_Hyrax — RNBO codebox~ port of the JClones Hyrax JSFX
+Source: repos/JSFXClones/jsfx/JClones_Hyrax.jsfx (MIT, JClones)
+
+What it is: the brickwall limiter from an automatic mastering system, converted
+from offline to realtime processing by JClones. It is unusual in that the attack
+gain curve is filtered by a forward-then-backward one-pole, i.e. a zero-phase
+(linear-phase) filter, so the gain reduction arrives without the phase smear a
+normal one-pole would add. The chain is: a max-hold over a 1 ms attack window,
+that forward/backward filter, a max-hold over a 1 ms hold window, a hold
+low-pass, a release low-pass, and a max of all three paths.
+
+Parameters:
+
+- Input Gain — dB, -18 .. +18, default 0
+  Linear dB gain before the limiter (0.1 dB steps). The ceiling is the
+  threshold, so raising Input Gain increases how much the limiter has to do
+  rather than how loud the output gets. Increasing input by 6 dB with a fixed
+  threshold roughly doubles the gain reduction.
+
+- Threshold — dB, -18 .. 0, default -1
+  The ceiling, linear in dB. -1 dB leaves a little inter-sample room; -0.1 to
+  -0.3 is the usual delivery setting; -6 and below becomes a dense, obviously
+  limited result. Because it is also the level the limiter targets, it is both
+  the loudness and the amount control, and there is no separate output trim.
+
+Fixed internals: attack window 1 ms (made odd, so 2*floor(sr/1000)+1 samples),
+forward/backward one-pole with `coeff = exp(-2/attack_samples)`, block length
+reduced to a -120 dB tail, hold window 1 ms, hold low-pass 7 Hz, release
+low-pass 800/3000 Hz (i.e. 3 s to reach the target).
+
+Taper summary: both controls are linear in dB with no exponential mapping. The
+character comes entirely from the fixed envelope, not from the two sliders.
+
+Port notes:
+- The source reports `pdc_delay = hold_window + forward_backward_latency`
+  (500 samples at 44.1 kHz, ~11 ms). RNBO codebox~ has no plug-in delay
+  compensation, so that latency is real: align it in the patcher if running the
+  limiter in parallel with anything.
+- The look-ahead and hold windows are implemented as full scans of a circular
+  buffer instead of the source's padded max-tree. The value returned is
+  identical (the tree stores exactly the window maximum, with padding at
+  -1e6); the scan is simpler and, at 1 ms windows, cheap.
+- The forward/backward block length is forced to an even number of samples so
+  that the half-block overlap is exact. The source divides `block_size / 2`
+  which is fractional at some sample rates (e.g. 663/2 at 96 kHz); the even
+  rounding changes the filter tail length by one sample where the response has
+  already decayed to -120 dB.
+- The source's `this.gr` (used only for the meter) was dropped.

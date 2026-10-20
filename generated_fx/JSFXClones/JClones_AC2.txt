@@ -1,0 +1,485 @@
+/* JClones_AC2 — RNBO codebox~ port of JClones_AC2 (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_AC2.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept (eleven controls, as in the
+ * source). A tape-machine emulation: a model-dependent high-pass plus bump
+ * filter, a level-dependent quadratic saturation stage, then a dynamic shelf
+ * pair crossfaded per sample by the smoothed saturation level. Six head models,
+ * two IEC curves, two tape formulations and three speeds. GUI omitted.
+ */
+// Input Gain (dB)
+@param({ min: -24, max: 24 }) input_gain = 0;
+// Output Gain (dB)
+@param({ min: -24, max: 24 }) output_gain = 0;
+// Auto Gain
+@param({ enum: ["off", "on"] }) auto_gain = 0;
+// Rolloff (Hz)
+@param({ min: 20, max: 100 }) rolloff = 35;
+// Bump (%)
+@param({ min: 0, max: 100 }) bump = 0;
+// Model
+@param({ enum: ["swiss", "japan-o", "usa-m", "usa-a", "japan-s", "japan-t"] }) model = 0;
+// Bias (dB)
+@param({ min: -12, max: 12 }) bias = 0;
+// Release (ms)
+@param({ min: 10, max: 1000, steps: 100 }) release = 500;
+// Speed
+@param({ enum: ["7.5", "15", "30"] }) speed = 1;
+// EQ Type
+@param({ enum: ["IEC 1", "IEC 2"] }) eq_type = 0;
+// Tape
+@param({ enum: ["vintage", "modern"] }) tape = 0;
+
+@state s_tA0 = 0; @state s_tA1 = 0; @state s_tA2 = 0; @state s_tB1 = 0; @state s_tB2 = 0;
+@state s_f1a0 = 1; @state s_f1a1 = 0; @state s_f1a2 = 0; @state s_f1b1 = 0; @state s_f1b2 = 0;
+@state s_f2a0 = 1; @state s_f2a1 = 0; @state s_f2a2 = 0; @state s_f2b1 = 0; @state s_f2b2 = 0;
+@state s_dAa0 = 1; @state s_dAa1 = 0; @state s_dAa2 = 0; @state s_dAb1 = 0; @state s_dAb2 = 0;
+@state s_dBa0 = 1; @state s_dBa1 = 0; @state s_dBa2 = 0; @state s_dBb1 = 0; @state s_dBb2 = 0;
+@state s_dna0 = 1; @state s_dna1 = 0; @state s_dna2 = 0; @state s_dnb1 = 0; @state s_dnb2 = 0;
+@state s_f1x1L = 0; @state s_f1x2L = 0; @state s_f1y1L = 0; @state s_f1y2L = 0;
+@state s_f2x1L = 0; @state s_f2x2L = 0; @state s_f2y1L = 0; @state s_f2y2L = 0;
+@state s_dnx1L = 0; @state s_dnx2L = 0; @state s_dny1L = 0; @state s_dny2L = 0;
+@state s_f1x1R = 0; @state s_f1x2R = 0; @state s_f1y1R = 0; @state s_f1y2R = 0;
+@state s_f2x1R = 0; @state s_f2x2R = 0; @state s_f2y1R = 0; @state s_f2y2R = 0;
+@state s_dnx1R = 0; @state s_dnx2R = 0; @state s_dny1R = 0; @state s_dny2R = 0;
+@state s_lvlAcL = 0; @state s_lvlSmL = 0;
+@state s_lvlAcR = 0; @state s_lvlSmR = 0;
+@state s_acDrive = 1;
+@state s_acA = 0.05;
+@state s_acModern = 0;
+@state s_attK = 0;
+@state s_relK = 0;
+@state s_levelK = 0;
+@state s_inGain = 1;
+@state s_outGain = 1;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+function fnGenHighpass(freqK, q, secondOrder) {
+    let tw = tan(freqK * pi);
+    let tw2 = tw * tw;
+    let a0 = 1.0;
+    let a1 = -1.0;
+    let a2 = 0.0;
+    let b0 = tw + 1.0;
+    let b1 = tw - 1.0;
+    let b2 = 0.0;
+    if (secondOrder >= 0.5) {
+        a0 = 1.0;
+        a1 = -2.0;
+        a2 = 1.0;
+        b0 = q * tw + 1.0 + tw2;
+        b1 = tw2 * 2.0 - 2.0;
+        b2 = 1.0 - q * tw + tw2;
+    }
+    s_tA0 = a0 / b0;
+    s_tA1 = a1 / b0;
+    s_tA2 = a2 / b0;
+    s_tB1 = -b1 / b0;
+    s_tB2 = -b2 / b0;
+}
+
+function fnGenBump1(fa, ga, fb, gb) {
+    let twa = tan(fa * pi);
+    let ka = fnDbToK(ga);
+    let boostA = 1.0;
+    let cutA = 1.0;
+    if (ga >= 0.0) boostA = ka;
+    else cutA = 1.0 / ka;
+    let fa0 = twa * boostA + 1.0;
+    let fa1 = twa * boostA - 1.0;
+    let fb0 = twa * cutA + 1.0;
+    let fb1 = twa * cutA - 1.0;
+    fa0 /= fb0;
+    fa1 /= fb0;
+    fb1 /= fb0;
+
+    let twb = tan(fb * pi);
+    let kb = fnDbToK(gb);
+    let boostB = 1.0;
+    let cutB = 1.0;
+    if (gb >= 0.0) boostB = kb;
+    else cutB = 1.0 / kb;
+    let sa0 = twb * boostB + 1.0;
+    let sa1 = twb * boostB - 1.0;
+    let sb0 = twb * cutB + 1.0;
+    let sb1 = twb * cutB - 1.0;
+    sa0 /= sb0;
+    sa1 /= sb0;
+    sb1 /= sb0;
+
+    let a0 = fa0 * sa0;
+    let a1 = fa0 * sa1 + fa1 * sa0;
+    let a2 = fa1 * sa1;
+    let b1 = fb1 + sb1;
+    let b2 = fb1 * sb1;
+    s_tA0 = a0;
+    s_tA1 = a1;
+    s_tA2 = a2;
+    s_tB1 = -b1;
+    s_tB2 = -b2;
+}
+
+function fnGenBump2(f, g, dryMix) {
+    let tw = tan(f * pi);
+    let tw2 = tw * tw;
+    let gk = fnDbToK(g);
+    let scale = sqrt(abs(g / 12.0));
+    let boost = 1.0;
+    let cut = 1.0;
+    if (g >= 0.0) boost = gk;
+    else cut = 1.0 / gk;
+
+    let mix = pow(dryMix, f * 10.0 + 0.1);
+    let halfMix = 1.0 - mix * 0.5;
+
+    let aCoef = scale * halfMix * -6.4 + sqrt(2.0);
+    let bCoef = scale * halfMix * -6.0 + sqrt(2.0);
+    if (g >= 0.0) {
+        aCoef = scale * halfMix * -6.0 + sqrt(2.0);
+        bCoef = scale * halfMix * -6.4 + sqrt(2.0);
+    }
+
+    aCoef *= sqrt(boost) * tw;
+    bCoef *= sqrt(cut) * tw;
+
+    let dryA0 = 1.0 + aCoef + tw2 * boost;
+    let dryA1 = boost * 2.0 * tw2 - 2.0;
+    let dryA2 = 1.0 - aCoef + tw2 * boost;
+    let dryB0 = 1.0 + bCoef + tw2 * cut;
+    let dryB1 = cut * 2.0 * tw2 - 2.0;
+    let dryB2 = 1.0 - bCoef + tw2 * cut;
+
+    let wetA0 = boost * tw + 1.0;
+    let wetA1 = boost * tw - 1.0;
+    let wetA2 = 0.0;
+    let wetB0 = cut * tw + 1.0;
+    let wetB1 = cut * tw - 1.0;
+    let wetB2 = 0.0;
+
+    let a0 = dryA0 * mix + wetA0 * (1.0 - mix);
+    let a1 = dryA1 * mix + wetA1 * (1.0 - mix);
+    let a2 = dryA2 * mix + wetA2 * (1.0 - mix);
+    let b0 = dryB0 * mix + wetB0 * (1.0 - mix);
+    let b1 = dryB1 * mix + wetB1 * (1.0 - mix);
+    let b2 = dryB2 * mix + wetB2 * (1.0 - mix);
+
+    s_tA0 = a0 / b0;
+    s_tA1 = a1 / b0;
+    s_tA2 = a2 / b0;
+    s_tB1 = -b1 / b0;
+    s_tB2 = -b2 / b0;
+}
+
+function fnGenBump3(f, g) {
+    let tw = tan(f * pi);
+    let tw2 = tw * tw;
+    let scale = abs(g / 12.0);
+    let gk = fnDbToK(g);
+    let k1 = (tw + 1.0) * 0.5;
+    let sc1 = 0.0;
+    let sc2 = 0.0;
+    let scA = 0.0;
+    let scB = 0.0;
+    if (g < 0.0) {
+        sc1 = k1;
+        sc2 = k1 / gk;
+        scA = (sc2 * f + 1.0 - f) * scale + 1.0 - scale;
+        scB = 1.0;
+    } else {
+        sc1 = gk * k1;
+        sc2 = k1;
+        scA = 1.0;
+        scB = (sc1 * f + 1.0 - f) * scale + 1.0 - scale;
+    }
+    let a0 = tw * sc1 + scB + tw * tw;
+    let a1 = tw2 * 2.0 - scB * 2.0;
+    let a2 = scB - sc1 * tw + tw2;
+    let b0 = sc2 * tw + scA + tw2;
+    let b1 = tw2 * 2.0 - scA * 2.0;
+    let b2 = scA - sc2 * tw + tw2;
+
+    s_tA0 = a0 / b0;
+    s_tA1 = a1 / b0;
+    s_tA2 = a2 / b0;
+    s_tB1 = -b1 / b0;
+    s_tB2 = -b2 / b0;
+}
+
+function fnShelf1Pair(fa, ga, fb, gb) {
+    let twa = tan(fa * pi);
+    let ka = fnDbToK(ga);
+    let boostA = 1.0;
+    let cutA = 1.0;
+    if (ga >= 0.0) boostA = ka;
+    else cutA = 1.0 / ka;
+    let fa0 = (twa + boostA) / (twa + cutA);
+    let fa1 = (twa - boostA) / (twa + cutA);
+    let fb1 = (twa - cutA) / (twa + cutA);
+
+    let twb = tan(fb * pi);
+    let kb = fnDbToK(gb);
+    let boostB = 1.0;
+    let cutB = 1.0;
+    if (gb >= 0.0) boostB = kb;
+    else cutB = 1.0 / kb;
+    let sa0 = (twb + boostB) / (twb + cutB);
+    let sa1 = (twb - boostB) / (twb + cutB);
+    let sb1 = (twb - cutB) / (twb + cutB);
+
+    let a0 = fa0 * sa0;
+    let a1 = fa0 * sa1 + fa1 * sa0;
+    let a2 = fa1 * sa1;
+    let b1 = fb1 + sb1;
+    let b2 = fb1 * sb1;
+    s_tA0 = a0;
+    s_tA1 = a1;
+    s_tA2 = a2;
+    s_tB1 = -b1;
+    s_tB2 = -b2;
+}
+
+function fnShelf2Pair(fa, ga, fb, gb) {
+    let twa = tan(fa * pi);
+    let ka = fnDbToK(ga);
+    let boostA = 1.0;
+    let cutA = 1.0;
+    if (ga >= 0.0) boostA = ka;
+    else cutA = 1.0 / ka;
+    let fa0 = (twa + boostA) / (twa + cutA);
+    let fa1 = (twa - boostA) / (twa + cutA);
+    let fb1 = (twa - cutA) / (twa + cutA);
+
+    // second shelf uses the (tan*w + 1) form
+    let twb = tan(fb * pi);
+    let kb = fnDbToK(gb);
+    let boostB = 1.0;
+    let cutB = 1.0;
+    if (gb >= 0.0) boostB = kb;
+    else cutB = 1.0 / kb;
+    let sa0 = (twb * boostB + 1.0) / (twb * cutB + 1.0);
+    let sa1 = (twb * boostB - 1.0) / (twb * cutB + 1.0);
+    let sb1 = (twb * cutB - 1.0) / (twb * cutB + 1.0);
+
+    let a0 = fa0 * sa0;
+    let a1 = fa0 * sa1 + fa1 * sa0;
+    let a2 = fa1 * sa1;
+    let b1 = fb1 + sb1;
+    let b2 = fb1 * sb1;
+    s_tA0 = a0;
+    s_tA1 = a1;
+    s_tA2 = a2;
+    s_tB1 = -b1;
+    s_tB2 = -b2;
+}
+
+function fnBq1L(x0) {
+    let y0 = x0 * s_f1a0 + s_f1x1L * s_f1a1 + s_f1x2L * s_f1a2 + s_f1y1L * s_f1b1 + s_f1y2L * s_f1b2;
+    s_f1x2L = s_f1x1L; s_f1x1L = x0; s_f1y2L = s_f1y1L; s_f1y1L = y0;
+    return y0;
+}
+function fnBq2L(x0) {
+    let y0 = x0 * s_f2a0 + s_f2x1L * s_f2a1 + s_f2x2L * s_f2a2 + s_f2y1L * s_f2b1 + s_f2y2L * s_f2b2;
+    s_f2x2L = s_f2x1L; s_f2x1L = x0; s_f2y2L = s_f2y1L; s_f2y1L = y0;
+    return y0;
+}
+function fnBq3L(x0) {
+    let y0 = x0 * s_dna0 + s_dnx1L * s_dna1 + s_dnx2L * s_dna2 + s_dny1L * s_dnb1 + s_dny2L * s_dnb2;
+    s_dnx2L = s_dnx1L; s_dnx1L = x0; s_dny2L = s_dny1L; s_dny1L = y0;
+    return y0;
+}
+function fnBq1R(x0) {
+    let y0 = x0 * s_f1a0 + s_f1x1R * s_f1a1 + s_f1x2R * s_f1a2 + s_f1y1R * s_f1b1 + s_f1y2R * s_f1b2;
+    s_f1x2R = s_f1x1R; s_f1x1R = x0; s_f1y2R = s_f1y1R; s_f1y1R = y0;
+    return y0;
+}
+function fnBq2R(x0) {
+    let y0 = x0 * s_f2a0 + s_f2x1R * s_f2a1 + s_f2x2R * s_f2a2 + s_f2y1R * s_f2b1 + s_f2y2R * s_f2b2;
+    s_f2x2R = s_f2x1R; s_f2x1R = x0; s_f2y2R = s_f2y1R; s_f2y1R = y0;
+    return y0;
+}
+function fnBq3R(x0) {
+    let y0 = x0 * s_dna0 + s_dnx1R * s_dna1 + s_dnx2R * s_dna2 + s_dny1R * s_dnb1 + s_dny2R * s_dnb2;
+    s_dnx2R = s_dnx1R; s_dnx1R = x0; s_dny2R = s_dny1R; s_dny1R = y0;
+    return y0;
+}
+
+function fnCurve(speedIdx, modern) {
+    let c = 0.05;
+    if (modern >= 0.5) {
+        c = 0.3;
+        if (speedIdx > 1.5) c = 0.4;
+        else if (speedIdx > 0.5) c = 0.35;
+    } else {
+        c = 0.05;
+        if (speedIdx > 1.5) c = 0.15;
+        else if (speedIdx > 0.5) c = 0.1;
+    }
+    return c;
+}
+
+function fnAutoGain(biasDb, speedIdx, modern, ig) {
+    let biasLin = 1.0;
+    if (biasDb < 0.0) biasLin = fnDbToK(biasDb);
+    let x = (biasLin / 2.0 - 1.0) * (biasLin / 2.0 - 1.0);
+    let curve = fnCurve(speedIdx, modern);
+    let gf = curve * biasLin + x;
+    if (gf > 1.0) gf = 1.0;
+    let og = (1.0 / gf) / ig;
+    if (og > 16.0) og = 16.0;
+    return og;
+}
+
+function fnSetFilter(rolloffHz, bumpK, mdl) {
+    let sr = maximum(samplerate(), 1.0);
+    let b = sqrt(bumpK);
+    if (mdl < 0.5) {
+        fnGenHighpass(rolloffHz / sr, 1.614 - b * 1.164, 1.0);
+        s_f1a0 = s_tA0; s_f1a1 = s_tA1; s_f1a2 = s_tA2; s_f1b1 = s_tB1; s_f1b2 = s_tB2;
+        fnGenBump1(rolloffHz / sr, 0.0, rolloffHz / sr, 0.0);
+        s_f2a0 = s_tA0; s_f2a1 = s_tA1; s_f2a2 = s_tA2; s_f2b1 = s_tB1; s_f2b2 = s_tB2;
+    } else if (mdl < 1.5) {
+        fnGenHighpass(rolloffHz * 0.5 / sr, 2.0, 1.0);
+        s_f1a0 = s_tA0; s_f1a1 = s_tA1; s_f1a2 = s_tA2; s_f1b1 = s_tB1; s_f1b2 = s_tB2;
+        fnGenBump2(rolloffHz / sr, 2.2 * b, 0.98);
+        s_f2a0 = s_tA0; s_f2a1 = s_tA1; s_f2a2 = s_tA2; s_f2b1 = s_tB1; s_f2b2 = s_tB2;
+    } else if (mdl < 2.5) {
+        fnGenHighpass(rolloffHz / sr, 1.414, 0.0);
+        s_f1a0 = s_tA0; s_f1a1 = s_tA1; s_f1a2 = s_tA2; s_f1b1 = s_tB1; s_f1b2 = s_tB2;
+        fnGenBump1(rolloffHz * 1.5 / sr, 18.0 * b, rolloffHz * 8.0 / sr, -9.0 * b);
+        s_f2a0 = s_tA0; s_f2a1 = s_tA1; s_f2a2 = s_tA2; s_f2b1 = s_tB1; s_f2b2 = s_tB2;
+    } else if (mdl < 3.5) {
+        fnGenHighpass(rolloffHz / sr, 1.414 - b * 1.014, 1.0);
+        s_f1a0 = s_tA0; s_f1a1 = s_tA1; s_f1a2 = s_tA2; s_f1b1 = s_tB1; s_f1b2 = s_tB2;
+        fnGenBump3(rolloffHz * 2.0 / sr, b * -6.0);
+        s_f2a0 = s_tA0; s_f2a1 = s_tA1; s_f2a2 = s_tA2; s_f2b1 = s_tB1; s_f2b2 = s_tB2;
+    } else if (mdl < 4.5) {
+        fnGenHighpass(rolloffHz / sr, 1.514 - b * 1.064, 1.0);
+        s_f1a0 = s_tA0; s_f1a1 = s_tA1; s_f1a2 = s_tA2; s_f1b1 = s_tB1; s_f1b2 = s_tB2;
+        fnGenBump1(rolloffHz / sr, -9.0 * b, rolloffHz * 4.0 / sr, 6.0 * b);
+        s_f2a0 = s_tA0; s_f2a1 = s_tA1; s_f2a2 = s_tA2; s_f2b1 = s_tB1; s_f2b2 = s_tB2;
+    } else {
+        fnGenHighpass(rolloffHz / sr, 1.4 - b * 1.05, 1.0);
+        s_f1a0 = s_tA0; s_f1a1 = s_tA1; s_f1a2 = s_tA2; s_f1b1 = s_tB1; s_f1b2 = s_tB2;
+        fnGenBump2(rolloffHz * 2.0 / sr, -2.0 * b, 0.97);
+        s_f2a0 = s_tA0; s_f2a1 = s_tA1; s_f2a2 = s_tA2; s_f2b1 = s_tB1; s_f2b2 = s_tB2;
+    }
+}
+
+function fnSetParams(biasDb, relMs, speedIdx, eqType, modern) {
+    let sr = maximum(samplerate(), 1.0);
+    let curve = fnCurve(speedIdx, modern);
+    s_acDrive = fnDbToK(biasDb);
+    s_acA = curve;
+    s_acModern = modern;
+    s_attK = 1.0 / (sr * 0.003);
+    s_relK = 1.0 / (sr * (relMs * 0.001));
+
+    let highFreq = 12000.0;
+    let highGain = 0.0;
+    let lowFreq = 30.0;
+    let lowGain = 0.0;
+    let highFreqA = 11000.0;
+    let highFreqB = 10000.0;
+
+    if (eqType >= 1.5) {
+        // IEC 2
+        if (speedIdx < 0.5) { highFreq = 12000.0; highGain = -18.0; lowGain = 7.5; }
+        else if (speedIdx < 1.5) { highFreq = 16000.0; highGain = -7.0; lowGain = 7.5; }
+        else { highFreq = 12000.0; highGain = 0.0; lowGain = 0.0; }
+        lowFreq = 30.0;
+        fnShelf2Pair(highFreq / sr, highGain * biasDb / 12.0, lowFreq / sr, lowGain * biasDb / 12.0);
+        s_dAa0 = s_tA0; s_dAa1 = s_tA1; s_dAa2 = s_tA2; s_dAb1 = s_tB1; s_dAb2 = s_tB2;
+        fnShelf2Pair(highFreq / sr, 0.0, lowFreq / sr, 0.0);
+        s_dBa0 = s_tA0; s_dBa1 = s_tA1; s_dBa2 = s_tA2; s_dBb1 = s_tB1; s_dBb2 = s_tB2;
+    } else {
+        // IEC 1
+        if (speedIdx < 0.5) { highFreqA = 11000.0; highGain = -15.0; highFreqB = 10000.0; }
+        else if (speedIdx < 1.5) { highFreqA = 12000.0; highGain = -10.0; highFreqB = 10000.0; }
+        else { highFreqA = 10000.0; highGain = 3.0; highFreqB = 12000.0; }
+        fnShelf1Pair(highFreqA / sr, highGain * biasDb / 12.0, highFreqA / sr, 0.0);
+        s_dAa0 = s_tA0; s_dAa1 = s_tA1; s_dAa2 = s_tA2; s_dAb1 = s_tB1; s_dAb2 = s_tB2;
+        fnShelf1Pair(highFreqB / sr, 0.0, highFreqB / sr, 0.0);
+        s_dBa0 = s_tA0; s_dBa1 = s_tA1; s_dBa2 = s_tA2; s_dBb1 = s_tB1; s_dBb2 = s_tB2;
+    }
+
+    s_levelK = 1.0 / (sr * 0.003);
+}
+
+// AChannel_getLevel: level-following drive, faster attack on loud signals.
+function fnAcLevel(x, ch) {
+    let lvl = s_lvlAcL;
+    if (ch >= 0.5) lvl = s_lvlAcR;
+    let xl = abs(x);
+    let atk = s_attK * xl;
+    if (atk > 1.0) atk = 1.0;
+    let k = s_relK;
+    if (xl > lvl) k = atk;
+    lvl += (xl - lvl) * k;
+    if (ch < 0.5) s_lvlAcL = lvl;
+    else s_lvlAcR = lvl;
+    return lvl * s_acDrive;
+}
+
+function fnAcShape(x, lvl) {
+    let l2 = lvl;
+    if (s_acModern >= 0.5) l2 = lvl * lvl;
+    let gr = (l2 * 0.5 - 1.0) * (l2 * 0.5 - 1.0) + lvl * s_acA;
+    if (gr > 1.0) gr = 1.0;
+    if (lvl > 1.0) gr = 1.0 / (lvl + 0.00001) * (s_acA + 0.25);
+    return x * gr;
+}
+
+function fnProcess(x, ch) {
+    let x1 = x * s_inGain;
+    if (ch < 0.5) x1 = fnBq2L(fnBq1L(x1));
+    else x1 = fnBq2R(fnBq1R(x1));
+
+    let lvl = fnAcLevel(x1, ch);
+    let x2 = fnAcShape(x1, lvl);
+
+    let sm = s_lvlSmL;
+    if (ch >= 0.5) sm = s_lvlSmR;
+    let capped = lvl;
+    if (capped > 1.0) capped = 1.0;
+    sm += s_levelK * (capped - sm);
+    if (ch < 0.5) s_lvlSmL = sm;
+    else s_lvlSmR = sm;
+
+    // crossfade the two dynamic shelf coefficient sets
+    s_dna0 = s_dAa0 * sm + s_dBa0 * (1.0 - sm);
+    s_dna1 = s_dAa1 * sm + s_dBa1 * (1.0 - sm);
+    s_dna2 = s_dAa2 * sm + s_dBa2 * (1.0 - sm);
+    s_dnb1 = s_dAb1 * sm + s_dBb1 * (1.0 - sm);
+    s_dnb2 = s_dAb2 * sm + s_dBb2 * (1.0 - sm);
+
+    let x3 = 0.0;
+    if (ch < 0.5) x3 = fnBq3L(x2);
+    else x3 = fnBq3R(x2);
+    return x3 * s_outGain;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) s_sr = sr;
+
+    let ig = fnDbToK(input_gain);
+    let og = fnDbToK(output_gain);
+    if (auto_gain >= 0.5) og *= fnAutoGain(bias, speed, tape, ig);
+    s_inGain = ig;
+    s_outGain = og;
+
+    fnSetParams(bias, release, speed, eq_type, tape);
+    fnSetFilter(rolloff, bump / 100.0, model);
+}
+
+out1 = fnProcess(in1, 0.0);
+out2 = fnProcess(in2, 1.0);
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

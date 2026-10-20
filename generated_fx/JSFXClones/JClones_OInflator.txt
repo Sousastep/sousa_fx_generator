@@ -1,0 +1,171 @@
+/* JClones_OInflator — RNBO codebox~ port of JClones_OInflator (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_OInflator.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. The known inflator curve
+ * (1-|g*x|)*g*x driven by a curve-dependent gain, optionally split into three
+ * bands at 240 Hz / 2400 Hz so each band gets its own curve. GUI omitted.
+ */
+// Input (dB)
+@param({ min: -6, max: 12 }) input = 0;
+// Effect (%)
+@param({ min: 0, max: 100 }) effect = 0;
+// Curve
+@param({ min: -50, max: 50 }) curve = 0;
+// Clip
+@param({ enum: ["off", "on"] }) clip = 1;
+// Band Split
+@param({ enum: ["off", "on"] }) band_split = 0;
+// Output (dB)
+@param({ min: -12, max: 0 }) output = 0;
+@state s_inGain = 0.5;
+@state s_outGain = 2;
+@state s_curve = 0.25;
+@state s_effect = 0;
+@state s_clipThr = 0.5;
+@state s_mb = 0;
+@state s_lpLowK0 = 0;
+@state s_lpLowK1 = 0;
+@state s_lpLowK2 = 0;
+@state s_hpMidK0 = 0;
+@state s_hpMidK1 = 0;
+@state s_hpMidK2 = 0;
+@state s_lpMidK0 = 0;
+@state s_lpMidK1 = 0;
+@state s_lpMidK2 = 0;
+@state s_hpHighK0 = 0;
+@state s_hpHighK1 = 0;
+@state s_hpHighK2 = 0;
+@state s_stLow = 0;
+@state s_stMidLp = 0;
+@state s_stMidHp = 0;
+@state s_stHigh = 0;
+@state s_stLowR = 0;
+@state s_stMidLpR = 0;
+@state s_stMidHpR = 0;
+@state s_stHighR = 0;
+@state s_midGain = 0;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+// The source's one-pole "FilterParam" coefficients.
+function fnLpf(freqK) {
+    let t = tan(freqK * pi);
+    let a = 0.5 / (t + 1.0);
+    s_lpLowK0 = a * t;
+    s_lpLowK1 = a * t;
+    s_lpLowK2 = (1.0 - t) * a;
+}
+
+function fnAssetLpf(freqK) {
+    let t = tan(freqK * pi);
+    let a = 0.5 / (t + 1.0);
+    s_lpMidK0 = a * t;
+    s_lpMidK1 = a * t;
+    s_lpMidK2 = (1.0 - t) * a;
+}
+
+function fnHpf(freqK) {
+    let t = tan(freqK * pi);
+    let a = 0.125 / (t + 1.0);
+    s_hpMidK0 = a;
+    s_hpMidK1 = -a;
+    s_hpMidK2 = (1.0 - t) * 0.5 / (t + 1.0);
+}
+
+function fnAssetHpf(freqK) {
+    let t = tan(freqK * pi);
+    let a = 0.125 / (t + 1.0);
+    s_hpHighK0 = a;
+    s_hpHighK1 = -a;
+    s_hpHighK2 = (1.0 - t) * 0.5 / (t + 1.0);
+}
+
+function fnApply(x) {
+    let g = abs(x) * 2.0 * s_curve + (1.0 - s_curve);
+    g = clamp(g, -1.0, 1.0);
+    return (1.0 - abs(g * x)) * (g * x) * (s_effect * 2.0) + (1.0 - s_effect) * x;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) {
+        fnHpf(2400.0 / sr);
+        fnAssetLpf(2400.0 / sr);
+        fnAssetHpf(240.0 / sr);
+        fnLpf(240.0 / sr);
+        s_midGain = 1.0 - tan(240.0 * pi / sr) / tan(2400.0 * pi / sr);
+        s_sr = sr;
+    }
+    s_inGain = pow(10.0, input / 20.0) * 0.5;
+    s_outGain = pow(10.0, output / 20.0) * 2.0;
+    s_effect = effect / 100.0;
+    let cvn = curve / 100.0 + 0.5;
+    s_curve = 0.5 - cvn * 0.5;
+    s_clipThr = (clip >= 0.5) ? 0.5 : 0.9999999;
+    s_mb = band_split;
+}
+
+// left
+let xL = in1 * s_inGain;
+xL = clamp(xL, -s_clipThr, s_clipThr);
+let yL = 0.0;
+if (s_mb < 0.5) {
+    yL = fnApply(xL);
+} else {
+    let high = (s_hpHighK0 * xL + s_stHigh) * 2.0;
+    s_stHigh = s_hpHighK1 * xL + s_hpHighK2 * high;
+    high *= 4.0;
+
+    let halfMid = (s_lpMidK0 * xL + s_stMidLp) * 2.0;
+    s_stMidLp = s_lpMidK1 * xL + s_lpMidK2 * halfMid;
+    halfMid *= 2.0;
+    let mid = (s_hpMidK0 * halfMid + s_stMidHp) * 2.0;
+    s_stMidHp = halfMid * s_hpMidK1 + s_hpMidK2 * mid;
+    mid *= 2.0;
+
+    let lowX = xL * 0.5;
+    let low = (s_lpLowK0 * lowX + s_stLow) * 2.0;
+    s_stLow = lowX * s_lpLowK1 + s_lpLowK2 * low;
+    low *= 2.0;
+
+    high = fnApply(high);
+    mid = fnApply(mid) * s_midGain;
+    low = fnApply(low);
+    yL = low + mid + high;
+}
+
+// right
+let xR = in2 * s_inGain;
+xR = clamp(xR, -s_clipThr, s_clipThr);
+let yR = 0.0;
+if (s_mb < 0.5) {
+    yR = fnApply(xR);
+} else {
+    let highR = (s_hpHighK0 * xR + s_stHighR) * 2.0;
+    s_stHighR = s_hpHighK1 * xR + s_hpHighK2 * highR;
+    highR *= 4.0;
+
+    let halfMidR = (s_lpMidK0 * xR + s_stMidLpR) * 2.0;
+    s_stMidLpR = s_lpMidK1 * xR + s_lpMidK2 * halfMidR;
+    halfMidR *= 2.0;
+    let midR = (s_hpMidK0 * halfMidR + s_stMidHpR) * 2.0;
+    s_stMidHpR = halfMidR * s_hpMidK1 + s_hpMidK2 * midR;
+    midR *= 2.0;
+
+    let lowXR = xR * 0.5;
+    let lowR = (s_lpLowK0 * lowXR + s_stLowR) * 2.0;
+    s_stLowR = lowXR * s_lpLowK1 + s_lpLowK2 * lowR;
+    lowR *= 2.0;
+
+    highR = fnApply(highR);
+    midR = fnApply(midR) * s_midGain;
+    lowR = fnApply(lowR);
+    yR = lowR + midR + highR;
+}
+
+out1 = yL * s_outGain;
+out2 = yR * s_outGain;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

@@ -1,0 +1,67 @@
+JClones_AC1 — RNBO codebox~ port of the JClones AC1 JSFX
+Source: repos/JSFXClones/jsfx/JClones_AC1.jsfx (MIT, JClones)
+
+What it is: an analog-console channel strip. A quadratic soft knee shapes the
+peaks (with a curve constant that makes it more or less "analog"), an optional
+primitive loudness compensation keeps the output level roughly constant when
+you push Comp, and the AC101 mode swaps in a 1/x limiter curve that is
+noticeably harder and less round. It is a gentle glue/cohesion box, not a drum
+crusher, although high Comp plus AC101 gets aggressive.
+
+Parameters (original slider names):
+
+- Input Gain — dB, -24 .. +24, default 0
+  Linear dB trim into the channel, feeding both the detector and the audio. Also
+  scales how hard the knee is hit, so raising it increases compression. 0.01 dB
+  resolution in the source.
+
+- Output Gain — dB, -24 .. +24, default 0
+  Linear dB makeup trim at the output. See Auto Gain below — the two interact.
+
+- Auto Gain — off / on, default off
+  JClones addition. On = the output gain is multiplied by
+  1/(1-(Comp-1)*0.075)/InputGain, capped at 16x, so raising Comp and Input Gain
+  does not just make everything louder. It is a rough compensation, not a
+  measured one, so it will over- or under-correct on some material.
+
+- Drive — dB, -12 .. +12, default 0
+  Extra gain into the saturator/detector only — it does not change the dry
+  audio level, only how much the curve bends. Push it up for more harmonic
+  content and a firmer knee.
+
+- Comp — 1 .. 10, default 2
+  The curve strength. It sets the knee constant to 0.75 - (Comp-1)*0.075, i.e.
+  0.75 at 1 down to 0.075 at 10. Low values are almost transparent; high values
+  bend the waveform early and give an audible squash. Linear slider, 0.01 steps.
+
+- Attack — ms, 0.1 .. 10, default 0.5
+  Peak-detector attack, linear in milliseconds (the source is linear, not
+  logarithmic). The detector is a one-pole coefficient 1/(sr*t), so at very
+  short settings the timings deviate from the nominal value — this is faithful
+  to the JSFX. Sub-millisecond settings let transients through to the shaper;
+  5-10 ms rounds them off.
+
+- Release — ms, 10 .. 1000, default 500
+  Detector release, same one-pole coefficient style, linear in milliseconds.
+  Short releases (~50 ms) give the console "breathing" pump; long ones
+  (500-1000 ms) give slow level-riding glue.
+
+- Stereo Link — off / on, default on
+  On = both channels use the louder of the two input levels, so the stereo
+  image stays put. Off = dual mono, each channel compresses independently
+  (which can widen or wander the image).
+
+- Mode — AC1 / AC101, default AC1
+  AC1 = the rounded quadratic knee. AC101 = adds the source's `1/(level+1e-5) *
+  (a+0.25)` limiter curve whenever the level exceeds unity, which is harder and
+  more obviously "compressed". JClones addition for the newer revision of the
+  plug-in.
+
+Taper summary: Input, Output and Drive are linear in dB; Attack and Release are
+linear in milliseconds (not log); Comp, Auto Gain, Stereo Link and Mode are
+linear/switch controls.
+
+Port notes: the gain-reduction meter (`ext_gr_meter` / `hold_max_gr`) was
+dropped. The detector coefficients are recomputed only when the attack/release
+parameters or the sample rate change, which is numerically identical to the
+source's @slider behaviour.

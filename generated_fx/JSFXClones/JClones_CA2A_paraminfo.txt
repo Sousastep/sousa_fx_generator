@@ -1,0 +1,62 @@
+JClones_CA2A — RNBO codebox~ port of the JClones CA2A JSFX
+Source: repos/JSFXClones/jsfx/JClones_CA2A.jsfx (MIT, JClones)
+
+What it is: a digital LA-2A optical compressor. The sidechain is a small voice
+of its own — a 10 Hz low shelf, a 17 kHz high shelf and a 220 Hz peak (the R37
+control) — feeding a true-RMS-plus-peak detector. A logarithmic soft-knee law
+produces the target gain reduction, which then goes through a four-stage opto
+envelope whose slowest stage has a program-dependent attack. A 43 Hz +30 dB
+shelf on the compressed sidechain adds the LA-2A's low-end "breathing", and
+asymmetric tube saturation (a 1.3-power curve on the positive half, a gentler
+linear curve on the negative half) is mixed in proportionally to how hard it is
+compressing.
+
+Parameters (original slider names):
+
+- Peak Reduction — %, 0 .. 100, default 50
+  Amount of compression. Internally it sets the knee offset to
+  (PR*1.03 - 0.03) * -49 dB, so 0 % is effectively no compression and 100 %
+  is about -49 dB of range; it also sets the curve's B constant
+  (2^(1-PR) + 1.2) and the gain scale applied to the input of the saturator
+  (PR^2 * 14 + 1). It is the widest-ranging control on the box — 20-40 % is
+  gentle levelling, 50-70 % is classic vocal/bass compression, above 80 % it is
+  heavy and obviously pumping.
+
+- Gain — %, 0 .. 100, default 40
+  Makeup gain, but with a deliberately non-linear taper:
+  ((24^G - 1)/23)^1.35 * 24. At 0 % it is 1.0 (unity), and it climbs steeply —
+  most of the range is in the top third of the slider, exactly like the
+  hardware's stepped gain switch. Choose the setting that restores level after
+  Peak Reduction.
+
+- Mode — compress / limit, default compress
+  Compress = a 1.2 ratio law and a 0.79 exponent on the final gain curve.
+  Limit = a 1.3 ratio law and a 0.94 exponent, i.e. a steeper curve with less
+  rounded knee, so it grabs harder and rides closer to the threshold. The
+  difference is subtle at low Peak Reduction and obvious at high settings.
+
+- R37 — %, 0 .. 100, default 50
+  High-frequency sidechain emphasis. Internally inverted (R37 100 % becomes 0),
+  and it sets the gain of the 220 Hz peak in the detector path to
+  R37_internal * -6.5 dB. So R37 at 100 % means no 220 Hz scoop (the detector
+  hears a flatter signal, so sibilance and HF trigger it more) and R37 at 0 %
+  means -6.5 dB at 220 Hz (de-emphasised, so the compressor reacts more to
+  lows and mids). Changing it also rebuilds the detector filter set.
+
+- Opto Cell — classic / fast, default fast
+  Selects the two photocell response personalities. classic = the slower
+  original behaviour: the third envelope stage's value is not scaled, the
+  fourth stage's ceiling is input*12, and its attack speed is not boosted.
+  fast = the value is divided by 5.5, the ceiling drops to input*6 and the
+  dynamic attack coefficient is pinned to 0.9, giving a quicker, more grabby
+  response. Classic is the more "LA-2A" sound; fast is easier to hear working.
+
+Taper summary: both level controls are percentages with internal exponential
+mappings — Gain is the steepest (a 1.35-power curve over a 24x gain range), Peak
+Reduction is linear but feeds a 49 dB range. Mode, Opto Cell are switches and R37
+is a linear percentage with an inverted effect on the 220 Hz detector peak.
+
+Port notes: all eight biquads and their coefficient formulas are transcribed
+exactly (including the 0.187/0.42 peak trick and the paired-stage copies). The
+`getFilter1K(0.0)` calls in the source evaluate to the limit 1.0; they are
+special-cased rather than dividing by zero. The GR meter was dropped.

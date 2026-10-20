@@ -1,0 +1,45 @@
+JClones_LMC1 — RNBO codebox~ port of the JClones LMC1 JSFX
+Source: repos/JSFXClones/jsfx/JClones_LMC1.jsfx (MIT, JClones)
+
+What it is: a clone of the compressors built into classic large-format
+consoles, originally meant for talkback mics. The sidechain is band-passed at
+340 Hz and 4 kHz, with a fixed 2.5 ms attack, 25 ms release and a very high
+ratio, so it grabs hard and punches anything with a transient. The gain
+reduction is applied as feedback from the previous sample, which is what gives
+it its grabby, slightly "pumping" character on drums.
+
+Parameters (original slider names):
+
+- Input — dB, -20 .. +20, default 0
+  Linear dB gain into the detector and the audio path. More input = more
+  compression, because the threshold is fixed relative to it. This is the
+  primary "how hard" control; 0 dB is neutral.
+
+- Threshold — dB, -48 .. 0, default 0
+  Where the compressor starts to act, in dBFS, linear in dB. The effective
+  knee is wide: gain reduction ramps in linearly over 13 dB above the
+  threshold, then clamps at the fixed maximum of -40 dB. At the default 0 dBFS
+  threshold only the loudest peaks are caught; -20 to -30 is a typical
+  "crush the drum bus" setting.
+
+- Output — dB, -20 .. +20, default 0
+  Plain linear-in-dB makeup gain after the compressor. There is no automatic
+  makeup, so expect to pull this up after lowering the threshold.
+
+- Box Tone — off / on, default on
+  JClones addition. On = the band-passed sidechain signal is what you hear (the
+  console "box tone", darker and honkier). Off = the audio path is passed
+  through unfiltered and only the detector sees the band-pass, so the tone stays
+  open while the compression behaviour is identical. Leaving it on gives the
+  more authentically retro sound.
+
+Taper summary: all three gain/threshold controls are linear in dB. The ratio,
+attack, release and the -40 dB ceiling are not user parameters — they are fixed
+inside the model, as on the original hardware.
+
+Port notes: the source's feedback topology is preserved (gain for the current
+sample is computed from the level measured up to the previous sample), so it
+compresses with the same overshoot and recovery shape. The read-only
+`ext_gr_meter` output had no audio use and was dropped. The feedback gain is
+initialised to 1.0 instead of the JSFX's implicit 0 so the first sample is not
+muted.

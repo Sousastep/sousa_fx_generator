@@ -1,0 +1,40 @@
+JClones_TapeHead — RNBO codebox~ port of the JClones TapeHead JSFX
+Source: repos/JSFXClones/jsfx/JClones_TapeHead.jsfx (MIT, JClones)
+
+What it is: a tape "head bump" saturator. A three-state resonator models the
+playback-head response; its two internal states are pushed through a
+smoothstep soft clipper, which is where the tape harmonics come from. Color
+moves the resonator frequency, Drive sets how hard the states are pushed, Trim
+matches level. Clip (a JClones addition) adds hard clipping around and after the
+stage.
+
+Parameters (original slider names):
+
+- Drive — 1 .. 10, default 3.5, integer steps
+  Saturation amount. Mapped exponentially to a state gain of 0.8 up to ~7.2, so
+  the slider is roughly even in "how much grit" rather than in linear gain.
+  1-3 is gentle tape polish, 6+ is clearly saturated and starts to compress the
+  peaks. Integer steps only, as in the source.
+
+- Trim — dB, -21 .. 0, default -3
+  Output level after the saturation stage, linear in dB. It is deliberately
+  only attenuating (0 dB is the loudest), because Drive already adds level. The
+  source also applies an internal 0.7 fixed factor, so 0 dB is not unity.
+
+- Color — normal / medium / bright, default normal
+  Selects the resonator frequency: 2100 Hz (normal, darker, midrange body),
+  3680 Hz (medium, the mid-focused position), 5000 Hz (bright, more presence).
+  It also changes the compensation gain: above 88.2 kHz the source raises it
+  from 1.4 to 2.0, so the tone stays steady across sample rates.
+
+- Clip — off / on, default on
+  JClones addition. On = hard clip (+-1.0) the input, the third resonator state
+  and the output. Off = pure tanh-style soft saturation with more headroom and
+  a rounder top end. On is the source default and the more aggressive setting.
+
+Taper summary: Drive is exponential over a 1..10 integer range; Trim is
+linear-in-dB over a 21 dB attenuator; Color is a three-way switch.
+
+Port notes: the DSP path is unchanged, including the sample-rate-dependent
+compensation gain. Drive and Trim are declared as stepped parameters so the
+slider lands on the same integers/decibels the JSFX did.

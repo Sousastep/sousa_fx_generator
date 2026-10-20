@@ -1,0 +1,243 @@
+/* JClones_Phoenix — RNBO codebox~ port of JClones_Phoenix (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_Phoenix.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept; JClones "Auto Gain" added as
+ * a sixth control, as in the source. A five-model tape stage: a high-pass
+ * differentiator, a pre-emphasis shelf, a saturator (polynomial, four-term sine
+ * series, or a ^5 gaussian), a post-emphasis and a de-emphasis low-pass, with
+ * the per-model constants and a 1/floor(sr/44100) sample-rate scale. GUI
+ * omitted.
+ */
+// Input Trim (dB)
+@param({ min: -10, max: 10 }) input_trim = 0;
+// Process (%)
+@param({ min: 0, max: 100 }) process = 0;
+// Output Trim (dB)
+@param({ min: -6, max: 6 }) output_trim = 0;
+// Brightness
+@param({ enum: ["opal", "gold", "sapphire"] }) brightness = 1;
+// Type
+@param({ enum: ["luminiscent", "iridescent", "radiant", "luster", "dark essence"] }) type = 1;
+// Auto Gain
+@param({ enum: ["off", "on"] }) auto_gain = 0;
+@state s_hpfK = 0.4375;
+@state s_lpfK = 0.3125;
+@state s_a3 = 0.25;
+@state s_f1 = 0.875;
+@state s_p20 = 0.3125;
+@state s_p24 = 0.0625;
+@state s_g0 = 1;
+@state s_satType = 0;
+@state s_ageA1 = -0.393;
+@state s_ageA2 = 0.082;
+@state s_modelType = 1;
+@state s_processing = 0;
+@state s_autoGain = 1;
+@state s_useAuto = 0;
+@state s_inGain = 1;
+@state s_outGain = 1;
+@state s_sL = 0;
+@state s_prevL = 0;
+@state s_sR = 0;
+@state s_prevR = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+function fnSat(x) {
+    let y = 0.0;
+    if (s_satType < 0.5) {
+        // polynomial approximation of the original table
+        x = clamp(x, -1.0, 1.0);
+        let x2 = x * x;
+        let x4 = x2 * x2;
+        let x6 = x4 * x2;
+        let x8 = x4 * x4;
+        y = x * 2.827568855
+            + x2 * 0.0003903798913
+            + x2 * x * -4.17220229
+            + x4 * -0.0001107320401
+            + x4 * x * 0.523459874
+            + x6 * 0.0002768079893
+            + x6 * x * -0.423546883
+            + x8 * -0.001448632
+            + x8 * x * 3.224580615
+            + x8 * x2 * 0.002728704
+            + x8 * x2 * x * -5.495344862
+            + x8 * x4 * -0.002846356
+            + x8 * x4 * x * 5.449768693
+            + x8 * x6 * 0.001310366
+            + x8 * x6 * x * -2.414078731;
+    } else {
+        if (s_satType < 1.5) {
+            // four-term sine series
+            x = clamp(x, -1.0, 1.0);
+            y = -sin(0.5 * pi * x) * -0.479960539
+                + sin(1.5 * pi * x) * 0.325640796
+                - sin(2.5 * pi * x) * 0.132427442
+                + sin(3.5 * pi * x) * 0.022275243;
+        } else {
+            // ^5 gaussian
+            let a = 2.052;
+            let b = 1.350;
+            y = x * a / exp(abs(pow(x * b, 5.0)));
+        }
+    }
+    return y;
+}
+
+function fnPhoenix(x, ch) {
+    let s = 0.0;
+    let prevX = 0.0;
+    if (ch < 0.5) {
+        s = s_sL;
+        prevX = s_prevL;
+    } else {
+        s = s_sR;
+        prevX = s_prevR;
+    }
+
+    let proc = s_processing * s_a3;
+    let x1 = s_hpfK * x + (x - prevX);
+    let x2 = x1 * s_f1 + x1;
+    let x3 = x;
+    if (s_g0 != 0.0) x3 = x2;
+    let x4 = x2;
+    if (s_modelType == 3) x4 = fnSat(x2 * proc);
+    else x4 = fnSat(x2);
+    let x5 = fnSat(x4 * proc * s_p20 + x3);
+
+    if (ch < 0.5) s_prevL = x;
+    else s_prevR = x;
+
+    s += (x5 - s) * s_lpfK;
+    let y = proc * (s - x * s_p24);
+
+    if (ch < 0.5) s_sL = s;
+    else s_sR = s;
+
+    let out = y;
+    if (s_modelType == 3) out *= 0.5;
+    out += x;
+    if (s_useAuto >= 0.5) out *= s_autoGain;
+    return out;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    let srScale = 1.0 / floor(sr / 44100.0);
+    let br = brightness;
+    let ty = type;
+
+    let hk = 0.4375;
+    let lk = 0.3125;
+    let a3 = 0.25;
+    let f1 = 0.75;
+    let p20 = 0.3125;
+    let p24 = 0.0625;
+    let g0 = 1;
+    let st = 0;
+    let ag1 = -0.416;
+    let ag2 = 0.092;
+
+    if (ty < 0.5) {
+        // Luminescent
+        hk = 0.625;
+        lk = 0.1875;
+        if (br > 0.5 && br < 1.5) { hk = 0.4375; lk = 0.3125; }
+        else if (br >= 1.5) { hk = 0.1875; lk = 0.375; }
+        a3 = 0.25;
+        f1 = 0.75;
+        p20 = 0.3125;
+        p24 = 0.0625;
+        g0 = 1;
+        st = 0;
+        ag1 = -0.416;
+        ag2 = 0.092;
+    } else if (ty < 1.5) {
+        // Iridescent
+        hk = 0.625;
+        lk = 0.1875;
+        if (br > 0.5 && br < 1.5) { hk = 0.375; lk = 0.3125; }
+        else if (br >= 1.5) { hk = 0.3125; lk = 0.5; }
+        a3 = 0.25;
+        f1 = 0.875;
+        p20 = 0.3125;
+        p24 = 0.0625;
+        g0 = 1;
+        st = 0;
+        ag1 = -0.393;
+        ag2 = 0.082;
+    } else if (ty < 2.5) {
+        // Radiant
+        hk = 0.75;
+        lk = 0.125;
+        if (br > 0.5 && br < 1.5) { hk = 0.45629901; lk = 0.375; }
+        else if (br >= 1.5) { hk = 0.375; lk = 0.5; }
+        a3 = 0.375;
+        f1 = 0.75;
+        p20 = 0.1875;
+        p24 = 0.0125;
+        g0 = 0;
+        st = 1;
+        ag1 = -0.441;
+        ag2 = 0.103;
+    } else if (ty < 3.5) {
+        // Luster
+        hk = 0.75;
+        lk = 0.125;
+        if (br > 0.5 && br < 1.5) { hk = 0.45629901; lk = 0.375; }
+        else if (br >= 1.5) { hk = 0.375; lk = 0.5625; }
+        a3 = 1.0;
+        f1 = 0.6875;
+        p20 = 0.27343899;
+        p24 = 0.1171875;
+        g0 = 0;
+        st = 2;
+        ag1 = -0.712;
+        ag2 = 0.172;
+    } else {
+        // Dark Essence
+        hk = 0.75;
+        lk = 0.125;
+        if (br > 0.5 && br < 1.5) { hk = 0.45629901; lk = 0.375; }
+        else if (br >= 1.5) { hk = 0.375; lk = 0.5625; }
+        a3 = 0.375;
+        f1 = 0.75;
+        p20 = 0.5625;
+        p24 = 0.0125;
+        g0 = 0;
+        st = 2;
+        ag1 = -0.636;
+        ag2 = 0.17;
+    }
+
+    s_hpfK = hk * srScale;
+    s_lpfK = lk * srScale;
+    s_a3 = a3;
+    s_f1 = f1;
+    s_p20 = p20;
+    s_p24 = p24;
+    s_g0 = g0;
+    s_satType = st;
+    s_ageA1 = ag1;
+    s_ageA2 = ag2;
+    s_modelType = ty;
+
+    let p = process / 100.0;
+    s_processing = p;
+    s_autoGain = 1.0 + p * s_ageA1 + p * p * s_ageA2;
+
+    s_inGain = fnDbToK(input_trim);
+    s_outGain = fnDbToK(output_trim);
+    s_useAuto = auto_gain;
+}
+
+out1 = fnPhoenix(in1 * s_inGain, 0.0) * s_outGain;
+out2 = fnPhoenix(in2 * s_inGain, 1.0) * s_outGain;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

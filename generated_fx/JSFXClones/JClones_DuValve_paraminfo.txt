@@ -1,0 +1,57 @@
+JClones_DuValve — RNBO codebox~ port of JClones_DuValve (JSFX)
+Source: repos/JSFXClones/jsfx/JClones_DuValve.jsfx (MIT, © JClones)
+
+WHAT IT IS
+A valve-stage emulation with two independent model dimensions: a measured
+transfer curve per instrument ("dynamic model") and a set of filter/shelf
+corners around the shaper per source material ("spectral model"). Signal path:
+input gain → low shelf → low-pass → non-linear shaper (gain-compensated) →
+high-pass → output gain, mirrored on both channels.
+
+PARAMETERS
+input_db — -12..+6 dB, default 0, linear taper. Pre-shaper level, into an
+  internal 0.5x trim so 0 dB is unity with output_db at 0.
+
+pusher_db — -6..+12 dB, default 0, linear taper. How hard the signal is pushed
+  into the transfer curve. Internally the drive is (pusher - 6) dB and the
+  shaper's output is divided by the drive again, so raising pusher adds harmonic
+  content and dynamic flattening without much level change — it is a "cook the
+  valve" control, not a volume.
+
+dynamic_model — 0..39, stepped. The measured transfer curve:
+  0 Linear (identity, useful as a tone-only check), 1 Piano, 2 Guitar,
+  3 String, 4 Wd. Wind, 5 Brass, 6 Timpani (+3), 7 Drums, 8 Mix, 9 Elec. Piano,
+  10 Elect. Guitar, 11 Violin (+3), 12 Flute, 13 Trumpet, 14 Lat. Perc, 15 Cymbal,
+  16 Choir, 17 Harp, 18 Sp. Guitar, 19 Viola, 20 Oboe, 21 Trombone, 22 Toms,
+  23 E. Toms, 24 Voice Female, 25 Analog Synth, 26 Dist.Guit. (+3), 27 Cello,
+  28 Clarinet, 29 Horn, 30 Bass Drum (+3), 31 Elect. Bass Drum, 32 Voice Male,
+  33 Ac. Bass, 34 Elect. Bass, 35 Double Bass, 36 Bassoon, 37 Sax, 38 Snare (+3),
+  39 Elect. Snare (+9). "(+n)" means the next n entries share that table (the
+  original plugin re-used one curve for a family of sources). For a tuba, Brass
+  (5), Horn (29) and Trombone (21) are the closest curves; Bassoon (36) has the
+  most low-mid asymmetry.
+
+spectral_model — 0..40, stepped. 0 = --Linked-- (follows dynamic_model, the
+  default and usually what you want). 1..40 are the same 40 names offset by one,
+  and each selects that model's low-shelf gain, low-shelf corner, high-pass and
+  low-pass coefficients. Use a different spectral model to keep an instrument's
+  curve but a darker/brighter surrounding filter set.
+
+lobe_flip — off/on, default off. Inverts the signal before and after the shaper,
+  i.e. turns the measured curve upside down so the negative lobe is the one that
+  saturates first. Changes even-harmonic content and the perceived "bite" — the
+  cheapest timbre variation on this effect.
+
+output_db — -12..+6 dB, default 0, linear taper. Output trim (internally 2x at
+  0 dB, cancelling the input's 0.5x).
+
+NOTES
+- No dry/wet and no oversampling: the shaper runs at the host rate, exactly like
+  the source. At very high pusher settings on bright material you will hear the
+  aliasing the original also has.
+- All 40 curve tables (512 points each, both polarities) and all 40 spectral
+  coefficient sets are carried over verbatim; the filter corners are calibrated
+  at 44.1 kHz and rescaled by 44100/samplerate (the low-pass is floored so it
+  cannot exceed stability at low rates).
+- Changing dynamic/spectral model is a parameter change, so it is smoothed only
+  by the block-rate update — expect a click if you automate it fast.

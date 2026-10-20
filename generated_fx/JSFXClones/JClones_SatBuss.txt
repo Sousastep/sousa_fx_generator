@@ -1,0 +1,304 @@
+/* JClones_SatBuss — RNBO codebox~ port of JClones_SatBuss (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_SatBuss.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. The console *buss* half of
+ * the same emulation: a larger feedback network around the cubic saturator,
+ * fed with the opposite channel through a one-pole all-pass to create
+ * crosstalk, with Fat and Loud retuning it. A low high-pass removes the DC the
+ * saturator leaves. GUI omitted.
+ */
+// Crosstalk
+@param({ enum: ["off", "modern", "vintage"] }) crosstalk = 1;
+// Loud
+@param({ enum: ["off", "on"] }) loud = 0;
+// Fat
+@param({ enum: ["off", "on"] }) fat = 0;
+@state s_lpf1K = 0;
+@state s_lpf2K = 0;
+@state s_lpf3K = 0;
+@state s_lpf4K = 0;
+@state s_lpf5K = 0;
+@state s_lpf6K = 0;
+@state s_lpf7K = 0;
+@state s_lpf8K = 0;
+@state s_lpf9K = 0;
+@state s_lpf10K = 0;
+@state s_lpf11K = 0;
+@state s_lpf12K = 0;
+@state s_lpf13K = 0;
+@state s_G1 = 0;
+@state s_G2 = 0;
+@state s_G3 = 0;
+@state s_G3_1 = 0;
+@state s_G3_2 = 1;
+@state s_G5 = 0;
+@state s_G6 = 0;
+@state s_G8 = 1;
+@state s_Gx2 = 0;
+@state s_Glpf3 = 0;
+@state s_Gthat = 0;
+@state s_Gct = 0.27583;
+@state s_Gfb2 = 0;
+@state s_Gfb3 = 0;
+@state s_Ghpf8 = 0;
+@state s_Ghpf8alt = 0;
+@state s_Glpf5 = 0;
+@state s_Glpf9 = 0;
+@state s_loud = 0;
+@state s_l1L = 0;
+@state s_l2L = 0;
+@state s_l3L = 0;
+@state s_l4L = 0;
+@state s_l5L = 0;
+@state s_l6L = 0;
+@state s_l7L = 0;
+@state s_l8L = 0;
+@state s_l9L = 0;
+@state s_l10L = 0;
+@state s_l11L = 0;
+@state s_l12L = 0;
+@state s_l13L = 0;
+@state s_ctfbL = 0;
+@state s_fb1L = 0;
+@state s_fb2L = 0;
+@state s_fb3L = 0;
+@state s_l1R = 0;
+@state s_l2R = 0;
+@state s_l3R = 0;
+@state s_l4R = 0;
+@state s_l5R = 0;
+@state s_l6R = 0;
+@state s_l7R = 0;
+@state s_l8R = 0;
+@state s_l9R = 0;
+@state s_l10R = 0;
+@state s_l11R = 0;
+@state s_l12R = 0;
+@state s_l13R = 0;
+@state s_ctfbR = 0;
+@state s_fb1R = 0;
+@state s_fb2R = 0;
+@state s_fb3R = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+function fnF1K(freqK) {
+    return 1.0 - exp(-2.0 * pi * freqK);
+}
+
+function fnSat(x) {
+    if (x < -3.0) return -1.0;
+    if (x > 3.0) return 1.0;
+    return (x * x + 27.0) * x / (x * x * 9.0 + 27.0);
+}
+
+function fnBussL(x, thatX) {
+    s_l1L += (x - s_l1L) * s_lpf1K;
+    let x1 = s_G1 * s_l1L + x;
+
+    if (s_loud >= 0.5) {
+        s_l2L += (x1 - s_l2L) * s_lpf2K;
+        x1 = s_l2L * 0.05 + x;
+    }
+
+    // crosstalk all-pass fed by the opposite channel
+    let ct = thatX * s_Gct + s_ctfbL;
+    s_ctfbL = thatX - ct * s_Gct;
+    let lpf4In = (ct - thatX) * -0.12;
+    s_l4L += (lpf4In - s_l4L) * s_lpf4K;
+    let x2 = lpf4In - (lpf4In - s_l4L) * s_G2;
+
+    s_l3L += (thatX - s_l3L) * s_lpf3K;
+    let x3 = ((s_l3L * s_Glpf3 + x2 * s_Gx2 - thatX * s_Gthat) * s_G3_1 + x1) * s_G3_2;
+
+    s_l5L += (x3 * s_Glpf5 - s_l5L) * s_lpf5K;
+    let lpf5Out = s_l5L;
+
+    if (s_loud >= 0.5) {
+        s_l6L += (x3 * s_G3 - s_l6L) * s_lpf6K;
+        lpf5Out += x3 * s_G3 - s_l6L;
+    }
+
+    s_l7L += (0.0002135622 - s_l7L) * s_lpf7K;
+    let x4 = lpf5Out + 1.4142135622 - s_l7L;
+    let x5 = x4 * x4 * 0.5 - 1.0;
+    let x6 = (s_G5 * x5 - lpf5Out) * 5.8 + x3;
+
+    s_l8L += ((s_fb1L - s_fb2L) - s_l8L) * s_lpf8K;
+    let hpf8Out = (s_fb1L - s_fb2L) - s_l8L;
+
+    let l9in = hpf8Out;
+    s_l9L += (l9in - s_l9L) * s_lpf9K;
+    let x7 = x6 - 0.01 - s_Ghpf8 * hpf8Out - s_G6 * s_l8L - s_Gfb3 * s_fb3L - s_Gfb2 * s_fb2L + s_Glpf9 * s_l9L;
+    s_fb1L = x7;
+
+    let x7s = fnSat(x7);
+    s_l10L += ((s_Ghpf8alt * s_Ghpf8 * hpf8Out + x7s + 0.008) - s_l10L) * s_lpf10K;
+    s_l11L += (s_l10L - s_l11L) * s_lpf11K;
+    s_fb2L = s_l10L;
+    s_l12L += ((s_l10L - s_l11L) - s_l12L) * s_lpf12K;
+    s_fb3L = s_l12L;
+
+    let x8 = (s_Gfb3 * s_fb3L * 0.85 + s_fb2L) * s_G8;
+    s_l13L += (x8 - s_l13L) * s_lpf13K;
+    return x8 - s_l13L;
+}
+
+function fnBussR(x, thatX) {
+    s_l1R += (x - s_l1R) * s_lpf1K;
+    let x1 = s_G1 * s_l1R + x;
+
+    if (s_loud >= 0.5) {
+        s_l2R += (x1 - s_l2R) * s_lpf2K;
+        x1 = s_l2R * 0.05 + x;
+    }
+
+    let ct = thatX * s_Gct + s_ctfbR;
+    s_ctfbR = thatX - ct * s_Gct;
+    let lpf4In = (ct - thatX) * -0.12;
+    s_l4R += (lpf4In - s_l4R) * s_lpf4K;
+    let x2 = lpf4In - (lpf4In - s_l4R) * s_G2;
+
+    s_l3R += (thatX - s_l3R) * s_lpf3K;
+    let x3 = ((s_l3R * s_Glpf3 + x2 * s_Gx2 - thatX * s_Gthat) * s_G3_1 + x1) * s_G3_2;
+
+    s_l5R += (x3 * s_Glpf5 - s_l5R) * s_lpf5K;
+    let lpf5Out = s_l5R;
+
+    if (s_loud >= 0.5) {
+        s_l6R += (x3 * s_G3 - s_l6R) * s_lpf6K;
+        lpf5Out += x3 * s_G3 - s_l6R;
+    }
+
+    s_l7R += (0.0002135622 - s_l7R) * s_lpf7K;
+    let x4 = lpf5Out + 1.4142135622 - s_l7R;
+    let x5 = x4 * x4 * 0.5 - 1.0;
+    let x6 = (s_G5 * x5 - lpf5Out) * 5.8 + x3;
+
+    s_l8R += ((s_fb1R - s_fb2R) - s_l8R) * s_lpf8K;
+    let hpf8Out = (s_fb1R - s_fb2R) - s_l8R;
+
+    s_l9R += (hpf8Out - s_l9R) * s_lpf9K;
+    let x7 = x6 - 0.01 - s_Ghpf8 * hpf8Out - s_G6 * s_l8R - s_Gfb3 * s_fb3R - s_Gfb2 * s_fb2R + s_Glpf9 * s_l9R;
+    s_fb1R = x7;
+
+    let x7s = fnSat(x7);
+    s_l10R += ((s_Ghpf8alt * s_Ghpf8 * hpf8Out + x7s + 0.008) - s_l10R) * s_lpf10K;
+    s_l11R += (s_l10R - s_l11R) * s_lpf11K;
+    s_fb2R = s_l10R;
+    s_l12R += ((s_l10R - s_l11R) - s_l12R) * s_lpf12K;
+    s_fb3R = s_l12R;
+
+    let x8 = (s_Gfb3 * s_fb3R * 0.85 + s_fb2R) * s_G8;
+    s_l13R += (x8 - s_l13R) * s_lpf13K;
+    return x8 - s_l13R;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    let xt = crosstalk;
+    let fatOn = fat;
+
+    s_lpf11K = fnF1K(320.0 / sr);
+    s_lpf12K = fnF1K(20000.0 / sr);
+    s_lpf8K = fnF1K(5.0 / sr);
+    s_lpf7K = fnF1K(1.0);
+    s_lpf2K = fnF1K(70.0 / sr);
+
+    if (xt > 0.5) {
+        // the source's sample-rate-dependent crosstalk gains
+        if (sr > 44100.0) {
+            if (sr > 48000.0) {
+                if (sr > 88200.0) {
+                    if (sr > 96000.0) {
+                        if (sr > 176400.0) s_Gx2 = fnDbToK(7.48);
+                        else s_Gx2 = fnDbToK(6.61);
+                    } else {
+                        s_Gx2 = fnDbToK(1.45);
+                    }
+                    s_G2 = 1.0;
+                } else {
+                    s_Gx2 = fnDbToK(0.7);
+                    s_G2 = 1.0;
+                }
+            } else {
+                s_Gx2 = fnDbToK(-4.7);
+                s_G2 = 0.418;
+            }
+        } else {
+            s_Gx2 = fnDbToK(-5.81);
+            s_G2 = 0.5;
+        }
+        s_Glpf3 = fnDbToK(-13.8);
+        s_Gthat = 0.009;
+        s_lpf3K = fnF1K(11.0 / sr);
+        s_lpf4K = fnF1K(20000.0 / sr);
+        if (xt > 1.5) s_G3_1 = 0.16;
+        else s_G3_1 = 3.4;
+    } else {
+        s_Gx2 = 0.0;
+        s_G2 = 0.0;
+        s_G3_1 = 0.0;
+        s_Glpf3 = 0.0;
+        s_Gthat = 0.0;
+        s_lpf3K = 0.0;
+        s_lpf4K = fnF1K(10000.0 / sr);
+    }
+
+    s_Gct = 0.27583;
+    s_loud = loud;
+
+    if (fatOn >= 0.5) {
+        s_Gfb2 = 0.1;
+        s_Ghpf8 = 0.1;
+        s_Ghpf8alt = 0.4;
+        s_G6 = 0.408247;
+        s_lpf10K = 0.73;
+        s_lpf5K = fnF1K(3500.0 / sr);
+        s_Glpf5 = 0.23;
+        s_lpf6K = fnF1K(4000.0 / sr);
+        s_Gfb3 = 0.302;
+        s_G3 = 0.2;
+        s_Glpf9 = 0.975;
+        s_G5 = 0.725;
+        s_lpf9K = fnF1K(28.0 / sr);
+        if (xt > 0.5 && xt < 1.5) s_lpf13K = fnF1K(20.0 / sr);
+        else s_lpf13K = fnF1K(12.0 / sr);
+        s_lpf1K = fnF1K(1000.0 / sr);
+        s_G1 = 0.025;
+        s_G8 = fnDbToK(1.2);
+        s_G3_2 = fnDbToK(0.0);
+    } else {
+        s_Gfb2 = 0.6;
+        s_Gfb3 = 0.4;
+        s_Glpf9 = 0.26;
+        s_Ghpf8alt = 0.9;
+        s_lpf9K = fnF1K(100.0 / sr);
+        s_G6 = 0.411795;
+        s_Ghpf8 = 0.2;
+        s_lpf10K = 0.513;
+        s_G3 = 0.2;
+        s_lpf5K = fnF1K(220.0 / sr);
+        s_G5 = 0.74;
+        s_lpf6K = fnF1K(2800.0 / sr);
+        s_Glpf5 = 0.45;
+        s_lpf1K = fnF1K(1000.0 / sr);
+        s_G1 = 0.0;
+        if (xt > 0.5 && xt < 1.5) s_lpf13K = fnF1K(15.0 / sr);
+        else s_lpf13K = fnF1K(8.0 / sr);
+        s_G8 = fnDbToK(11.8);
+        s_G3_2 = fnDbToK(-8.0);
+    }
+}
+
+let leftIn = in1;
+let rightIn = in2;
+out1 = fnBussL(leftIn, rightIn);
+out2 = fnBussR(rightIn, leftIn);
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

@@ -1,0 +1,57 @@
+JClones_SatChannel — RNBO codebox~ port of the JClones SatChannel JSFX
+Source: repos/JSFXClones/jsfx/JClones_SatChannel.jsfx (MIT, JClones)
+
+What it is: the channel half of a well-known analog-console emulation. A seven
+one-pole network with cross feedback feeds a cubic soft clipper
+(x^2+27)x/(9x^2+27); the result is what gives the "console" harmonic texture.
+Fat retunes the same network (lower feedback, a 28 Hz and a 400 Hz pole) for a
+thicker bottom, and a one-pole high-pass and low-pass shape the result. It is a
+subtle, always-on kind of coloration rather than an obvious distortion.
+
+Parameters (original slider names):
+
+- Gain — dB, -18 .. +18, default 0
+  Linear dB input trim. Raising it drives the network harder, which both
+  saturates more and (unless Compensation is on) gets louder. 0.1 dB steps.
+
+- High Pass — Hz, 10 .. 1800, default 10, 10 Hz steps
+  One-pole (or two-pole) high-pass on the output. Linear in Hz, so despite the
+  10-1800 range the musically useful area is bunched toward the low end:
+  10-80 Hz is rumble cleanup, 100-400 Hz thins a source out, above ~800 Hz you
+  are using it as an effect. The source has no taper, so the slider is linear.
+
+- High Pass Slope — 6 dB/Oct / 12 dB/Oct, default 6 dB/Oct
+  One or two cascaded one-poles at the High Pass frequency. Two poles at the
+  same frequency do not sum to a true LR4 response (no Q compensation), so
+  12 dB/Oct also shifts the corner slightly — faithful to the source.
+
+- Low Pass — kHz, 1 .. 20, default 20, 1 kHz steps
+  One-pole low-pass, linear in kHz. At 20 kHz (the default) the source detects
+  it as "off" and the filter is bypassed entirely. Below that it darkens the
+  top; 4-8 kHz is a useful de-harshener.
+
+- Sat — off / on, default on
+  Off = the whole saturation network is bypassed, leaving Gain, the high-pass
+  and the low-pass as a plain gain/EQ channel. On = the console saturation.
+  Switching it off also changes the gain structure (see Compensation).
+
+- Fat — off / on, default off
+  Off = the "normal" console tuning (poles at 120 Hz and 80 Hz). On = the fat
+  tuning (poles at 400 Hz and 28 Hz, less feedback), which is fuller and
+  pushes the low-mid weight. Fat also has its own static makeup (+1.15 dB
+  instead of +11.654 dB), so switching it changes level as well as tone.
+
+- Compensation — off / on, default off
+  Off = no gain compensation at all. On = applies the source's approximate
+  level compensation for the Gain slider: -1 dB per dB below 0, and -0.92 dB
+  per dB above 0 (normal mode) or -0.79 dB per dB (fat mode). With Sat off,
+  Compensation just applies 1/InputGain so the output stays level.
+
+Taper summary: Gain is linear in dB; High Pass is linear in Hz (no log taper,
+so it feels bottom-heavy); Low Pass is linear in kHz; the rest are switches.
+
+Port notes: the saturation network is transcribed pole-for-pole, including the
+fixed +sqrt(2) offset and the tiny 0.0002135622 DC bleeder — those constants are
+what set the source's asymmetric bias and must not be "cleaned up". The
+per-channel feedback states are kept separately for L and R (the JSFX does the
+same via its object instances). The read-only meter output was dropped.

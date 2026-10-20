@@ -1,0 +1,46 @@
+JClones_Fattener — RNBO codebox~ port of the JClones Fattener JSFX
+Source: repos/JSFXClones/jsfx/JClones_Fattener.jsfx (MIT, JClones)
+
+What it is: an EDM "make it fat" box. Two fixed high-passes (20 Hz and 30 Hz)
+tighten the bottom, a swept peak filter adds colour, a stereo-linked 10:1
+compressor with fast attack and medium release evens out the signal, and a soft
+clipper catches the peaks. Fattness makes the compressor push harder and the
+makeup louder; Color decides where the peak sits and how hard the final clipper
+bites. A 0.1 dB final trim is applied so the box can never exceed unity.
+
+Parameters (original slider names):
+
+- Fattness — %, 0 .. 100, default 0
+  The amount knob, linear. Internally it sets the compressor threshold to
+  -(Fattness*34 + 1) dB and the makeup to +(Fattness*39 + 1) dB, i.e. it is a
+  constant-loudness "denser" control rather than a volume control. At 0 % the
+  threshold is -1 dBFS (almost no compression) and makeup is +1 dB; at 100 %
+  the threshold is -35 dBFS with +40 dB makeup, which is heavy 10:1 squash with
+  a big level lift. The ratio is fixed at 10:1 and the attack/release are fixed
+  at 2.69 ms / 32.9 ms.
+
+- Color — %, 0 .. 100, default 0
+  Moves the output soft-clip ceiling and the peak-filter colour together:
+  ceiling = 0.9 + 0.1*Color (so 0 % clips at +0.9, 100 % at +1.0 — i.e. more
+  Color means more headroom but more upper-mid emphasis), and the peak filter
+  sweeps from 40 Hz up to ~6.7 kHz on a strong cubic curve
+  (freq = Color^3.219 * 6680 + 40 Hz, clamped 100 Hz below Nyquist) with up to
+  +8 dB of boost at Q ~0.71. Low settings put the boost in the bass, high
+  settings put it in the presence region. Because the frequency curve is
+  cubic, the top half of the slider covers most of the sweep.
+
+- Gain — dB, -24 .. +24, default 0
+  Linear dB input trim ahead of the filters and compressor. 0.01 dB steps.
+  Raising it feeds the compressor harder, so it acts as a second "how much"
+  control; the output is not compensated for it.
+
+Taper summary: Fattness and Color are linear percentages with internal
+exponential mappings (34 dB of threshold, 39 dB of makeup, a cubic frequency
+sweep); Gain is linear in dB. Expect Fattness to feel fairly even and Color to
+feel like it does most of its work in the upper half.
+
+Port notes: the peak filter and the two high-passes are the source's Cookbook
+biquads transcribed with the same coefficient signs and the same
+`getDigitalQ_peak` Q correction, so the response matches rather than merely
+resembling it. The compressor detector is stereo-linked (max of both channels),
+as in the source.

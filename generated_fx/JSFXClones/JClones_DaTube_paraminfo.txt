@@ -1,0 +1,47 @@
+JClones_DaTube — RNBO codebox~ port of the JClones DaTube JSFX
+Source: repos/JSFXClones/jsfx/JClones_DaTube.jsfx (MIT, JClones)
+
+What it is: the simple tube shaper from a well-known DAW's stock plug-in. Four
+transfer-curve segments around a log(10)+1 exponent give the soft saturation and
+the slight even-harmonic asymmetry; a 3 Hz high-pass removes the DC that the
+asymmetry leaves behind. Two JClones switches recreate details of the original:
+a 12-bit quantiser (the original used an uninterpolated 4096-entry lookup table)
+and a fold-back clipper.
+
+Parameters (original slider names):
+
+- Drive — %, 0 .. 100, default 30
+  Saturation amount. Internally the signal is multiplied by drive+0.5 (so 0 %
+  still passes 0.5x into the shaper) and the curve strength follows drive
+  linearly. Below 20 % it is barely more than a soft trim; from ~50 % up the odd
+  harmonics are obvious; at 100 % it is heavily squared off. Linear taper, no
+  exponential mapping.
+
+- Balance — %, 0 .. 100, default 100
+  Dry/wet, linear unipolar. 0 % = unprocessed dry, 100 % = fully saturated.
+  Because the shaper adds level, pulls back to 50-70 % are common when you want
+  the harmonics without the loudness.
+
+- Output Gain — dB, -24 .. 0, default -6
+  Output trim, negative only, linear in dB. The source applies an extra fixed
+  x2 internally, so 0 dB is not unity gain — it is the loudest position and
+  about +6 dB over the incoming level.
+
+- Bit Reduction — off / on, default off
+  Quantises the shaper input to 1/2048 steps (floor for positive, ceil for
+  negative — a truncation, not a rounding). Audible as a gritty 12-bit texture
+  on quiet material. While it is on, the source disables the 3 Hz DC remover, so
+  turning it on lets a little DC through — that is the original behaviour.
+
+- Fold Back — off / on, default off
+  Replaces the shaper's outside-the-unit-circle behaviour with a hard fold: a
+  sample beyond +1 becomes 2-x, beyond -1 becomes -2-x. Turns smooth clipping
+  into a metallic fold-back distortion that gets wild past ~60 % Drive.
+
+Taper summary: Drive and Balance are linear percentages; Output Gain is linear
+in dB over a 24 dB attenuator. No exponential tapers anywhere, so the sliders
+behave the way the original plug-in's did.
+
+Port notes: fold-back and bit reduction are applied in the source's order
+(quantise, then fold, then shape). The DC remover is skipped while the quantiser
+is on, matching the source exactly.

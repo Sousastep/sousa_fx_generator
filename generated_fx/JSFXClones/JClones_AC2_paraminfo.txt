@@ -1,0 +1,93 @@
+JClones_AC2 — RNBO codebox~ port of the JClones AC2 JSFX
+Source: repos/JSFXClones/jsfx/JClones_AC2.jsfx (MIT, JClones)
+
+What it is: the tape-machine half of the JClones console/tape pair. Signal flow
+is: model-dependent high-pass and "bump" filter, a level-dependent quadratic
+saturation with its own three-millisecond-follow level detector, then a dynamic
+shelf pair whose coefficients are crossfaded *every sample* by the smoothed
+saturation level. Six head models (Studer A80 mkII, Otari MX-80, MCI JH-24,
+Ampex MM-1200, Sony APR-5000, Tascam ATR-60), two IEC curves, two tape
+formulations and three speeds change the constants throughout.
+
+Parameters (original slider names):
+
+- Input Gain — dB, -24 .. +24, default 0
+  Linear dB trim before the filters and saturator. Raising it drives the tape
+  stage harder (more saturation and more of the dynamic-shelf movement), so it
+  is the primary "how much tape" control. 0.01 dB steps.
+
+- Output Gain — dB, -24 .. +24, default 0
+  Linear dB output trim. Interacts with Auto Gain (below).
+
+- Auto Gain — off / on, default off
+  On = the output gain is multiplied by 1/(Curve*Bias_lin + (Bias_lin/2-1)^2),
+  divided by the input gain, capped at 16x. It is a rough compensation for
+  Bias and Tape formulation, not a measurement, so it will overshoot on some
+  settings. Bias at 0 dB is the unity point.
+
+- Rolloff — Hz, 20 .. 100, default 35
+  The tape high-pass corner, in Hz (linear, 0.01 Hz steps). Note it is a real
+  frequency, not a percentage: 20-40 Hz is a subtle subsonic trim, 60-100 Hz
+  noticeably thins the low end. Each Model multiplies it by a different factor
+  (1x, 0.5x, 1x, 1x, 1x, 1x) and each model derives its Q from it as well, so
+  the same setting sounds different across models.
+
+- Bump — %, 0 .. 100, default 0
+  Amount of low-frequency "head bump". Internally it becomes sqrt(Bump/100),
+  so most of the useful travel is in the lower half: 0-20 % is a gentle
+  thickening, 50 % is a clear low-end lift, 100 % is a pronounced resonant bump
+  that can dominate a bass-heavy source. Its effect also depends on Model (each
+  model uses a different bump topology with different gain signs).
+
+- Model — swiss / japan-o / usa-m / usa-a / japan-s / japan-t, default swiss
+  Selects the head-model filter set:
+  swiss (Studer A80 mkII) is a second-order high-pass with a bump-tracking Q and
+  a neutral bump filter; japan-o (Otari MX-80) is a half-frequency high-pass
+  with a bump-2 filter; usa-m (MCI JH-24) is a first-order high-pass with a
+  strong double shelf (+18 dB/-9 dB pair); usa-a (Ampex MM-1200) uses a
+  bump-3 topology that is the most coloured and asymmetric; japan-s
+  (Sony APR-5000) is a double shelf with a -9/+6 dB pair; japan-t
+  (Tascam ATR-60) is a bump-2 at double frequency with a scoop.
+
+- Bias — dB, -12 .. +12, default 0
+  Tape bias. It sets both the saturator drive (10^(Bias/20)) and the strength
+  of the dynamic shelf pair (scaled by Bias/12), so it is the control that
+  decides how "hot" the tape is: negative values under-bias (more distortion and
+  a darker dynamic EQ), positive values over-bias the model (cleaner, brighter
+  shelves). Zero is nominal.
+
+- Release — ms, 10 .. 1000, default 500, 10 ms steps
+  Release of the saturation stage's level follower, linear in milliseconds. The
+  attack is fixed at 3 ms and is additionally scaled by the instantaneous level
+  (louder signals attack faster). Short releases (10-50 ms) make the saturator
+  and the dynamic shelf follow transients and can add a "breathing" texture;
+  long ones (500-1000 ms) let a passage stay compressed.
+
+- Speed — 7.5 / 15 / 30 ips, default 15
+  Tape speed. It selects the saturation curve (vintage 0.05/0.10/0.15, modern
+  0.30/0.35/0.40 — higher speed = more headroom = less curve) and the IEC
+  shelf frequencies and gains per EQ Type. 30 ips with Modern tape is the
+  cleanest combination; 7.5 ips with Vintage is the most obviously saturated.
+
+- EQ Type — IEC 1 / IEC 2, default IEC 1
+  IEC 1 uses a high shelf plus a flat second shelf at 10-12 kHz; IEC 2 uses a
+  high shelf plus a 30 Hz low shelf, with per-speed high gains of -18/-7/0 dB
+  and low gains of +7.5/+7.5/0 dB. IEC 1 is the "warm, full" curve, IEC 2 the
+  "clear mid/high" curve, exactly as the source describes them.
+
+- Tape — vintage / modern, default vintage
+  Vintage = the lower-dynamic-range formulation: a much stronger saturation
+  curve and therefore much more distortion and character. Modern = a wide
+  linear region, so the same Bias and Input Gain settings stay noticeably
+  cleaner. This switch changes the curve constants everywhere.
+
+Taper summary: Input/Output/Bias/Release are linear in dB or ms; Rolloff is
+linear in Hz; Bump goes through a square root so it is most sensitive near
+zero; Model, Speed, EQ Type and Tape are switches that change the underlying
+constant tables.
+
+Port notes: all six filter generators (high-pass, bump-1/2/3, shelf-1/2) are
+transcribed formula-for-formula, including the two different shelf topologies
+(`tan+w` versus `tan*w+1`) that make japan-t and japan-o sound different. The
+dynamic shelf is genuinely recomputed and crossfaded every sample, as in the
+source — it is not a smoothed coefficient update.

@@ -1,0 +1,84 @@
+/* JClones_DaTube — RNBO codebox~ port of JClones_DaTube (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_DaTube.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. The classic four-segment
+ * tube transfer curve driven by an exponent of log(10)+1, a 3 Hz DC remover,
+ * plus the two JClones switches that recreate the original plugin's 12-bit
+ * lookup table and its fold-back clipper. GUI omitted.
+ */
+// Drive (%)
+@param({ min: 0, max: 100 }) drive = 30;
+// Balance (%)
+@param({ min: 0, max: 100 }) balance = 100;
+// Output Gain (dB)
+@param({ min: -24, max: 0 }) output_gain = -6;
+// Bit Reduction
+@param({ enum: ["off", "on"] }) bit_reduction = 0;
+// Fold Back
+@param({ enum: ["off", "on"] }) fold_back = 0;
+@state s_dcL = 0;
+@state s_dcR = 0;
+@state s_dcK = 0;
+@state s_sr = 0;
+@state s_p = 0;
+@state s_drive = 0;
+@state s_drive05 = 0;
+@state s_wet = 1;
+@state s_outGain = 2;
+@state frame: Int = 0;
+
+function fnShape(x) {
+    if (x > 1.0) return (1.0 - s_drive05) * x + s_drive05;
+    if (x > 0.0) return ((1.0 - x) - pow(1.0 - x, s_p)) * s_drive05 + x;
+    if (x > -1.0) return (pow(1.0 + x, s_p) - (x + 1.0)) * s_drive + x;
+    return (1.0 - s_drive) * x - s_drive;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) {
+        s_dcK = 3.0 / sr * 2.0 * pi;
+        s_sr = sr;
+    }
+    s_p = log(10.0) + 1.0;
+    s_drive = drive / 100.0;
+    s_drive05 = s_drive * 0.5;
+    s_wet = balance / 100.0;
+    s_outGain = pow(10.0, output_gain / 20.0) * 2.0;
+}
+
+let crusher = bit_reduction >= 0.5;
+let folder = fold_back >= 0.5;
+
+let dryL = in1;
+let xxL = dryL * (s_drive + 0.5);
+if (crusher) xxL = (xxL * 2048.0 >= 0.0) ? floor(xxL * 2048.0) / 2048.0 : ceil(xxL * 2048.0) / 2048.0;
+if (folder) {
+    if (abs(xxL) > 1.0) xxL = (xxL >= 0.0) ? (2.0 - xxL) : (-2.0 - xxL);
+}
+let yL = fnShape(xxL);
+if (!crusher) {
+    s_dcL += s_dcK * (yL - s_dcL);
+    yL -= s_dcL;
+}
+yL = yL * s_wet + dryL * (1.0 - s_wet);
+
+let dryR = in2;
+let xxR = dryR * (s_drive + 0.5);
+if (crusher) xxR = (xxR * 2048.0 >= 0.0) ? floor(xxR * 2048.0) / 2048.0 : ceil(xxR * 2048.0) / 2048.0;
+if (folder) {
+    if (abs(xxR) > 1.0) xxR = (xxR >= 0.0) ? (2.0 - xxR) : (-2.0 - xxR);
+}
+let yR = fnShape(xxR);
+if (!crusher) {
+    s_dcR += s_dcK * (yR - s_dcR);
+    yR -= s_dcR;
+}
+yR = yR * s_wet + dryR * (1.0 - s_wet);
+
+out1 = yL * s_outGain;
+out2 = yR * s_outGain;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

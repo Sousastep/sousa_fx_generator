@@ -1,0 +1,52 @@
+JClones_OInflator — RNBO codebox~ port of the JClones OInflator JSFX
+Source: repos/JSFXClones/jsfx/JClones_OInflator.jsfx (MIT, JClones)
+
+What it is: an inflator/clipper-style loudness enhancer. The core is the
+(1-|g*x|)*g*x curve, where g is derived from the instantaneous sample level and
+a Curve constant; the result is mixed against the dry signal by Effect. It adds
+apparent loudness and "front" without obvious dynamic range reduction, and the
+optional band split applies the same curve separately above and below 240 Hz and
+2400 Hz so the bass does not hog the whole process.
+
+Parameters (original slider names):
+
+- Input — dB, -6 .. +12, default 0
+  Linear dB trim into the inflator. Raising it pushes more of the signal into
+  the curve, which increases the loudness effect and eventually the distortion.
+
+- Effect — %, 0 .. 100, default 0
+  The dry/wet depth of the curve, linear unipolar. 0 % is fully dry (the plug-in
+  is bypassed), 100 % is the full (1-|g*x|)*g*x output. 30-60 % is the usual
+  "louder but still clean" zone; 100 % is a definite effect.
+
+- Curve — -50 .. +50, default 0 (displayed as a percentage-like range)
+  Shapes the loudness function. Internally it becomes a constant from 0.5 at -50
+  down to 0.0 at +50 (0.25 at the neutral 0 position). Negative = softer, more
+  rounded, preserves dynamics; positive = sharper and more punchy with more
+  harmonic edge, good on drums and vocals.
+
+- Clip — off / on, default on
+  On = the input is hard limited to +-0.5 before the inflator, which is
+  aggressive but gives the classic dense result. Off = the input is limited only
+  at +-0.9999999, so there is much more headroom and the effect stays cleaner.
+  On is the source default.
+
+- Band Split — off / on, default off
+  Off = single-band processing of the whole signal. On = three bands (below
+  240 Hz, 240-2400 Hz, above 2400 Hz) each get their own inflator curve and are
+  summed back with the source's mid-band compensation gain. More controlled, and
+  the low end distorts much later, at roughly twice the CPU.
+
+- Output — dB, -12 .. 0, default 0
+  Output trim, negative only, linear in dB. The source applies an extra fixed x2
+  internally, so 0 dB is the loudest position and roughly +6 dB over the input.
+
+Taper summary: Input and Output are linear in dB; Effect and Curve are linear in
+their stated ranges; Clip and Band Split are switches. There are no exponential
+tapers, so level changes are easy to predict.
+
+Port notes: the three-band crossover is the source's `FilterParam` topology
+(two first-order stages plus fixed band gains, including the odd-looking 0.125
+high-pass numerator), ported coefficient-for-coefficient rather than replaced
+with a cleaner crossover. The `mid_gain` compensation is computed once per
+sample-rate change, as in the source.

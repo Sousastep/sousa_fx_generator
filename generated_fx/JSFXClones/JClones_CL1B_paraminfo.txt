@@ -1,0 +1,75 @@
+JClones_CL1B — RNBO codebox~ port of the JClones CL1B JSFX
+Source: repos/JSFXClones/jsfx/JClones_CL1B.jsfx (MIT, JClones)
+
+What it is: an optical tube compressor built from measured lookup curves rather
+than an analytic gain law. Nine tables (T3/T4/T5/T6/T8/T9/T10/T12/T13) encode
+the ratio, knee, attack and release behaviour, and the port keeps the source's
+own `frexp`-based exponential interpolation so the curve evaluation is
+bit-comparable. The signal path is: feedback sum of two envelope filters →
+gain reduction → per-sample level table → two smoothing low-passes → output
+multiplier → a 20 kHz one-pole post EQ.
+
+Parameters (original slider names):
+
+- Ratio (: 1) — 2 .. 10, default 6
+  The compression ratio. It is remapped to 0..1 as (Ratio-2)/8 and used as the
+  index into the T3 exponential table (which gives a smooth ratio curve) and
+  then T4/T10. Linear slider, 0.1 steps. 2:1 is gentle, 4-6 is the classic
+  optical range, 8-10 approaches limiting.
+
+- Threshold — dB, -40 .. +10, default 0
+  Threshold in dBFS, linear, 0.1 dB steps. JClones made this an exact dB value
+  instead of modelling the hardware knob, so the reading means what it says:
+  above 0 dB the compressor barely acts, around -10 dB it starts working, and
+  -30 to -40 dB is heavy. It is applied as 10^(-40-Threshold)/20 inside the
+  detector, so lower values drive the curve much harder.
+
+- Attack — 0 .. 10, default 5
+  Attack speed, linear 0.1 steps, mapped to 0..1 and indexed into the 46-entry
+  T8 table (which is then rescaled by 44100/sampleRate so the timing is
+  sample-rate independent). The curve is steepest at the top: 0-3 is slow and
+  liquid (the classic opto "lag"), 6-10 is fast enough to catch transients.
+  Ignored in Fixed mode.
+
+- Release — 0 .. 10, default 5
+  Release speed, same 0..1 mapping into the 24-entry T9 table, also rescaled by
+  44100/sampleRate. Low values are long and glue-like, high values are quick
+  and can pump. Ignored in Fixed mode.
+
+- A/R Select — fixed / fixed/manual / manual, default manual
+  fixed = the source's hard-wired optical timings are used and Attack/Release
+  are ignored, giving the vintage "one-knob" feel. fixed/manual = the attack is
+  fixed but the release knob works (the combined level takes the max of the raw
+  detector and the smoothed one). manual = both knobs drive the two-stage
+  envelope fully. Manual is the default in the source.
+
+- Output Gain — dB, -24 .. +24, default 0
+  Linear dB output trim, 0.1 dB steps, applied as 10^(-30+Output)/20 inside the
+  output multiplier. JClones made it an exact dB value rather than a hardware
+  approximation.
+
+Taper summary: Ratio, Threshold, Attack, Release and Output Gain are all linear
+sliders; the non-linearity lives entirely in the tables, so the usable range is
+spread across the knobs rather than compressed at one end.
+
+Port notes:
+- **Deviation, deliberate:** the JSFX calls
+  `setParameters(ratio, threshold, att*0.1, rel*0.1, arSelect, outDb)` while its
+  own function signature is
+  `(ratio, threshold, mode, attack, release, outDb)`. That shifts every argument
+  after the threshold: Attack would select the mode, Release would set the
+  attack, and A/R Select would set the release. This port passes them in
+  signature order so each control does what its label says. The DSP itself is
+  untouched — only the wiring of the four affected controls differs from the
+  JSFX build.
+- All nine tables (409 values) are transcribed verbatim, including the
+  loop-filled tails (T3 8..24 = 0.01, T10 8..24 = 1, T13 99..251 = 1) and the
+  one negative entry in T9. `frexp` is reimplemented exactly and returns the
+  mantissa while setting the exponent state, because codebox~ functions cannot
+  return two values cheaply.
+- The source's custom `clamp` (±0.99999988) is kept as a separate helper; it is
+  not the built-in clamp, and the gain-reduction denominator depends on the
+  exact limit.
+- `e` is a reserved RNBO constant, so the local exponent variable is `ex`.
+  Naming it `e` makes the assignment in `frexp` fail at the C++ stage.
+- The GR meter was dropped.

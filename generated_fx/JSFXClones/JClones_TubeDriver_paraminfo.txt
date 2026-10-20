@@ -1,0 +1,45 @@
+JClones_TubeDriver — RNBO codebox~ port of the JClones TubeDriver JSFX
+Source: repos/JSFXClones/jsfx/JClones_TubeDriver.jsfx (MIT, JClones)
+
+What it is: a tube-saturation stage built around an asymmetric tanh. Drive and
+bias feed a soft transfer curve; a 5 Hz DC remover cleans up the offset the
+asymmetry creates. The source's automatic drive/bias gain compensation is kept,
+so turning Drive up thickens the tone instead of simply getting louder.
+
+Parameters (original slider names):
+
+- Input Gain — dB, -12 .. +12, default 0
+  Linear dB trim into the saturator. A linear-in-dB trim (no taper), 0.1 dB
+  steps in the original. Push it up to hit the tube harder; 0 dB is the
+  neutral position.
+
+- Drive — 0 .. 10, default 2
+  Amount of tube saturation. Maps internally to a drive multiplier of
+  0.5 .. 10.5 (and to 0.5 .. 50.5 with Boost engaged). Exponential feel: the
+  bottom half of the range is subtle warmth, above 6 it is clearly distorted.
+  The auto-compensation keeps the output level roughly steady as you raise it.
+
+- Bias — 0 .. 10, default 5
+  DC offset of the tube's operating point, i.e. how far the transfer curve is
+  pushed off-centre. 0 = nearly symmetric (odd harmonics, edgier), 10 = strongly
+  asymmetric (even harmonics, thicker and more "browned out"). 5 is the neutral
+  middle. Bias above ~7 noticeably reduces headroom on one polarity.
+
+- Boost — off / on, default off
+  Switches in roughly 4x extra drive at the tube input. A coarse "+10 dB into
+  the tube" that keeps the same compensation behaviour, so it is a character
+  switch, not a volume switch.
+
+- Output Gain — dB, -12 .. +12, default 0
+  Linear dB trim after the saturator, for level-matching. Set it to bring the
+  processed signal back to the dry level.
+
+Taper summary: both gain controls are plain linear-in-dB; Drive and Bias are
+linear 0..10 sliders that hit the DSP through a squared/exponential mapping, so
+the useful range is spread evenly across the slider rather than bunched at one
+end.
+
+Port notes: only the metering and GUI were dropped; the DSP path, the
+compensation formula and the 5 Hz DC remover are the source's. The tanh helper
+clamps its argument to +-20 purely to stop double-precision exp() overflow —
+tanh is already exactly +-1 well before that point.

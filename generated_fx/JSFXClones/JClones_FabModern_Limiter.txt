@@ -1,0 +1,241 @@
+/* JClones_FabModern_Limiter — RNBO codebox~ port of JClones_FabModern_Limiter
+ * (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_FabModern_Limiter.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. A 0.18 ms look-ahead limiter:
+ * a per-channel instantaneous GR, a slow "S-shaped" two-stage release shared by
+ * both channels, a running-minimum hold over the look-ahead window and two
+ * cascaded box averages to smooth the GR. GUI and the GR meter are omitted.
+ */
+// Input Gain (dB)
+@param({ min: -18, max: 18 }) input_gain = 0;
+// Threshold (dB)
+@param({ min: -20, max: 0 }) threshold = -1;
+@state s_inGain = 1;
+@state s_thr = 0.5;
+@state s_atkA0 = 1;
+@state s_atkA1 = 0;
+@state s_atkB1 = 0;
+@state s_relA0 = 1;
+@state s_relA1 = 0;
+@state s_relB1 = 0;
+@state s_sAtkA0 = 1;
+@state s_sAtkA1 = 0;
+@state s_sAtkB1 = 0;
+@state s_sRelA0 = 1;
+@state s_sRelA1 = 0;
+@state s_sRelB1 = 0;
+@state s_atk1x = 1;
+@state s_atk1y = 1;
+@state s_atk2x = 1;
+@state s_atk2y = 1;
+@state s_rel1x = 1;
+@state s_rel1y = 1;
+@state s_rel2x = 1;
+@state s_rel2y = 1;
+@state s_sAtkX = 1;
+@state s_sAtkY = 1;
+@state s_sRelX = 1;
+@state s_sRelY = 1;
+@state s_laSize: Int = 8;
+@state s_maSize: Int = 5;
+@state s_xDelay: Int = 7;
+@state s_minBufL = new FixedFloat64Array(160);
+@state s_minBufR = new FixedFloat64Array(160);
+@state s_maBufL = new FixedFloat64Array(160);
+@state s_maBufR = new FixedFloat64Array(160);
+@state s_minHeadL: Int = 0;
+@state s_minHeadR: Int = 0;
+@state s_maHeadL: Int = 0;
+@state s_maHeadR: Int = 0;
+@state s_maSumL = 0;
+@state s_maSumR = 0;
+@state s_dlyL = new delay(0.01);
+@state s_dlyR = new delay(0.01);
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+// The source's "99 % within t seconds" one-pole coefficient.
+function fnStep99(t) {
+    let w0 = (0.732936 / t) / maximum(samplerate(), 1.0) * 2.0 * pi;
+    let kk = 1.0 / tan(w0 / 2.0);
+    let b0 = 1.0 + kk;
+    return [1.0 / b0, 1.0 / b0, -(1.0 - kk) / b0];
+}
+
+function fnGr(x, thr) {
+    let lv = abs(x);
+    if (lv <= thr) return 1.0;
+    return thr / lv;
+}
+
+function fnSlowGr(grX) {
+    let g2 = grX * grX;
+    // attack: two identical one-poles
+    let y = s_atkA0 * g2 + s_atkA1 * s_atk1x + s_atkB1 * s_atk1y;
+    s_atk1x = g2;
+    s_atk1y = y;
+    g2 = y;
+    y = s_atkA0 * g2 + s_atkA1 * s_atk2x + s_atkB1 * s_atk2y;
+    s_atk2x = g2;
+    s_atk2y = y;
+    g2 = y;
+
+    // release: run only when the signal rises above the held value
+    if (g2 > s_rel1y) {
+        y = s_relA0 * g2 + s_relA1 * s_rel1x + s_relB1 * s_rel1y;
+        s_rel1x = g2;
+        s_rel1y = y;
+        g2 = y;
+    } else {
+        s_rel1x = g2;
+        s_rel1y = g2;
+    }
+    if (g2 > s_rel2y) {
+        y = s_relA0 * g2 + s_relA1 * s_rel2x + s_relB1 * s_rel2y;
+        s_rel2x = g2;
+        s_rel2y = y;
+        g2 = y;
+    } else {
+        s_rel2x = g2;
+        s_rel2y = g2;
+    }
+
+    // exp-shaped stage on the raw value
+    y = s_sAtkA0 * grX + s_sAtkA1 * s_sAtkX + s_sAtkB1 * s_sAtkY;
+    s_sAtkX = grX;
+    s_sAtkY = y;
+    grX = y;
+    if (grX > s_sRelY) {
+        y = s_sRelA0 * grX + s_sRelA1 * s_sRelX + s_sRelB1 * s_sRelY;
+        s_sRelX = grX;
+        s_sRelY = y;
+        grX = y;
+    } else {
+        s_sRelX = grX;
+        s_sRelY = grX;
+    }
+
+    return minimum(grX, sqrt(maximum(g2, 0.0)));
+}
+
+function fnProcessL(x, grFast, grSlow) {
+    let gr = minimum(grFast, grSlow);
+    s_minBufL[s_minHeadL] = gr;
+    s_minHeadL += 1;
+    if (s_minHeadL >= s_laSize) s_minHeadL = 0;
+
+    // running minimum over the whole look-ahead window
+    let mn = s_minBufL[0];
+    for (let i: Int = 1; i < s_laSize; i++) mn = minimum(mn, s_minBufL[i]);
+    gr = mn;
+
+    // two cascaded box averages
+    s_maSumL -= s_maBufL[s_maHeadL];
+    s_maBufL[s_maHeadL] = gr;
+    s_maHeadL += 1;
+    if (s_maHeadL >= s_maSize) s_maHeadL = 0;
+    s_maSumL += gr;
+    gr = s_maSumL / s_maSize;
+
+    s_maSumL -= s_maBufL[s_maHeadL];
+    s_maBufL[s_maHeadL] = gr;
+    s_maHeadL += 1;
+    if (s_maHeadL >= s_maSize) s_maHeadL = 0;
+    s_maSumL += gr;
+    gr = s_maSumL / s_maSize;
+
+    let y = s_dlyL.next(x, s_xDelay);
+    return y * gr;
+}
+
+function fnProcessR(x, grFast, grSlow) {
+    let gr = minimum(grFast, grSlow);
+    s_minBufR[s_minHeadR] = gr;
+    s_minHeadR += 1;
+    if (s_minHeadR >= s_laSize) s_minHeadR = 0;
+
+    let mn = s_minBufR[0];
+    for (let i: Int = 1; i < s_laSize; i++) mn = minimum(mn, s_minBufR[i]);
+    gr = mn;
+
+    s_maSumR -= s_maBufR[s_maHeadR];
+    s_maBufR[s_maHeadR] = gr;
+    s_maHeadR += 1;
+    if (s_maHeadR >= s_maSize) s_maHeadR = 0;
+    s_maSumR += gr;
+    gr = s_maSumR / s_maSize;
+
+    s_maSumR -= s_maBufR[s_maHeadR];
+    s_maBufR[s_maHeadR] = gr;
+    s_maHeadR += 1;
+    if (s_maHeadR >= s_maSize) s_maHeadR = 0;
+    s_maSumR += gr;
+    gr = s_maSumR / s_maSize;
+
+    let y = s_dlyR.next(x, s_xDelay);
+    return y * gr;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    let la = floor(0.00018 * sr + 0.5);
+    if (la < 2.0) la = 2.0;
+    if (la > 150.0) la = 150.0;
+    let laI: Int = la;
+    let maI: Int = floor(la / 2.0 + 1.0);
+    if (maI < 1) maI = 1;
+    if (laI != s_laSize) {
+        s_laSize = laI;
+        s_maSize = maI;
+        s_xDelay = laI - 1;
+        if (s_xDelay < 1) s_xDelay = 1;
+        for (let i: Int = 0; i < 160; i++) {
+            s_minBufL[i] = 1.0;
+            s_minBufR[i] = 1.0;
+            s_maBufL[i] = 1.0;
+            s_maBufR[i] = 1.0;
+        }
+        s_minHeadL = 0;
+        s_minHeadR = 0;
+        s_maHeadL = 0;
+        s_maHeadR = 0;
+        s_maSumL = maI;
+        s_maSumR = maI;
+        let c1 = fnStep99(0.025);
+        s_atkA0 = c1[0];
+        s_atkA1 = c1[1];
+        s_atkB1 = c1[2];
+        let c2 = fnStep99(0.200);
+        s_relA0 = c2[0];
+        s_relA1 = c2[1];
+        s_relB1 = c2[2];
+        let c3 = fnStep99(0.150);
+        s_sAtkA0 = c3[0];
+        s_sAtkA1 = c3[1];
+        s_sAtkB1 = c3[2];
+        let c4 = fnStep99(1.5);
+        s_sRelA0 = c4[0];
+        s_sRelA1 = c4[1];
+        s_sRelB1 = c4[2];
+    }
+    s_inGain = fnDbToK(input_gain);
+    s_thr = fnDbToK(threshold);
+}
+
+let xl = in1 * s_inGain;
+let xr = in2 * s_inGain;
+let grL = fnGr(xl, s_thr);
+let grR = fnGr(xr, s_thr);
+let grLink = minimum(grL, grR);
+let slow = fnSlowGr(grLink);
+
+out1 = fnProcessL(xl, grL, slow);
+out2 = fnProcessR(xr, grR, slow);
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

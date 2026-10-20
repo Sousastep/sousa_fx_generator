@@ -1,0 +1,78 @@
+JClones_Molot — RNBO codebox~ port of JClones_Molot (JSFX)
+Source: repos/JSFXClones/jsfx/JClones_Molot.jsfx (MIT, © JClones)
+
+WHAT IT IS
+A valve-flavoured feed-forward compressor with a shaped sidechain, a diode
+attack/release detector, a soft-knee x^ratio gain clipper, an output triode
+saturator and six stereo topologies. The loudness-squash character of the
+original Molot, without its limiter/EQ/oversampling stages (JClones dropped
+those too).
+
+PARAMETERS
+input_db — -12..+12 dB, default 0. Drives both the detector and the wet path.
+  More input = lower effective threshold, so it is the usual "push it" control.
+
+sc_freq — 40..260 Hz, default 120. Sidechain emphasis: a phon-80 low shelf built
+  from two 35.15 Hz high-passes whose Q follows the dial (not a simple HPF). Set
+  low to let the tuba's fundamental through the detector (pumping), raise it to
+  ignore the low end and compress the honk.
+
+sc_filter — off/on, default on. Off swaps in the source's fixed 296 Hz / Q 0.7
+  -3 dB low shelf. On uses sc_freq.
+
+threshold_db — -40..0 dB, default -10. Compression threshold in the detector's
+  dB scale, linear taper.
+
+ratio — 1.1..10.9 : 1, default 4. Continuous on the dial but quantised to 0.1
+  steps internally (the gain-clipper is a 99-row table of x^ratio polynomials).
+  At 1.0 the stage bypasses itself; 10.9 is effectively limiting.
+
+knee — 0..1, default 1. Inverted from intuition: 0 is the widest soft knee
+  (knee width = the whole threshold region), 1 is nearly a hard corner. Linear
+  taper.
+
+attack_ms — 1..100 ms, default 10, linear taper. Sets the attack/release
+  envelope. Its value also selects the detector speed in Sigma mode: ≤9.5 ms →
+  1 ms detector, ≤24.5 ms → 10 ms, above → 25 ms (the source's calibration).
+
+attack_mode — Alpha / Sigma, default Sigma. Sigma = the source's S-curve
+  envelope with the speed-scaling above. Alpha = hard/exp envelope with the
+  fastest 0.1 ms detector — aggressive, good on transients, can distort sustained
+  low notes.
+
+release_ms — 50..1000 ms, default 110, linear taper. Recovery of the gain
+  clipper's output envelope.
+
+sat — off/on, default on. A 9th-order polynomial triode stage on the compressed
+  signal. Automatically disabled in S and MS modes (it would wreck the stereo
+  image); MS re-applies it to L/R after decoding.
+
+sat_drive_db — -12..+12 dB, default +6. The saturator's own threshold is
+  (12 - drive) dB, so higher drive = more clipping. Musical range is roughly
+  0..+8; below 0 it is nearly clean.
+
+makeup_db — -12..+12 dB, default 0. Post-compression gain, no effect on the
+  amount of compression.
+
+dry_mix — 0..100 %, default 0. NOTE the direction: 0 = fully compressed,
+  100 = fully dry (the source blends wet*(1-dry) + dry*dry). Use small values
+  for parallel crush. The dry leg is not input-gained.
+
+mode — Mono / Dual Mono / M / S / MS / Stereo, default Stereo. Mono sums to a
+  single compressor, Dual Mono runs two independent channels, M and S compress
+  only the mid or only the side, MS shares one max-of-both detector across M and
+  S, Stereo links both channels with an averaged detector. On a solo tuba, Stereo
+  and MS are the safe choices; M or S will tilt the image.
+
+bypass — off/on, default off. Straight wire (the detector states are left to run
+  on and settle).
+
+sidechain — Int SC. / Ext SC., default Int. Ext reads in3/in4 as the sidechain
+  input (this effect's inlets 3/4 are stereo sidechain, not pitch/mod). Feed it a
+  copy of the kick if you want the tuba ducked.
+
+NOTES
+- Everything is block-rate: the filter/table coefficients are recomputed once per
+  signal vector, so fast parameter automation is still click-free-ish but not
+  sample-accurate.
+- The original meter (gr) is not exposed; use your ears or a meter downstream.

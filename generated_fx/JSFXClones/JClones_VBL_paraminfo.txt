@@ -1,0 +1,90 @@
+JClones_VBL — RNBO codebox~ port of the JClones VBL JSFX
+Source: repos/JSFXClones/jsfx/JClones_VBL.jsfx (MIT, JClones)
+
+What it is: a vintage broadcast tube limiter, modelled as a two-band feedback
+compressor followed by a feedback saturator. The compressor splits at ~2.6 kHz,
+keeps separate attack times for the bands (21.6 ms low, 10.8 ms high), uses a
+program-dependent release curve, and drives a saturation stage whose RMS
+detector time is set by Bias. A Brilliance shelf, a hard clip plus polynomial
+waveshaper and an optional output-transformer block (crosstalk, all-pass phase
+rotator, 19 Hz high-pass) finish it.
+
+Parameters (original slider names):
+
+- Input — dB, -24 .. +24, default 0
+  Linear dB trim into the compressor. Raising it drives both the compressor and
+  the saturator, since the saturator is fed from the compressor's own sidechain.
+  0.1 dB steps.
+
+- Comp — dB, 0 .. 48, default 0
+  Compression amount. It feeds a fitted curve:
+  comp_1 = 10^(-0.9*Comp-24.84)/20, comp_2 = 10^(0.00727*Comp^2-1.0138*Comp+0.602)/20
+  and comp_3 = comp_2/(1-comp_1) - 10^(-Comp/20). At 0 the curve is essentially
+  transparent; 12-24 dB is the classic broadcast squash; 48 dB is heavy
+  limiting. Linear slider, 0.1 dB steps.
+
+- Emphasis — %, 0 .. 100, default 50
+  Sidechain emphasis. It moves a high-pass from 40 Hz (0 %) to 160 Hz (100 %),
+  so low values let the bass trigger the compressor (full-range limiting) and
+  high values make it ignore the low end and react to mid/high energy instead.
+  Two more fixed filters (a 415 Hz low shelf at -12 dB and a 1.5 kHz high shelf
+  at +11.6 dB) shape the saturator's emphasis path and do not move with this
+  knob.
+
+- Bias — %, 0 .. 100, default 50
+  Sets the saturator's RMS detector time constant: tau = 7.0 ms at 0 % down to
+  2.283 ms at 100 % (linear in ms). Slower (low Bias) is smoother and more
+  compressed-sounding; faster (high Bias) lets the saturator follow transients
+  and sounds more open and harder. It is the "how much does the tube breathe"
+  control, not a DC bias.
+
+- Amp — %, 0 .. 100, default 0
+  Saturation drive. It scales the feedback signal that is added back into the
+  input (a genuine  feedback loop, so it self-compresses) and it also moves the Brilliance filter
+  corner: freq = 34540*Amp^3 - 57183*Amp^2 + 3594*Amp + 24504 Hz, which falls
+  from about 24.5 kHz at 0 % to about 5.5 kHz at 100 %, so the Brilliance shelf
+  sweeps down into the presence region as Amp rises. High Amp is noticeably
+  distorted and darker.
+
+- Brilliance — %, 0 .. 100, default 0
+  High-frequency lift after the waveshaper, mapped to 0 .. +18 dB
+  (10^(Brilliance*18/20)) applied only above the Amp-dependent corner. 0 % is
+  flat, 30-50 % adds air and helps the effect sit on a bus, 100 % is a bright,
+  almost fizzy shelf.
+
+- Dry Mix — %, 0 .. 100, default 0
+  Wet/dry. Note it is inverted relative to most plug-ins: 0 % is fully
+  processed and 100 % is fully dry. Linear.
+
+- Output — dB, -24 .. +24, default 0
+  Linear dB output trim after the mix. The transformer block runs after this,
+  so on "Trafo on" the final level also depends on the rotator.
+
+- Stereo-Link — off / on, default on
+  On = both the compressor sidechain and the saturator's two-band RMS are
+  averaged across channels (RMS-linked, not peak-linked), so the stereo image
+  stays put. Off = dual mono, which can widen and wander.
+
+- Trafo — off / on, default on
+  The output-transformer emulation. On = enables (a) 0.1 % crosstalk from the
+  opposite channel through a 7 kHz high shelf, (b) a four-stage all-pass phase
+  rotator at 0.9698154 per stage, (c) a 19 Hz high-pass in the saturator, (d) a
+  slew-limited HF clip, and (e) the 90 % dry / 10 % emphasised emphasis blend
+  in the saturator. Off = a cleaner, more direct path with a 6.4 Hz high-pass
+  and no crosstalk or rotator.
+
+Taper summary: Input, Comp and Output are linear in dB; Emphasis, Bias, Amp,
+Brilliance and Dry Mix are linear percentages that map into exponential or
+cubic formulas, so Amp in particular is very non-linear (most of its audible
+change is in the 40-80 % region).
+
+Port notes:
+- The saturator feedback is genuine state feedback: the previous sample's post-
+  waveshaper value, scaled by Amp, is added to the input every sample.
+- The transformer step is applied after the dry/wet mix, and the right channel
+  uses the *already processed* left channel as its crosstalk source — that
+  asymmetry exists in the source and is kept.
+- The source's `getDynamicRelease` and `getFeedbackGR` are transcribed as-is,
+  including the `max(..., 30 ms)` floor and the (2-feedback_gr_hi)*14.75 s
+  release scaling on the low band.
+- The GR meter was dropped.

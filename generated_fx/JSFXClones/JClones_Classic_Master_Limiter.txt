@@ -1,0 +1,199 @@
+/* JClones_Classic_Master_Limiter — RNBO codebox~ port of the JClones
+ * Classic_Master_Limiter (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_Classic_Master_Limiter.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider range and default kept. Four cascaded gain-reduction passes:
+ * a smoothed "reference/dynamic pair" release with a 100 Hz attack low-pass,
+ * then a cubed soft-knee pass, then a 3 ms look-ahead stage with its own
+ * hold/dynamic release, then a final catch pass. A fixed 0.977/threshold master
+ * trim sets the ceiling. GUI and the gain-reduction meter are omitted.
+ */
+// Threshold (dB)
+@param({ min: -20, max: 0 }) threshold = -5;
+@state s_kA = 1;
+@state s_kB = 1;
+@state s_kC = 1;
+@state s_kD = 1;
+@state s_kBR = 1;
+@state s_kDR = 1;
+@state s_kX = 0;
+@state s_kE = 0;
+@state s_attA0 = 1;
+@state s_attA1 = 0;
+@state s_attB1 = 0;
+@state s_thr = 0.5;
+@state s_master = 2;
+@state s_dlyN: Int = 1;
+@state s_A_L = 0;
+@state s_B_L = 0;
+@state s_X_L = 0;
+@state s_C_L = 0;
+@state s_D_L = 0;
+@state s_E_L = 0;
+@state s_A_R = 0;
+@state s_B_R = 0;
+@state s_X_R = 0;
+@state s_C_R = 0;
+@state s_D_R = 0;
+@state s_E_R = 0;
+@state s_attX1L = 0;
+@state s_attY1L = 0;
+@state s_attX1R = 0;
+@state s_attY1R = 0;
+@state s_dlyL = new delay(0.05);
+@state s_dlyR = new delay(0.05);
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+function fnLimiterL(x) {
+    let lv = abs(x) + 1.0e-20;
+    let gr1i = 1.0 - s_thr / lv;
+    gr1i = maximum(gr1i, 1.0e-20);
+    s_A_L *= s_kA;
+    s_A_L = maximum(s_A_L, gr1i);
+    s_B_L *= s_kB;
+    s_B_L = maximum(s_B_L, gr1i);
+    if (s_A_L >= s_B_L) {
+        s_kB = 1.0;
+    } else {
+        s_kB += (s_kA - s_kB) * (s_B_L - s_A_L) / s_sr;
+    }
+    s_X_L += (s_B_L - s_X_L) * s_kX;
+    s_X_L = minimum(s_X_L, s_B_L);
+
+    let yAtt = s_attA0 * s_X_L + s_attA1 * s_attX1L + s_attB1 * s_attY1L;
+    s_attX1L = s_X_L;
+    s_attY1L = yAtt;
+    let gr1 = 1.0 - yAtt;
+    let y1 = x * gr1;
+
+    let l2 = abs(y1);
+    let gr2 = 1.0;
+    let y2 = y1;
+    if (l2 >= s_thr) {
+        let gr2i = 1.0 - s_thr / l2;
+        gr2 = 1.0 - gr2i * gr2i * gr2i;
+        y2 = y1 * gr2;
+    }
+
+    let y3 = s_dlyL.next(y2, s_dlyN);
+    let l3 = abs(y2) + 1.0e-20;
+    let gr3i = 1.0 - s_thr / l3;
+    gr3i = maximum(gr3i, 1.0e-20);
+    s_C_L *= s_kC;
+    s_C_L = maximum(s_C_L, gr3i);
+    s_D_L *= s_kD;
+    s_D_L = maximum(s_D_L, gr3i);
+    if (s_C_L >= s_D_L) {
+        s_kD += (1.0 - s_kD) * 8000.0 / s_sr;
+    } else {
+        s_kD += (s_kC - s_kD) * (s_D_L - s_C_L) / s_sr;
+    }
+    s_E_L += (s_D_L - s_E_L) * s_kE;
+    s_E_L = minimum(s_E_L, s_D_L);
+    let gr3 = 1.0 - s_E_L;
+    let y4 = y3 * gr3;
+
+    let l4 = abs(y4) + 1.0e-20;
+    let gr4i = 1.0 - s_thr / l4;
+    gr4i = maximum(gr4i, 1.0e-20);
+    let gr4 = 1.0 - gr4i;
+    return y4 * gr4 * s_master;
+}
+
+function fnLimiterR(x) {
+    let lv = abs(x) + 1.0e-20;
+    let gr1i = 1.0 - s_thr / lv;
+    gr1i = maximum(gr1i, 1.0e-20);
+    s_A_R *= s_kA;
+    s_A_R = maximum(s_A_R, gr1i);
+    s_B_R *= s_kBR;
+    s_B_R = maximum(s_B_R, gr1i);
+    if (s_A_R >= s_B_R) {
+        s_kBR = 1.0;
+    } else {
+        s_kBR += (s_kA - s_kBR) * (s_B_R - s_A_R) / s_sr;
+    }
+    s_X_R += (s_B_R - s_X_R) * s_kX;
+    s_X_R = minimum(s_X_R, s_B_R);
+
+    let yAtt = s_attA0 * s_X_R + s_attA1 * s_attX1R + s_attB1 * s_attY1R;
+    s_attX1R = s_X_R;
+    s_attY1R = yAtt;
+    let gr1 = 1.0 - yAtt;
+    let y1 = x * gr1;
+
+    let l2 = abs(y1);
+    let gr2 = 1.0;
+    let y2 = y1;
+    if (l2 >= s_thr) {
+        let gr2i = 1.0 - s_thr / l2;
+        gr2 = 1.0 - gr2i * gr2i * gr2i;
+        y2 = y1 * gr2;
+    }
+
+    let y3 = s_dlyR.next(y2, s_dlyN);
+    let l3 = abs(y2) + 1.0e-20;
+    let gr3i = 1.0 - s_thr / l3;
+    gr3i = maximum(gr3i, 1.0e-20);
+    s_C_R *= s_kC;
+    s_C_R = maximum(s_C_R, gr3i);
+    s_D_R *= s_kDR;
+    s_D_R = maximum(s_D_R, gr3i);
+    if (s_C_R >= s_D_R) {
+        s_kDR += (1.0 - s_kDR) * 8000.0 / s_sr;
+    } else {
+        s_kDR += (s_kC - s_kDR) * (s_D_R - s_C_R) / s_sr;
+    }
+    s_E_R += (s_D_R - s_E_R) * s_kE;
+    s_E_R = minimum(s_E_R, s_D_R);
+    let gr3 = 1.0 - s_E_R;
+    let y4 = y3 * gr3;
+
+    let l4 = abs(y4) + 1.0e-20;
+    let gr4i = 1.0 - s_thr / l4;
+    gr4i = maximum(gr4i, 1.0e-20);
+    let gr4 = 1.0 - gr4i;
+    return y4 * gr4 * s_master;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) {
+        s_kA = pow(0.368, 1.0 / (sr * 0.0005));
+        s_kX = 1.0 - pow(0.368, 1.0 / (sr * 0.5));
+        s_kC = pow(0.368, 1.0 / (sr * 0.001));
+        s_kE = 1.0 - pow(0.368, 1.0 / (sr * 0.0005));
+        s_kB = s_kA;
+        s_kD = s_kC;
+        s_kBR = s_kA;
+        s_kDR = s_kC;
+
+        // Filter1_LPFilter_Init(100 / srate)
+        let w0 = (100.0 / sr) * 2.0 * pi;
+        let kk = 1.0 / tan(w0 / 2.0);
+        let b0 = 1.0 + kk;
+        let b1 = 1.0 - kk;
+        s_attA0 = 1.0 / b0;
+        s_attA1 = 1.0 / b0;
+        s_attB1 = -b1 / b0;
+
+        s_dlyN = maximum(1.0, floor(sr * 0.003 + 0.5));
+        s_sr = sr;
+    }
+    s_thr = fnDbToK(threshold);
+    s_master = 0.977 / s_thr;
+}
+
+let outL = fnLimiterL(in1);
+let outR = fnLimiterR(in2);
+out1 = outL;
+out2 = outR;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

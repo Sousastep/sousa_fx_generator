@@ -1,0 +1,228 @@
+/* JClones_Fattener — RNBO codebox~ port of JClones_Fattener (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_Fattener.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. Two fixed 20/30 Hz
+ * high-passes and a colour sweep peak feed a stereo-linked 10:1 compressor
+ * (2.69 ms attack / 32.9 ms release) followed by a soft clipper whose ceiling
+ * is set by Color. GUI omitted.
+ */
+// Fattness (%)
+@param({ min: 0, max: 100 }) fattness = 0;
+// Color (%)
+@param({ min: 0, max: 100 }) color = 0;
+// Gain (dB)
+@param({ min: -24, max: 24 }) gain = 0;
+@state s_b1a0 = 1;
+@state s_b1a1 = 0;
+@state s_b1a2 = 0;
+@state s_b1b1 = 0;
+@state s_b1b2 = 0;
+@state s_b2a0 = 1;
+@state s_b2a1 = 0;
+@state s_b2a2 = 0;
+@state s_b2b1 = 0;
+@state s_b2b2 = 0;
+@state s_b3a0 = 1;
+@state s_b3a1 = 0;
+@state s_b3a2 = 0;
+@state s_b3b1 = 0;
+@state s_b3b2 = 0;
+@state s_b1x1L = 0;
+@state s_b1x2L = 0;
+@state s_b1y1L = 0;
+@state s_b1y2L = 0;
+@state s_b2x1L = 0;
+@state s_b2x2L = 0;
+@state s_b2y1L = 0;
+@state s_b2y2L = 0;
+@state s_b3x1L = 0;
+@state s_b3x2L = 0;
+@state s_b3y1L = 0;
+@state s_b3y2L = 0;
+@state s_b1x1R = 0;
+@state s_b1x2R = 0;
+@state s_b1y1R = 0;
+@state s_b1y2R = 0;
+@state s_b2x1R = 0;
+@state s_b2x2R = 0;
+@state s_b2y1R = 0;
+@state s_b2y2R = 0;
+@state s_b3x1R = 0;
+@state s_b3x2R = 0;
+@state s_b3y1R = 0;
+@state s_b3y2R = 0;
+@state s_levelL = 0;
+@state s_levelR = 0;
+@state s_attK = 0;
+@state s_relK = 0;
+@state s_threshold = 0;
+@state s_outGain = 1;
+@state s_invRatio = 0.1;
+@state s_finalGain = 1;
+@state s_satThr = 0.9;
+@state s_inGain = 1;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+function fnTanh(x) {
+    let a = clamp(x, -20.0, 20.0);
+    let e2x = exp(2.0 * a);
+    return (e2x - 1.0) / (e2x + 1.0);
+}
+
+// Audio-EQ-Cookbook high-pass, matching the source's Filter2_HPFilter2.
+function fnSetHp(freqK, q, stage) {
+    let w0 = freqK * 2.0 * pi;
+    let alpha = sin(w0) / (2.0 * q);
+    let a0 = ((1.0 + cos(w0)) / 2.0) / (1.0 + alpha);
+    let a1 = -(1.0 + cos(w0)) / (1.0 + alpha);
+    let a2 = ((1.0 + cos(w0)) / 2.0) / (1.0 + alpha);
+    let b1 = -(-2.0 * cos(w0)) / (1.0 + alpha);
+    let b2 = -(1.0 - alpha) / (1.0 + alpha);
+    if (stage < 0.5) {
+        s_b1a0 = a0;
+        s_b1a1 = a1;
+        s_b1a2 = a2;
+        s_b1b1 = b1;
+        s_b1b2 = b2;
+    } else {
+        s_b2a0 = a0;
+        s_b2a1 = a1;
+        s_b2a2 = a2;
+        s_b2b1 = b1;
+        s_b2b2 = b2;
+    }
+}
+
+function fnB1L(x0) {
+    let y0 = x0 * s_b1a0 + s_b1x1L * s_b1a1 + s_b1x2L * s_b1a2 + s_b1y1L * s_b1b1 + s_b1y2L * s_b1b2;
+    s_b1x2L = s_b1x1L;
+    s_b1x1L = x0;
+    s_b1y2L = s_b1y1L;
+    s_b1y1L = y0;
+    return y0;
+}
+
+function fnB2L(x0) {
+    let y0 = x0 * s_b2a0 + s_b2x1L * s_b2a1 + s_b2x2L * s_b2a2 + s_b2y1L * s_b2b1 + s_b2y2L * s_b2b2;
+    s_b2x2L = s_b2x1L;
+    s_b2x1L = x0;
+    s_b2y2L = s_b2y1L;
+    s_b2y1L = y0;
+    return y0;
+}
+
+function fnB3L(x0) {
+    let y0 = x0 * s_b3a0 + s_b3x1L * s_b3a1 + s_b3x2L * s_b3a2 + s_b3y1L * s_b3b1 + s_b3y2L * s_b3b2;
+    s_b3x2L = s_b3x1L;
+    s_b3x1L = x0;
+    s_b3y2L = s_b3y1L;
+    s_b3y1L = y0;
+    return y0;
+}
+
+function fnB1R(x0) {
+    let y0 = x0 * s_b1a0 + s_b1x1R * s_b1a1 + s_b1x2R * s_b1a2 + s_b1y1R * s_b1b1 + s_b1y2R * s_b1b2;
+    s_b1x2R = s_b1x1R;
+    s_b1x1R = x0;
+    s_b1y2R = s_b1y1R;
+    s_b1y1R = y0;
+    return y0;
+}
+
+function fnB2R(x0) {
+    let y0 = x0 * s_b2a0 + s_b2x1R * s_b2a1 + s_b2x2R * s_b2a2 + s_b2y1R * s_b2b1 + s_b2y2R * s_b2b2;
+    s_b2x2R = s_b2x1R;
+    s_b2x1R = x0;
+    s_b2y2R = s_b2y1R;
+    s_b2y1R = y0;
+    return y0;
+}
+
+function fnB3R(x0) {
+    let y0 = x0 * s_b3a0 + s_b3x1R * s_b3a1 + s_b3x2R * s_b3a2 + s_b3y1R * s_b3b1 + s_b3y2R * s_b3b2;
+    s_b3x2R = s_b3x1R;
+    s_b3x1R = x0;
+    s_b3y2R = s_b3y1R;
+    s_b3y1R = y0;
+    return y0;
+}
+
+function fnCompGr(xpp, level, ch) {
+    let lvl = s_levelL;
+    if (ch >= 0.5) lvl = s_levelR;
+    let k = s_relK;
+    if (level > lvl) k = s_attK;
+    lvl = (1.0 - k) * level + k * lvl;
+    if (ch < 0.5) s_levelL = lvl;
+    else s_levelR = lvl;
+    let gr = 1.0;
+    if (lvl > s_threshold) gr = pow(lvl / s_threshold, s_invRatio - 1.0);
+    return xpp * gr * s_outGain;
+}
+
+function fnSoftClip(y) {
+    if (abs(y) > s_satThr) {
+        if (s_satThr < 1.0) {
+            if (y > 0.0) y = fnTanh((y - s_satThr) / (1.0 - s_satThr)) * (1.0 - s_satThr) + s_satThr;
+            else y = -(fnTanh((-y - s_satThr) / (1.0 - s_satThr)) * (1.0 - s_satThr) + s_satThr);
+        } else {
+            if (y > 0.0) y = s_satThr;
+            else y = -s_satThr;
+        }
+    }
+    return y * s_finalGain;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) {
+        fnSetHp(20.0 / sr, 0.7071067811865476, 0.0);
+        fnSetHp(30.0 / sr, 0.7071067811865476, 1.0);
+        s_attK = exp(-1.0 / (sr * 0.00269));
+        s_relK = exp(-1.0 / (sr * 0.0329));
+        s_sr = sr;
+    }
+
+    let fat = fattness / 100.0;
+    s_threshold = fnDbToK(-(fat * 34.0 + 1.0));
+    s_outGain = fnDbToK(fat * 39.0 + 1.0);
+    s_invRatio = 0.1;
+    s_finalGain = fnDbToK(-0.1);
+
+    let col = color / 100.0;
+    let gainDb = col * 8.0;
+    let freqHz = pow(col, 3.219) * 6680.0 + 40.0;
+    freqHz = minimum(freqHz, sr * 0.5 - 100.0);
+    let freqK = freqHz / sr;
+    // getDigitalQ_peak(0.71, freq_k)
+    let w0 = freqK * 2.0 * pi;
+    let cc = cos(w0 / 2.0);
+    let qq = 1.5 * (cc + 1.0) * cc / (2.0 * cc + 1.0) * 0.71;
+    // Filter2_PeakFilter2
+    let aa = sqrt(fnDbToK(gainDb));
+    let alpha = sin(w0) / (2.0 * qq);
+    s_b3a0 = (1.0 + alpha * aa) / (1.0 + alpha / aa);
+    s_b3a1 = -2.0 * cos(w0) / (1.0 + alpha / aa);
+    s_b3a2 = (1.0 - alpha * aa) / (1.0 + alpha / aa);
+    s_b3b1 = -(-2.0 * cos(w0)) / (1.0 + alpha / aa);
+    s_b3b2 = -(1.0 - alpha / aa) / (1.0 + alpha / aa);
+
+    s_satThr = 0.1 * col + 0.9;
+    s_inGain = fnDbToK(gain);
+}
+
+let ppL = fnB3L(fnB2L(fnB1L(in1 * s_inGain)));
+let ppR = fnB3R(fnB2R(fnB1R(in2 * s_inGain)));
+let level = maximum(abs(ppL), abs(ppR));
+
+out1 = fnSoftClip(fnCompGr(ppL, level, 0.0));
+out2 = fnSoftClip(fnCompGr(ppR, level, 1.0));
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

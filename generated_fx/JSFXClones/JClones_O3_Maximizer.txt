@@ -1,0 +1,317 @@
+/* JClones_O3_Maximizer — RNBO codebox~ port of JClones_O3_Maximizer (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_O3_Maximizer.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. A maximizer: optional 5x
+ * oversampled inter-sample-peak detection through a 70-tap FIR, a max-hold over
+ * the look-ahead window, a zero-attack release, an auto-release stage driven by
+ * the rate of change of the raw gain reduction, a raised-cosine attack FIR and
+ * the delayed signal. GUI and the GR meter are omitted.
+ */
+// Threshold (dB)
+@param({ min: -20, max: 0 }) threshold = 0;
+// Margin (dB)
+@param({ min: -6, max: 0 }) margin = 0;
+// Character
+@param({ min: 0, max: 10 }) character = 4;
+// Prevent ISP
+@param({ enum: ["off", "on"] }) prevent_isp = 0;
+
+@state s_inGain = 1;
+@state s_outGain = 1;
+@state s_isp = 0;
+@state s_thrDb = 0;
+@state s_upIr = new FixedFloat64Array(70);
+@state s_upBufL = new FixedFloat64Array(32);
+@state s_upBufR = new FixedFloat64Array(32);
+@state s_upLen: Int = 14;
+@state s_upHead: Int = 14;
+@state s_mhBuf = new FixedFloat64Array(520);
+@state s_mhLen: Int = 65;
+@state s_mhHead: Int = 0;
+@state s_mhSamples: Int = 65;
+@state s_mhDelaySize: Int = 0;
+@state s_atkBuf = new FixedFloat64Array(520);
+@state s_atkIr = new FixedFloat64Array(520);
+@state s_atkLen: Int = 65;
+@state s_atkHead: Int = 0;
+@state s_arBuf = new FixedFloat64Array(8192);
+@state s_arLen: Int = 617;
+@state s_arHead: Int = 0;
+@state s_arSum = 0;
+@state s_arState1 = 0;
+@state s_arState2 = 0;
+@state s_lastRawGr = 0;
+@state s_arK1 = 0;
+@state s_arK2 = 0;
+@state s_arK3 = 1;
+@state s_arK4 = 1;
+@state s_arK5 = 1;
+@state s_relK = 0;
+@state s_relState = 0;
+@state s_coef = 0.6;
+@state s_dMh = new delay(0.02);
+@state s_dGr1 = new delay(0.5);
+@state s_dGr2 = new delay(0.5);
+@state s_dL = new delay(1.0);
+@state s_dR = new delay(1.0);
+@state s_nLat: Int = 688;
+@state s_yL = 0;
+@state s_yR = 0;
+@state s_irReady = 0;
+@state s_atkCoef = -1;
+@state s_atkSr = 0;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+function fnToDb(x) {
+    return 20.0 * log10(maximum(x, 1.0e-30));
+}
+
+function fnInitUpIr() {
+    s_upIr[0] = 0.000000000; s_upIr[1] = 0.000000000; s_upIr[2] = 0.000000000; s_upIr[3] = 0.000000000; s_upIr[4] = 0.001108887;
+    s_upIr[5] = 0.000000000; s_upIr[6] = -0.002307397; s_upIr[7] = -0.005021744; s_upIr[8] = -0.006557025; s_upIr[9] = -0.005171423;
+    s_upIr[10] = 0.000000000; s_upIr[11] = 0.007996489; s_upIr[12] = 0.015768220; s_upIr[13] = 0.019012450; s_upIr[14] = 0.014039180;
+    s_upIr[15] = 0.000000000; s_upIr[16] = -0.019598060; s_upIr[17] = -0.037128130; s_upIr[18] = -0.043264330; s_upIr[19] = -0.031036880;
+    s_upIr[20] = 0.000000000; s_upIr[21] = 0.041477940; s_upIr[22] = 0.077415300; s_upIr[23] = 0.089296040; s_upIr[24] = 0.063735860;
+    s_upIr[25] = 0.000000000; s_upIr[26] = -0.085880880; s_upIr[27] = -0.162850400; s_upIr[28] = -0.192896500; s_upIr[29] = -0.143438300;
+    s_upIr[30] = 0.000000000; s_upIr[31] = 0.225520200; s_upIr[32] = 0.494558500; s_upIr[33] = 0.750534300; s_upIr[34] = 0.934209700;
+    s_upIr[35] = 1.000956000; s_upIr[36] = 0.934209700; s_upIr[37] = 0.750534300; s_upIr[38] = 0.494558500; s_upIr[39] = 0.225520200;
+    s_upIr[40] = 0.000000000; s_upIr[41] = -0.143438300; s_upIr[42] = -0.192896500; s_upIr[43] = -0.162850400; s_upIr[44] = -0.085880880;
+    s_upIr[45] = 0.000000000; s_upIr[46] = 0.063735860; s_upIr[47] = 0.089296040; s_upIr[48] = 0.077415300; s_upIr[49] = 0.041477940;
+    s_upIr[50] = 0.000000000; s_upIr[51] = -0.031036880; s_upIr[52] = -0.043264330; s_upIr[53] = -0.037128130; s_upIr[54] = -0.019598060;
+    s_upIr[55] = 0.000000000; s_upIr[56] = 0.014039180; s_upIr[57] = 0.019012450; s_upIr[58] = 0.015768220; s_upIr[59] = 0.007996489;
+    s_upIr[60] = 0.000000000; s_upIr[61] = -0.005171423; s_upIr[62] = -0.006557025; s_upIr[63] = -0.005021744; s_upIr[64] = -0.002307397;
+    s_upIr[65] = 0.000000000; s_upIr[66] = 0.001108887; s_upIr[67] = 0.000000000; s_upIr[68] = 0.000000000; s_upIr[69] = 0.000000000;
+}
+
+function fnDetectLevel(inL, inR) {
+    if (s_upHead == 0) {
+        for (let i: Int = 0; i < s_upLen; i++) {
+            s_upBufL[s_upLen + i] = s_upBufL[i];
+            s_upBufR[s_upLen + i] = s_upBufR[i];
+        }
+        s_upHead = s_upLen;
+    }
+    s_upHead -= 1;
+    s_upBufL[s_upHead] = inL;
+    s_upBufR[s_upHead] = inR;
+
+    let half: Int = floor(s_upLen / 2.0);
+    let y0L = s_upBufL[s_upHead + half];
+    let y0R = s_upBufR[s_upHead + half];
+    let y0Max = maximum(abs(y0L), abs(y0R));
+
+    if (s_isp >= 0.5) {
+        let y1L = 0.0; let y1R = 0.0;
+        let y2L = 0.0; let y2R = 0.0;
+        let y3L = 0.0; let y3R = 0.0;
+        let y4L = 0.0; let y4R = 0.0;
+        let y5L = 0.0; let y5R = 0.0;
+        let j: Int = 0;
+        for (let i: Int = 0; i < s_upLen; i++) {
+            let xl = s_upBufL[s_upHead + i];
+            let xr = s_upBufR[s_upHead + i];
+            y1L += xl * s_upIr[j];      y1R += xr * s_upIr[j];
+            y2L += xl * s_upIr[j + 1];  y2R += xr * s_upIr[j + 1];
+            y3L += xl * s_upIr[j + 2];  y3R += xr * s_upIr[j + 2];
+            y4L += xl * s_upIr[j + 3];  y4R += xr * s_upIr[j + 3];
+            y5L += xl * s_upIr[j + 4];  y5R += xr * s_upIr[j + 4];
+            j += 5;
+        }
+        y0Max = maximum(y0Max, maximum(abs(y1L), abs(y1R)));
+        y0Max = maximum(y0Max, maximum(abs(y2L), abs(y2R)));
+        y0Max = maximum(y0Max, maximum(abs(y3L), abs(y3R)));
+        y0Max = maximum(y0Max, maximum(abs(y4L), abs(y4R)));
+        y0Max = maximum(y0Max, maximum(abs(y5L), abs(y5R)));
+    }
+    return y0Max;
+}
+
+function fnApplyMaxHold(v) {
+    if (s_mhHead == 0) {
+        for (let i: Int = 0; i < s_mhLen; i++) s_mhBuf[s_mhLen + i] = s_mhBuf[i];
+        s_mhHead = s_mhLen;
+    }
+    s_mhHead -= 1;
+    s_mhBuf[s_mhHead] = v;
+
+    let m = v;
+    for (let i: Int = 1; i < s_mhSamples; i++) m = maximum(m, s_mhBuf[s_mhHead + i]);
+    return m;
+}
+
+function fnApplyRelease(v) {
+    s_relState *= s_relK;
+    if (v > s_relState) s_relState = v;
+    return s_relState;
+}
+
+function fnApplyAutoRelease(rawGrDb, maxHoldDb, grRel) {
+    let rawDelta = abs(rawGrDb - s_lastRawGr);
+    s_lastRawGr = rawGrDb;
+
+    s_arSum -= s_arBuf[s_arHead];
+    s_arBuf[s_arHead] = rawDelta;
+    s_arSum += rawDelta;
+    s_arHead += 1;
+    if (s_arHead >= s_arLen) s_arHead = 0;
+
+    let s1 = s_arK1 * s_arSum + s_arK2;
+    if (s1 > 1.0) s1 = 1.0;
+
+    let s2 = s1 * s_arK3 * s_arK4 + (1.0 - s_arK4) * s_arState1;
+    if (s2 < s_arState1) s_arState1 += (s2 - s_arState1) * 2.0;
+    else s_arState1 += (s2 - s_arState1) * 0.3;
+    s_arState1 = clamp(s_arState1, 0.0, 1.0);
+
+    maxHoldDb = s_dGr1.next(maxHoldDb, s_arLen);
+    grRel = s_dGr2.next(grRel, s_arLen);
+
+    s_arState2 = grRel * grRel * s_arK5 + (1.0 - s_arK5) * s_arState2;
+    let grOut = sqrt(s_arState2) * s_arState1;
+    return maximum(maxHoldDb, grOut);
+}
+
+function fnApplyAttack(v) {
+    if (s_atkHead == 0) {
+        for (let i: Int = 0; i < s_atkLen; i++) s_atkBuf[s_atkLen + i] = s_atkBuf[i];
+        s_atkHead = s_atkLen;
+    }
+    s_atkHead -= 1;
+    s_atkBuf[s_atkHead] = v;
+
+    let y = 0.0;
+    for (let i: Int = 0; i < s_atkLen; i++) y += s_atkBuf[s_atkHead + i] * s_atkIr[i];
+    return y;
+}
+
+function fnSetAttack(coef) {
+    s_coef = coef;
+    let realAbs = floor(s_atkLen * 1.0);
+    if (coef < 0.3) {
+        let r = sqrt(coef) * coef / (sqrt(0.3) * 0.3) * s_atkLen + 0.5;
+        realAbs = floor(r);
+        if ((realAbs - floor(realAbs / 2.0) * 2.0) == 0.0) realAbs += 1.0;
+    }
+
+    let sum = 0.0;
+    for (let i: Int = 0; i < s_atkLen; i++) {
+        let x = i - (s_atkLen - 1) / 2.0;
+        let v = 1.0 - cos((x / realAbs * 2.0 + 1.0) * pi);
+        if (i < (s_atkLen - realAbs) / 2.0 || i >= (s_atkLen + realAbs) / 2.0) v = 0.0;
+        s_atkIr[i] = v;
+        sum += v;
+    }
+    let norm = 1.0 / sum;
+    for (let i: Int = 0; i < s_atkLen; i++) s_atkIr[i] *= norm;
+
+    s_mhSamples = realAbs;
+
+    let dsize = (s_atkLen - 1) / 2.0 - (realAbs - 1.0) / 2.0;
+    if (dsize < 0.0) dsize = 0.0;
+    s_mhDelaySize = floor(dsize);
+
+    let rx1 = coef;
+    if (rx1 > 1.0) rx1 = 2.0 * rx1 - 1.0;
+    let rx2 = rx1 * 2.0;
+
+    let sr = maximum(samplerate(), 1.0);
+    s_relK = 1.0 - sr / (exp(rx2) * 35.0) * (0.1 / 44100.0);
+
+    s_arK1 = exp(rx2) * 0.018181818;
+    s_arK2 = 0.0;
+    if (rx1 > 0.5) {
+        s_arK2 = (rx1 - 0.5) * 0.7;
+        if (s_arK2 > 0.9) s_arK2 = 0.9;
+    }
+    s_arK3 = 1.0;
+    if (coef < 0.3) s_arK3 = coef * coef * 11.111111;
+    s_arK4 = 44.1 / sr;
+    s_arK5 = s_arK4;
+    if (rx1 > 0.7) s_arK5 += (rx1 - 0.7) * (rx1 - 0.7);
+    if (s_arK5 > 1.0) s_arK5 = 1.0;
+}
+
+function fnProcess(inL, inR) {
+    let inputLevel = fnDetectLevel(inL, inR);
+    let inputLevelDb = -200.0;
+    if (inputLevel >= 1.0e-10) inputLevelDb = fnToDb(inputLevel);
+
+    let rawGrDb = maximum(inputLevelDb - s_thrDb, 0.0);
+    let maxHoldDb = fnApplyMaxHold(rawGrDb);
+    let grRel = fnApplyRelease(rawGrDb);
+
+    let grAuto = 0.0;
+    if (s_coef > 0.04) grAuto = fnApplyAutoRelease(rawGrDb, maxHoldDb, grRel);
+    else grAuto = s_dGr1.next(maxHoldDb, s_arLen);
+
+    if (s_mhDelaySize > 0) grAuto = s_dMh.next(grAuto, s_mhDelaySize);
+
+    let finalGrDb = fnApplyAttack(grAuto);
+    let outGr = fnDbToK(-finalGrDb);
+
+    s_yL = s_dL.next(inL, s_nLat) * outGr;
+    s_yR = s_dR.next(inR, s_nLat) * outGr;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) {
+        s_sr = sr;
+        let maxLa = 32.0;
+        if (sr > 130000.0) maxLa = 128.0;
+        else if (sr > 50000.0) maxLa = 64.0;
+        let mhLen = maxLa * 2.0 + 1.0;
+        s_mhLen = mhLen;
+        s_atkLen = mhLen;
+        s_mhHead = 0;
+        s_atkHead = 0;
+        for (let i: Int = 0; i < 520; i++) {
+            s_mhBuf[i] = 0.0;
+            s_atkBuf[i] = 0.0;
+            s_atkIr[i] = 0.0;
+        }
+        let arLen = floor(sr * 0.014);
+        if (arLen < 1.0) arLen = 1.0;
+        s_arLen = arLen;
+        s_arHead = 0;
+        s_arSum = 0.0;
+        s_arState1 = 0.0;
+        s_arState2 = 0.0;
+        s_lastRawGr = 0.0;
+        s_relState = 0.0;
+        for (let i: Int = 0; i < 8192; i++) s_arBuf[i] = 0.0;
+
+        let upHalf: Int = floor(s_upLen / 2.0);
+        s_nLat = upHalf + s_mhLen - 1 + s_arLen;
+    }
+
+    if (s_irReady == 0) {
+        fnInitUpIr();
+        s_irReady = 1;
+    }
+
+    s_inGain = fnDbToK(-threshold);
+    s_outGain = fnDbToK(margin);
+    s_thrDb = 0.0;
+    s_isp = prevent_isp;
+
+    let coef = character * 0.15;
+    if (coef != s_atkCoef || s_sr != s_atkSr) {
+        fnSetAttack(coef);
+        s_atkCoef = coef;
+        s_atkSr = s_sr;
+    }
+}
+
+fnProcess(in1, in2);
+out1 = s_yL * s_outGain;
+out2 = s_yR * s_outGain;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

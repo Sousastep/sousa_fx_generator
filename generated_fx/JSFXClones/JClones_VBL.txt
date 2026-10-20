@@ -1,0 +1,561 @@
+/* JClones_VBL — RNBO codebox~ port of JClones_VBL (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_VBL.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. A vintage broadcast tube
+ * limiter: a two-band feedback compressor with dynamic release and emphasis,
+ * followed by a feedback saturator with a bias-dependent RMS detector, a
+ * fixed-frequency brilliance shelf, a hard clip plus polynomial waveshaper and
+ * an optional output-transformer section (crosstalk, all-pass rotator, 19 Hz
+ * high-pass). GUI and the GR meter are omitted.
+ *
+ * Biquad slots (coefficients in s_co[5k..5k+4], state in s_st[4k..4k+3]):
+ *   0 L comp sc_hpf   1 L comp emphasis1  2 L comp emphasis2  3 L comp gr_filter2
+ *   4 R comp sc_hpf   5 R comp emphasis1  6 R comp emphasis2  7 R comp gr_filter2
+ *   8 L sat gr_filter 9 L sat crosstalk  10 R sat gr_filter  11 R sat crosstalk
+ */
+// Input (dB)
+@param({ min: -24, max: 24 }) input = 0;
+// Comp (dB)
+@param({ min: 0, max: 48 }) comp = 0;
+// Emphasis (%)
+@param({ min: 0, max: 100 }) emphasis = 50;
+// Bias (%)
+@param({ min: 0, max: 100 }) bias = 50;
+// Amp (%)
+@param({ min: 0, max: 100 }) amp = 0;
+// Brilliance (%)
+@param({ min: 0, max: 100 }) brilliance = 0;
+// Dry Mix (%)
+@param({ min: 0, max: 100 }) dry_mix = 0;
+// Output (dB)
+@param({ min: -24, max: 24 }) output = 0;
+// Stereo-Link
+@param({ enum: ["off", "on"] }) stereo_link = 1;
+// Trafo
+@param({ enum: ["off", "on"] }) trafo = 1;
+
+@state s_co = new FixedFloat64Array(64);
+@state s_st = new FixedFloat64Array(64);
+@state s_inGain = 1;
+@state s_outGain = 1;
+@state s_dry = 0;
+@state s_link = 1;
+// compressor coefficients / state (per channel)
+@state s_cComp1L = 0; @state s_cComp2L = 0; @state s_cComp3L = 0;
+@state s_cComp1R = 0; @state s_cComp2R = 0; @state s_cComp3R = 0;
+@state s_cXoK = 0;
+@state s_cGr1K = 0;
+@state s_cAtkLoK = 0;
+@state s_cAtkHiK = 0;
+@state s_cXo1L = 0; @state s_cXo2L = 0;
+@state s_cXo1R = 0; @state s_cXo2R = 0;
+@state s_cGr1LoL = 1; @state s_cGr1HiL = 1;
+@state s_cGr1LoR = 1; @state s_cGr1HiR = 1;
+@state s_cArLoL = 0; @state s_cArHiL = 0;
+@state s_cArLoR = 0; @state s_cArHiR = 0;
+@state s_cFbGrL = 1; @state s_cFbGrHiL = 1; @state s_cFbGrLoL = 1;
+@state s_cFbGrR = 1; @state s_cFbGrHiR = 1; @state s_cFbGrLoR = 1;
+@state s_cFbYL = 0; @state s_cFbYR = 0;
+@state s_cScL = 0; @state s_cScR = 0;
+// saturator coefficients / state (per channel)
+@state s_sRmsK = 0;
+@state s_sMixK = 0;
+@state s_sXoK = 0;
+@state s_sBrilK = 0;
+@state s_sBrilAmp = 1;
+@state s_sHpfK = 0;
+@state s_sTrafoOn = 1;
+@state s_sAmpK = 0;
+@state s_sRmsLoL = 0; @state s_sRmsHiL = 0;
+@state s_sRmsLoR = 0; @state s_sRmsHiR = 0;
+@state s_sSumLoL = 0; @state s_sSumHiL = 0;
+@state s_sSumLoR = 0; @state s_sSumHiR = 0;
+@state s_sMixL = 0; @state s_sMixR = 0;
+@state s_sXo1L = 0; @state s_sXo2L = 0;
+@state s_sXo1R = 0; @state s_sXo2R = 0;
+@state s_sFbGrL = 1; @state s_sFbGrR = 1;
+@state s_sHfL = 0; @state s_sHfR = 0;
+@state s_sHpfX1L = 0; @state s_sHpfY1L = 0;
+@state s_sHpfX1R = 0; @state s_sHpfY1R = 0;
+@state s_sBril1L = 0; @state s_sBril2L = 0;
+@state s_sBril1R = 0; @state s_sBril2R = 0;
+@state s_sAmpFbL = 0; @state s_sAmpFbR = 0;
+// Filter3dB_Oct and TrafoFilter state (per channel)
+@state s_eB0L = 0; @state s_eB1L = 0; @state s_eB2L = 0; @state s_eB3L = 0;
+@state s_eB4L = 0; @state s_eB5L = 0; @state s_eB6L = 0; @state s_eB7L = 0;
+@state s_eB0R = 0; @state s_eB1R = 0; @state s_eB2R = 0; @state s_eB3R = 0;
+@state s_eB4R = 0; @state s_eB5R = 0; @state s_eB6R = 0; @state s_eB7R = 0;
+@state s_t1L = 0; @state s_t2L = 0; @state s_t3L = 0; @state s_t4L = 0;
+@state s_t5L = 0; @state s_t6L = 0; @state s_t7L = 0; @state s_t8L = 0;
+@state s_t1R = 0; @state s_t2R = 0; @state s_t3R = 0; @state s_t4R = 0;
+@state s_t5R = 0; @state s_t6R = 0; @state s_t7R = 0; @state s_t8R = 0;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnDbToK(x) {
+    return pow(10.0, x / 20.0);
+}
+
+function fnF1Lp(freqK) {
+    return 1.0 - exp(-(2.0 * pi * freqK));
+}
+
+function fnApply1(s, x, k) {
+    return s + (x - s) * k;
+}
+
+// --- generic biquad (coefficients and state live in the shared arrays) ---
+function fnBq(x, k) {
+    let cb: Int = k * 5;
+    let sb: Int = k * 4;
+    let y = x * s_co[cb] + s_st[sb] * s_co[cb + 1] + s_st[sb + 1] * s_co[cb + 2] + s_st[sb + 2] * s_co[cb + 3] + s_st[sb + 3] * s_co[cb + 4];
+    s_st[sb + 1] = s_st[sb];
+    s_st[sb] = x;
+    s_st[sb + 3] = s_st[sb + 2];
+    s_st[sb + 2] = y;
+    return y;
+}
+
+function fnBqReset(k, v) {
+    let sb: Int = k * 4;
+    s_st[sb] = v;
+    s_st[sb + 1] = v;
+    s_st[sb + 2] = v;
+    s_st[sb + 3] = v;
+}
+
+function fnBqLp(freqK, q, k) {
+    let w0 = freqK * 2.0 * pi;
+    let kk = 1.0 / tan(w0 / 2.0);
+    let kk2 = kk * kk;
+    let b0 = kk2 + kk / q + 1.0;
+    let b1 = 2.0 * (1.0 - kk2);
+    let b2 = kk2 - kk / q + 1.0;
+    let cb: Int = k * 5;
+    s_co[cb] = 1.0 / b0;
+    s_co[cb + 1] = 2.0 / b0;
+    s_co[cb + 2] = 1.0 / b0;
+    s_co[cb + 3] = -b1 / b0;
+    s_co[cb + 4] = -b2 / b0;
+}
+
+function fnBqHp(freqK, q, k) {
+    let w0 = freqK * 2.0 * pi;
+    let alpha = sin(w0) / (2.0 * q);
+    let cb: Int = k * 5;
+    s_co[cb] = ((1.0 + cos(w0)) / 2.0) / (1.0 + alpha);
+    s_co[cb + 1] = -(1.0 + cos(w0)) / (1.0 + alpha);
+    s_co[cb + 2] = ((1.0 + cos(w0)) / 2.0) / (1.0 + alpha);
+    s_co[cb + 3] = -(-2.0 * cos(w0)) / (1.0 + alpha);
+    s_co[cb + 4] = -(1.0 - alpha) / (1.0 + alpha);
+}
+
+function fnBqLs(freqK, q, aGain, k) {
+    let a = sqrt(aGain);
+    let w0 = freqK * 2.0 * pi;
+    let alpha = sin(w0) / (2.0 * q);
+    let a0 = a * ((a + 1.0) - (a - 1.0) * cos(w0) + 2.0 * sqrt(a) * alpha);
+    let a1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos(w0));
+    let a2 = a * ((a + 1.0) - (a - 1.0) * cos(w0) - 2.0 * sqrt(a) * alpha);
+    let b0 = (a + 1.0) + (a - 1.0) * cos(w0) + 2.0 * sqrt(a) * alpha;
+    let b1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos(w0));
+    let b2 = (a + 1.0) + (a - 1.0) * cos(w0) - 2.0 * sqrt(a) * alpha;
+    let cb: Int = k * 5;
+    s_co[cb] = a0 / b0;
+    s_co[cb + 1] = a1 / b0;
+    s_co[cb + 2] = a2 / b0;
+    s_co[cb + 3] = -b1 / b0;
+    s_co[cb + 4] = -b2 / b0;
+}
+
+function fnBqHs(freqK, q, aGain, k) {
+    let a = sqrt(aGain);
+    let w0 = freqK * 2.0 * pi;
+    let alpha = sin(w0) / (2.0 * q);
+    let a0 = a * ((a + 1.0) + (a - 1.0) * cos(w0) + 2.0 * sqrt(a) * alpha);
+    let a1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos(w0));
+    let a2 = a * ((a + 1.0) + (a - 1.0) * cos(w0) - 2.0 * sqrt(a) * alpha);
+    let b0 = (a + 1.0) - (a - 1.0) * cos(w0) + 2.0 * sqrt(a) * alpha;
+    let b1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos(w0));
+    let b2 = (a + 1.0) - (a - 1.0) * cos(w0) - 2.0 * sqrt(a) * alpha;
+    let cb: Int = k * 5;
+    s_co[cb] = a0 / b0;
+    s_co[cb + 1] = a1 / b0;
+    s_co[cb + 2] = a2 / b0;
+    s_co[cb + 3] = -b1 / b0;
+    s_co[cb + 4] = -b2 / b0;
+}
+
+// --- compressor ---
+function fnCompPreprocess(ch) {
+    let fy = s_cFbYL;
+    if (ch >= 0.5) fy = s_cFbYR;
+    let sc = fnBq(fy, 4.0 * ch);
+    if (ch < 0.5) s_cScL = sc;
+    else s_cScR = sc;
+
+    let s1 = fnBq(sc, 4.0 * ch + 1.0);
+    let s2 = fnBq(s1, 4.0 * ch + 2.0);
+    let sat = 2.778890 - (1.667 - s2 * 0.313) * (1.667 - s2 * 0.313);
+
+    let gr = s_cFbGrL;
+    if (ch >= 0.5) gr = s_cFbGrR;
+    return (1.0 - gr) * sat + gr * sc;
+}
+
+function fnDynRelease(gr, maxRelMs) {
+    let x = 7.0 * (gr - 1.0);
+    let x2 = x * x;
+    let x4 = x2 * x2;
+    let y = (1680.0 + x * 840.0 + x2 * 180.0 + x2 * x * 20.0 + x4) / (1680.0 - x * 840.0 + x2 * 180.0 - x2 * x * 20.0 + x4);
+    let ms = maximum(y * maxRelMs, 30.0);
+    return 1.0 - 2.0 * pi / (2.0 * pi + maximum(samplerate(), 1.0) * ms / 1000.0);
+}
+
+function fnCompFeedbackGr(sc, ch) {
+    let grLo = s_cFbGrLoL;
+    let grHi = s_cFbGrHiL;
+    let gr1Lo = s_cGr1LoL;
+    let gr1Hi = s_cGr1HiL;
+    let arLo = s_cArLoL;
+    let arHi = s_cArHiL;
+    let xo1 = s_cXo1L;
+    let xo2 = s_cXo2L;
+    if (ch >= 0.5) {
+        grLo = s_cFbGrLoR; grHi = s_cFbGrHiR;
+        gr1Lo = s_cGr1LoR; gr1Hi = s_cGr1HiR;
+        arLo = s_cArLoR; arHi = s_cArHiR;
+        xo1 = s_cXo1R; xo2 = s_cXo2R;
+    }
+
+    xo1 = fnApply1(xo1, sc, s_cXoK);
+    xo2 = fnApply1(xo2, xo1, s_cXoK);
+    let scLo = xo2;
+    let scHi = sc - scLo;
+
+    gr1Lo = fnApply1(gr1Lo, grLo * grLo, s_cGr1K);
+    gr1Hi = fnApply1(gr1Hi, grHi * grHi, s_cGr1K);
+
+    let gLo = sqrt(gr1Lo);
+    let gHi = sqrt(gr1Hi);
+
+    let relLo = fnDynRelease(gLo, (2.0 - grHi) * 14750.0);
+    let relHi = fnDynRelease(gHi, 14750.0);
+
+    let lvlLo = abs(scLo);
+    let lvlHi = abs(scHi);
+
+    let kLo = relLo;
+    if (lvlLo > arLo) kLo = s_cAtkLoK;
+    let kHi = relHi;
+    if (lvlHi > arHi) kHi = s_cAtkHiK;
+
+    arLo = lvlLo + kLo * (arLo - lvlLo);
+    arHi = lvlHi + kHi * (arHi - lvlHi);
+
+    let c1 = s_cComp1L;
+    let c2 = s_cComp2L;
+    let c3 = s_cComp3L;
+    if (ch >= 0.5) {
+        c1 = s_cComp1R; c2 = s_cComp2R; c3 = s_cComp3R;
+    }
+
+    grLo = minimum(c2 / (arLo + c3) + c1, 1.0);
+    grHi = minimum(c2 / (arHi + c3) + c1, 1.0);
+
+    if (ch < 0.5) {
+        s_cFbGrLoL = grLo; s_cFbGrHiL = grHi;
+        s_cArLoL = arLo; s_cArHiL = arHi;
+        s_cGr1LoL = gr1Lo; s_cGr1HiL = gr1Hi;
+        s_cXo1L = xo1; s_cXo2L = xo2;
+    } else {
+        s_cFbGrLoR = grLo; s_cFbGrHiR = grHi;
+        s_cArLoR = arLo; s_cArHiR = arHi;
+        s_cGr1LoR = gr1Lo; s_cGr1HiR = gr1Hi;
+        s_cXo1R = xo1; s_cXo2R = xo2;
+    }
+
+    return sqrt((grLo * grLo + grHi * grHi) * 0.5);
+}
+
+function fnCompProcess(x, scThis, scThat, ch) {
+    if (s_link >= 0.5) scThis = sqrt((scThis * scThis + scThat * scThat) * 0.5);
+    let fbGr = fnCompFeedbackGr(scThis, ch);
+    if (ch < 0.5) s_cFbGrL = fbGr;
+    else s_cFbGrR = fbGr;
+    let g = fnBq(fbGr, 3.0 + 4.0 * ch) * x;
+    if (ch < 0.5) s_cFbYL = g;
+    else s_cFbYR = g;
+    return g;
+}
+
+// --- saturator ---
+function fnEmphasis(ch) {
+    let b0 = s_eB0L; let b1 = s_eB1L; let b2 = s_eB2L; let b3 = s_eB3L;
+    let b4 = s_eB4L; let b5 = s_eB5L; let b6 = s_eB6L; let b7 = s_eB7L;
+    if (ch >= 0.5) {
+        b0 = s_eB0R; b1 = s_eB1R; b2 = s_eB2R; b3 = s_eB3R;
+        b4 = s_eB4R; b5 = s_eB5R; b6 = s_eB6R; b7 = s_eB7R;
+    }
+    b1 = b1 * 0.99886 + b0 * 0.0555179;
+    b2 = b2 * 0.99332 + b0 * 0.0750759;
+    b3 = b3 * 0.969 + b0 * 0.153852;
+    b4 = b4 * 0.8665 + b0 * 0.310486;
+    b5 = b5 * 0.55 + b0 * 0.532952;
+    b6 = b6 * -0.7616 + b0 * 0.016898;
+    let y = b1 + b2 + b3 + b4 + b5 + b6 + b7 + b0 * 0.5362;
+    b7 = b0 * 0.115926;
+    if (ch < 0.5) {
+        s_eB1L = b1; s_eB2L = b2; s_eB3L = b3; s_eB4L = b4;
+        s_eB5L = b5; s_eB6L = b6; s_eB7L = b7;
+    } else {
+        s_eB1R = b1; s_eB2R = b2; s_eB3R = b3; s_eB4R = b4;
+        s_eB5R = b5; s_eB6R = b6; s_eB7R = b7;
+    }
+    return y;
+}
+
+function fnSatPreprocess(sc, ch) {
+    let fbGr = s_sFbGrL;
+    let mixS = s_sMixL;
+    if (ch >= 0.5) { fbGr = s_sFbGrR; mixS = s_sMixR; }
+
+    if (s_sTrafoOn >= 0.5) {
+        // the source writes b0 from x first
+        if (ch < 0.5) s_eB0L = sc;
+        else s_eB0R = sc;
+        let em = fnEmphasis(ch);
+        em = sc * 0.9 + em * 0.1;
+        let mix = 1.0 - fbGr;
+        mixS = fnApply1(mixS, mix * mix, s_sMixK);
+        mix = sqrt(mixS);
+        sc = sc * (1.0 - mix) + em * mix;
+    }
+
+    let xo1 = s_sXo1L;
+    let xo2 = s_sXo2L;
+    let rLo = s_sSumLoL;
+    let rHi = s_sSumHiL;
+    if (ch >= 0.5) {
+        xo1 = s_sXo1R; xo2 = s_sXo2R;
+        rLo = s_sSumLoR; rHi = s_sSumHiR;
+    }
+
+    xo1 = fnApply1(xo1, sc, s_sXoK);
+    xo2 = fnApply1(xo2, xo1, s_sXoK);
+    let scLo = xo2;
+    let scHi = sc - scLo;
+
+    rLo = fnApply1(rLo, scLo * scLo, s_sRmsK);
+    rHi = fnApply1(rHi, scHi * scHi, s_sRmsK);
+
+    if (ch < 0.5) {
+        s_sXo1L = xo1; s_sXo2L = xo2;
+        s_sSumLoL = rLo; s_sSumHiL = rHi;
+        s_sRmsLoL = sqrt(rLo); s_sRmsHiL = sqrt(rHi);
+        s_sMixL = mixS;
+    } else {
+        s_sXo1R = xo1; s_sXo2R = xo2;
+        s_sSumLoR = rLo; s_sSumHiR = rHi;
+        s_sRmsLoR = sqrt(rLo); s_sRmsHiR = sqrt(rHi);
+        s_sMixR = mixS;
+    }
+}
+
+function fnFastTanh(x) {
+    let x2 = x * x;
+    return ((((x2 + 378.0) * x2 + 17325.0) * x2 + 135135.0) * x) / (((x2 * 28.0 + 3150.0) * x2 + 62370.0) * x2 + 135135.0);
+}
+
+function fnSatPostprocess(x, ch) {
+    let rLo = s_sRmsLoL;
+    let rHi = s_sRmsHiL;
+    let fbGr = s_sFbGrL;
+    let hf = s_sHfL;
+    let hx1 = s_sHpfX1L;
+    let hy1 = s_sHpfY1L;
+    let br1 = s_sBril1L;
+    let br2 = s_sBril2L;
+    if (ch >= 0.5) {
+        rLo = s_sRmsLoR; rHi = s_sRmsHiR;
+        fbGr = s_sFbGrR; hf = s_sHfR;
+        hx1 = s_sHpfX1R; hy1 = s_sHpfY1R;
+        br1 = s_sBril1R; br2 = s_sBril2R;
+    }
+
+    let xLo = rLo * 4.0;
+    let xHi = rHi * 4.0;
+    let yLo = fnFastTanh(xLo);
+    let yHi = fnFastTanh(xHi);
+    let grLo = yLo / (xLo + 1.0e-18);
+    let grHi = yHi / (xHi + 1.0e-18);
+
+    fbGr = (grLo + grHi) * 0.5;
+    let gr = fnBq(fbGr, 8.0 + 2.0 * ch);
+    let y = x * gr;
+
+    if (s_sTrafoOn >= 0.5) {
+        let delta = y - hf;
+        delta = clamp(delta, -0.5, 0.5);
+        hf += delta;
+        y = hf;
+    }
+
+    let xx = clamp(y * 2.0, -3.722950, 3.352580);
+    y = (((xx * 9.0) + 5.0) * xx - 337.0) * xx * -0.00277778;
+    y *= 0.5;
+
+    let ampFb = y;
+
+    hy1 = (y - hx1) + s_sHpfK * hy1;
+    hx1 = y;
+    y = hy1;
+
+    br1 = fnApply1(br1, y, s_sBrilK);
+    br2 = fnApply1(br2, br1, s_sBrilK);
+    let brLo = br2;
+    let brHi = y - brLo;
+    y = brLo + brHi * s_sBrilAmp;
+
+    if (ch < 0.5) {
+        s_sFbGrL = fbGr;
+        s_sHfL = hf;
+        s_sHpfX1L = hx1; s_sHpfY1L = hy1;
+        s_sBril1L = br1; s_sBril2L = br2;
+        s_sAmpFbL = ampFb;
+    } else {
+        s_sFbGrR = fbGr;
+        s_sHfR = hf;
+        s_sHpfX1R = hx1; s_sHpfY1R = hy1;
+        s_sBril1R = br1; s_sBril2R = br2;
+        s_sAmpFbR = ampFb;
+    }
+    return y;
+}
+
+function fnTrafo(x, thatX, ch) {
+    if (s_sTrafoOn < 0.5) return x;
+    let y = x + fnBq(thatX, 9.0 + 2.0 * ch) * 0.001;
+
+    // all-pass phase rotator
+    let c1 = s_t1L; let c2 = s_t2L; let c3 = s_t3L; let c4 = s_t4L;
+    let c5 = s_t5L; let c6 = s_t6L; let c7 = s_t7L; let c8 = s_t8L;
+    if (ch >= 0.5) {
+        c1 = s_t1R; c2 = s_t2R; c3 = s_t3R; c4 = s_t4R;
+        c5 = s_t5R; c6 = s_t6R; c7 = s_t7R; c8 = s_t8R;
+    }
+    c1 = c2 - 0.9698154 * y;
+    c2 = y + 0.9698154 * c1;
+    c3 = c4 - 0.9698154 * c1;
+    c4 = c1 + 0.9698154 * c3;
+    c5 = c6 - 0.9698154 * c3;
+    c6 = c3 + 0.9698154 * c5;
+    c7 = c8 - 0.9698154 * c5;
+    c8 = c5 + 0.9698154 * c7;
+    if (ch < 0.5) {
+        s_t1L = c1; s_t2L = c2; s_t3L = c3; s_t4L = c4;
+        s_t5L = c5; s_t6L = c6; s_t7L = c7; s_t8L = c8;
+    } else {
+        s_t1R = c1; s_t2R = c2; s_t3R = c3; s_t4R = c4;
+        s_t5R = c5; s_t6R = c6; s_t7R = c7; s_t8R = c8;
+    }
+    return c7;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) {
+        // compressor
+        fnBqLs(415.0 / sr, 0.5, 0.25, 1.0);
+        fnBqLs(415.0 / sr, 0.5, 0.25, 5.0);
+        fnBqHs(1500.0 / sr, 0.49, 3.802, 2.0);
+        fnBqHs(1500.0 / sr, 0.49, 3.802, 6.0);
+        fnBqLp(500.0 / sr, 0.72, 3.0);
+        fnBqLp(500.0 / sr, 0.72, 7.0);
+        s_cXoK = fnF1Lp(2611.0 / sr);
+        s_cGr1K = fnF1Lp(15.9 / sr);
+        s_cAtkLoK = 1.0 - 2.0 * pi / (2.0 * pi + sr * 21.55685 / 1000.0);
+        s_cAtkHiK = 1.0 - 2.0 * pi / (2.0 * pi + sr * 10.77843 / 1000.0);
+
+        // saturator
+        s_sMixK = fnF1Lp(32.0 / sr);
+        s_sXoK = fnF1Lp(2175.0 / sr);
+        fnBqLp(3000.0 / sr, 0.72, 8.0);
+        fnBqLp(3000.0 / sr, 0.72, 10.0);
+        fnBqHs(7000.0 / sr, 0.5, 10.0, 9.0);
+        fnBqHs(7000.0 / sr, 0.5, 10.0, 11.0);
+
+        let hpfK = (trafo >= 0.5) ? 19.0 : 6.4;
+        let hfFreq = hpfK / sr;
+        let cw = cos(2.0 * pi * hfFreq);
+        s_sHpfK = cw - sqrt(cw * cw - 4.0 * cw + 3.0);
+
+        s_sr = sr;
+    }
+
+    // emphasis high-pass corner
+    let emphK = emphasis / 100.0;
+    fnBqHp((40.0 + emphK * 120.0) / sr, 0.7071067811865476, 0.0);
+    fnBqHp((40.0 + emphK * 120.0) / sr, 0.7071067811865476, 4.0);
+
+    // compressor curve
+    let cdB = comp;
+    let c1 = fnDbToK(-0.9 * cdB - 24.843803);
+    let c2 = fnDbToK(cdB * cdB * 0.00727 - 1.0138 * cdB + 0.602056);
+    let c3 = c2 / (1.0 - c1) - fnDbToK(-cdB);
+    s_cComp1L = c1; s_cComp2L = c2; s_cComp3L = c3;
+    s_cComp1R = c1; s_cComp2R = c2; s_cComp3R = c3;
+
+    // saturator bias / amp / brilliance
+    let biasK = bias / 100.0;
+    let tauMs = biasK * (2.283 - 7.000) + 7.000;
+    s_sRmsK = fnF1Lp((1000.0 / tauMs) / sr);
+
+    let ampK = amp / 100.0;
+    let brK = brilliance / 100.0;
+    s_sBrilAmp = fnDbToK(brK * 18.0);
+    let brFreq = 34540.0 * ampK * ampK * ampK - 57183.0 * ampK * ampK + 3594.0 * ampK + 24504.0;
+    s_sBrilK = fnF1Lp(brFreq / sr);
+    s_sAmpK = ampK;
+    s_sTrafoOn = trafo;
+
+    s_inGain = fnDbToK(input);
+    s_outGain = fnDbToK(output);
+    s_dry = dry_mix / 100.0;
+    s_link = stereo_link;
+}
+
+let inL0 = in1;
+let inR0 = in2;
+let xL = inL0 * s_inGain + s_sAmpFbL * s_sAmpK;
+let xR = inR0 * s_inGain + s_sAmpFbR * s_sAmpK;
+
+let preL = fnCompPreprocess(0.0);
+let preR = fnCompPreprocess(1.0);
+xL = fnCompProcess(xL, preL, preR, 0.0);
+xR = fnCompProcess(xR, preR, preL, 1.0);
+
+fnSatPreprocess(s_cScL, 0.0);
+fnSatPreprocess(s_cScR, 1.0);
+
+if (s_link >= 0.5) {
+    let lo = sqrt((s_sRmsLoL * s_sRmsLoL + s_sRmsLoR * s_sRmsLoR) * 0.5);
+    let hi = sqrt((s_sRmsHiL * s_sRmsHiL + s_sRmsHiR * s_sRmsHiR) * 0.5);
+    s_sRmsLoL = lo;
+    s_sRmsHiL = hi;
+    s_sRmsLoR = lo;
+    s_sRmsHiR = hi;
+}
+
+xL = fnSatPostprocess(xL, 0.0);
+xR = fnSatPostprocess(xR, 1.0);
+
+let yL = inL0 * s_dry + (1.0 - s_dry) * xL * s_outGain;
+let yR = inR0 * s_dry + (1.0 - s_dry) * xR * s_outGain;
+
+out1 = fnTrafo(yL, yR, 0.0);
+out2 = fnTrafo(yR, out1, 1.0);
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

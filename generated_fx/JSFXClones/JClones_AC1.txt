@@ -1,0 +1,97 @@
+/* JClones_AC1 — RNBO codebox~ port of JClones_AC1 (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_AC1.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. A console-channel emulation:
+ * a soft quadratic knee with a curve-dependent shape constant, optional
+ * automatic makeup gain, and an AC101 mode that swaps the knee for a 1/x
+ * limiter curve above unity. Stereo Link runs the two channels from a shared
+ * detector. GUI and the gain-reduction meter are omitted.
+ */
+// Input Gain (dB)
+@param({ min: -24, max: 24 }) input_gain = 0;
+// Output Gain (dB)
+@param({ min: -24, max: 24 }) output_gain = 0;
+// Auto Gain
+@param({ enum: ["off", "on"] }) auto_gain = 0;
+// Drive (dB)
+@param({ min: -12, max: 12 }) drive = 0;
+// Comp
+@param({ min: 1, max: 10 }) comp = 2;
+// Attack (ms)
+@param({ min: 0.1, max: 10 }) attack_ms = 0.5;
+// Release (ms)
+@param({ min: 10, max: 1000 }) release_ms = 500;
+// Stereo Link
+@param({ enum: ["off", "on"] }) stereo_link = 1;
+// Mode
+@param({ enum: ["AC1", "AC101"] }) mode = 0;
+@state s_levelL = 0;
+@state s_levelR = 0;
+@state s_inGain = 1;
+@state s_outGain = 1;
+@state s_drive = 1;
+@state s_a = 0.75;
+@state s_attK = 1;
+@state s_relK = 1;
+@state s_ac101 = 0;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnProcess(x, xLevel, ch) {
+    let lvl = 0.0;
+    if (ch < 0.5) lvl = s_levelL;
+    else lvl = s_levelR;
+
+    let k = s_relK;
+    if (xLevel > lvl) k = s_attK;
+    lvl += (xLevel - lvl) * k;
+    if (ch < 0.5) s_levelL = lvl;
+    else s_levelR = lvl;
+
+    xLevel = lvl * s_inGain * s_drive;
+    x *= s_inGain;
+
+    let t = xLevel * xLevel * 0.5 - 1.0;
+    let gr = t * t + xLevel * s_a;
+    if (gr > 1.0) gr = 1.0;
+    if (s_ac101 >= 0.5) {
+        if (xLevel > 1.0) gr = 1.0 / (xLevel + 0.00001) * (s_a + 0.25);
+    }
+    return x * gr * s_outGain;
+}
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    let ig = pow(10.0, input_gain / 20.0);
+    let og = pow(10.0, output_gain / 20.0);
+    let dr = pow(10.0, drive / 20.0);
+    let cv = comp;
+    let a = 0.75 - (cv - 1.0) * 0.075;
+    if (auto_gain >= 0.5) {
+        og *= minimum((1.0 / (1.0 - (cv - 1.0) * 0.075)) / ig, 16.0);
+    }
+    s_inGain = ig;
+    s_outGain = og;
+    s_drive = dr;
+    s_a = a;
+    s_ac101 = mode;
+    if (sr != s_sr) {
+        s_attK = 1.0 / (sr * attack_ms * 0.001);
+        s_relK = 1.0 / (sr * release_ms * 0.001);
+        s_sr = sr;
+    }
+}
+
+let levelL = abs(in1);
+let levelR = abs(in2);
+if (stereo_link >= 0.5) {
+    levelL = maximum(levelL, levelR);
+    levelR = levelL;
+}
+
+out1 = fnProcess(in1, levelL, 0.0);
+out2 = fnProcess(in2, levelR, 1.0);
+
+frame++;
+if (frame >= vectorsize()) frame = 0;

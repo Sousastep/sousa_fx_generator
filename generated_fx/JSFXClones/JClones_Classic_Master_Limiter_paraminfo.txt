@@ -1,0 +1,34 @@
+JClones_Classic_Master_Limiter — RNBO codebox~ port of the JClones
+Classic_Master_Limiter JSFX
+Source: repos/JSFXClones/jsfx/JClones_Classic_Master_Limiter.jsfx (MIT, JClones)
+
+What it is: a one-knob look-ahead master limiter from a freeware plug-in whose
+developer disappeared in 2007. Threshold is the only control. Four cascaded
+gain-reduction passes chase each other: a "reference" and a "dynamic" envelope
+per stage, a 100 Hz low-pass smoothing the attack of the first pass, a cubed
+soft-knee second pass, a 3 ms look-ahead third pass with its own hold time, and
+a final catch pass. The result is a dense but fairly clean ceiling.
+
+Parameters:
+
+- Threshold — dB, -20 .. 0, default -5
+  The ceiling: the level the limiter aims to hold. Linear in dB, 0.1 dB steps.
+  Any sample above it is reduced; the internal master trim is fixed at
+  0.977/threshold, i.e. 0.977 linear at the output, so the hard ceiling is about
+  -0.2 dBFS regardless of where the threshold sits. Lower thresholds limit more
+  and sound louder; -5 dB is a reasonable mastering position, below -12 dB it
+  becomes an obvious brickwall.
+
+There is no release, attack, ratio or output control — they are all fixed
+internally (0.5 ms reference release, 1 ms dynamic stage, 500 ms secondary
+release, 3 ms look-ahead, 8000/s hold recovery). That is the whole point of the
+original.
+
+Port notes:
+- The source reports 3 ms of look-ahead latency to the host via `pdc_delay`.
+  RNBO codebox~ has no plug-in delay compensation, so the 3 ms delay is real
+  latency: the output is 3 ms behind the input (about 132 samples at 44.1 kHz).
+  Blend or align it in the Max patcher if you are running it in parallel.
+- The 3 ms delay line is implemented with two RNBO `delay` objects; the length
+  is `floor(sampleRate*0.003 + 0.5)` samples, exactly as the source computes it.
+- The gain-reduction meter (`ext_gr_meter` / `hold_max_gr`) was dropped.

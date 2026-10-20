@@ -1,0 +1,129 @@
+/* JClones_LMC1 — RNBO codebox~ port of JClones_LMC1 (JSFX).
+ * Source: repos/JSFXClones/jsfx/JClones_LMC1.jsfx
+ * Copyright (c) JClones — MIT License (see repos/JSFXClones/NOTICE).
+ * in1/in2: stereo in; out1/out2: stereo out.
+ * Original slider units, ranges and defaults kept. The console talkback
+ * compressor: a 340 Hz / 4 kHz band-pass sidechain with fixed 2.5 ms attack and
+ * 25 ms release driving a fixed -40 dB / 13 dB ratio, applied as feedback gain.
+ * The "Box Tone" switch bypasses the band-pass on the audio path only. GUI and
+ * the gain-reduction meter are omitted.
+ */
+// Input (dB)
+@param({ min: -20, max: 20 }) input = 0;
+// Threshold (dB)
+@param({ min: -48, max: 0 }) threshold = 0;
+// Output (dB)
+@param({ min: -20, max: 20 }) output = 0;
+// Box Tone
+@param({ enum: ["off", "on"] }) box_tone = 1;
+@state s_f1L = 0;
+@state s_f2L = 0;
+@state s_arL = 0;
+@state s_grL = 1;
+@state s_f1R = 0;
+@state s_f2R = 0;
+@state s_arR = 0;
+@state s_grR = 1;
+@state s_f1k1 = 0;
+@state s_f1k2 = 0;
+@state s_f2k1 = 0;
+@state s_f2k2 = 0;
+@state s_attK = 0;
+@state s_relK = 0;
+@state s_inGain = 1;
+@state s_outGain = 1;
+@state s_sr = 0;
+@state frame: Int = 0;
+
+function fnToDb(x) {
+    return 20.0 * log10(maximum(x, 1.0e-30));
+}
+
+function fnProcess(x, ch) {
+    let f1s = 0.0;
+    let f2s = 0.0;
+    let ar = 0.0;
+    let gr = 1.0;
+    if (ch < 0.5) {
+        f1s = s_f1L;
+        f2s = s_f2L;
+        ar = s_arL;
+        gr = s_grL;
+    } else {
+        f1s = s_f1R;
+        f2s = s_f2R;
+        ar = s_arR;
+        gr = s_grR;
+    }
+
+    // band-pass sidechain (two cascaded one-poles)
+    let nextS = s_f1k1 * f1s + x;
+    let y = (nextS - f1s) * s_f1k2;
+    f1s = nextS;
+    nextS = s_f2k1 * f2s + y;
+    y = nextS * s_f2k2;
+    f2s = nextS;
+
+    y *= gr;
+    let outSample = x * gr;
+    if (s_boxTone >= 0.5) outSample = y;
+
+    // RMS detector on the band-passed signal
+    let y2 = y * y;
+    let k = s_relK;
+    if (y2 > ar) k = s_attK;
+    ar += (y2 - ar) * k;
+
+    let levelLin = sqrt(ar);
+    if (levelLin < 1.0e-8) levelLin = 1.0e-8;
+    let levelDb = fnToDb(levelLin);
+
+    let grDb = 0.0;
+    if (levelDb < s_threshold + 13.0) {
+        if (levelDb >= s_threshold) grDb = (levelDb - s_threshold) * (0.0 - 3.0769231);
+    } else {
+        grDb = -40.0;
+    }
+    gr = pow(10.0, grDb / 20.0);
+
+    if (ch < 0.5) {
+        s_f1L = f1s;
+        s_f2L = f2s;
+        s_arL = ar;
+        s_grL = gr;
+    } else {
+        s_f1R = f1s;
+        s_f2R = f2s;
+        s_arR = ar;
+        s_grR = gr;
+    }
+    return outSample;
+}
+
+@state s_threshold = 0;
+@state s_boxTone = 1;
+
+if (frame == 0) {
+    let sr = maximum(samplerate(), 1.0);
+    if (sr != s_sr) {
+        let w0 = exp(340.0 / sr * -2.0 * pi);
+        s_f1k1 = w0;
+        s_f1k2 = (w0 + 1.0) * 0.5;
+        w0 = exp(4000.0 / sr * -2.0 * pi);
+        s_f2k1 = w0;
+        s_f2k2 = 1.0 - w0;
+        s_attK = 1.0 / (0.0025 * sr);
+        s_relK = 1.0 / (0.025 * sr);
+        s_sr = sr;
+    }
+    s_inGain = pow(10.0, input / 20.0);
+    s_outGain = pow(10.0, output / 20.0);
+    s_threshold = threshold;
+    s_boxTone = box_tone;
+}
+
+out1 = fnProcess(in1 * s_inGain, 0.0) * s_outGain;
+out2 = fnProcess(in2 * s_inGain, 1.0) * s_outGain;
+
+frame++;
+if (frame >= vectorsize()) frame = 0;
