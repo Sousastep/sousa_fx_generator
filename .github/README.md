@@ -4,190 +4,54 @@
 
 </div>
 
+
 <a href="#studio_microphone-introduction">![rainbow](./media/rainbow.png)</a>
 
 # :studio_microphone: Introduction
 
-This repository contains ai-generated rnbo codebox~ effects made from academic papers and open source effects.
+This repository contains ai-generated rnbo codebox~ effects that I intend to incorporate into [SousaFX-rnbo](https://github.com/Sousastep/SousaFX-rnbo).
 
-<a href="#books-documentation">![rainbow](./media/rainbow.png)</a>
+papers_library/ contains academic PDFs (mainly DAFx) that are downloaded with tools/fetch_papers.py and converted into a corpus with tools/build_corpus.py that can be explored with tools/search.py
+
+repos/ contains some choice submodules of open-source fx to port from.
+
+generated_fx/ contains the ai fx. A prompt such as "Convert JSFXClones" would likely work just fine, given the AGENTS.md file. The fx are verified with tools/verify_codebox.js
+
+generated_maxpat/ and generated_v8ui/ are gitignored and generated from the scripts in tools/generate_maxpats.py and tools/generate_v8uis.py
+
+main_test_patcher.maxpat loads the generated maxpats and v8uis via file_list.html in jweb. Star ratings in jweb are saved to ratings.json
+
+The gh-pages branch contains one html file that displays data from generated_fx/ and ratings.json via https://aifx.sousastep.quest/ 
+
+If you find an effect useful, consider donating to whoever is cited as the originator :pray:
+
+
+<a href="#books-disclaimer">![rainbow](./media/rainbow.png)</a>
 
 # :books: Disclaimer
 
-sousa-fx-generator is an independent project unaffiliated with, 
-endorsed by, or sponsored by any of the companies or their respective trademarks.
+sousa_fx_generator is an independent project unaffiliated with, 
+endorsed by, or sponsored by any of the companies, authors, or their respective trademarks.
 
 All product names, trademarks, and registered trademarks mentioned or implied
-in the JClones project are the property of their respective owners. Any
+in sousa_fx_generator are the property of their respective owners. Any
 reference to commercial products is for descriptive purposes only and does
 not constitute an endorsement or affiliation.
 
-<a href="#control_knobs-effects">![rainbow](./media/rainbow.png)</a>
 
-# :control_knobs:
+<a href="#lock_with_ink_pen-licenses">![rainbow](./media/rainbow.png)</a>
 
-## Single-Purpose PD/FM Effects
-- 06 · asymmetric_delay_adfm = outstanding
-- 12 · adaa_chebyshev_wavefolder = excellent
-- 09 · pitch_tracked_comb_resonator = excellent
-- 11 · bode_ssb_freq_shifter = very nice
-- 07 · adaptive_split_sideband = very nice
-- 02 · allpass_disperser = nice
-- 10 · phasor_synced_comb_flanger = neat
-- 03 · coef_mod_allpass_pd = subtle air
-- 01 · harmonic_isolator = utility
-- 04 · hilbert_phasor_sync = utility?
-- 05 · phaseshaper_supersaw_tri = bad
-- 08 · suboctave_phase_ringmod = bad
+# :lock_with_ink_pen: Licenses
 
-## Performance Instruments
-- 18 · inst_harmonic_cannon_polybass = super cool
-- 13 · inst_riddim_wobble_titan = interesting
-- 14 · inst_metallic_comb_growler = interesting
-- 15 · inst_split_sideband_morph_synth = interesting
-- 16 · inst_phaseshaper_matrix_lead = bad
-- 17 · inst_cyber_tuba_tearout_engine = bad
+All fx generated from repos/ maintain their original license, of course.
 
-## Trackers, Analyzers & Front-End
-- 00 · tuba_freq_tracker = outstanding
-- 00b · tuba_transient_valve_detector = bad
-- 00c · tuba_4harmonic_IFT_analyzer = utility
-- 00d · tuba_4op_modfm_resynthesizer = extreme
+With respect to any other code in this repo, in place of a legal notice, here is a blessing:
 
-## Day 2 - PD/FM, chorus, compressor/limiter 
-- barberpole_comb_ssb_flanger.maxpat 			** Excellent metallic sounds.
-- modal_heterodyne_inverter_dist.maxpat 		** super cool synth sound
-- heterodyne_pd_shaper.maxpat 					** great ring mod sound
-- retuned_exp_fm_ltz.maxpat 					** great synth sound when dialed in
+> May you do good and not evil.
 
-- chorus_bbd_blep_clock_matrix.maxpat 			** sounds excellent
-- chorus_univibe_optical_throb.maxpat 			** sounds very nice
-- chorus_leslie_doppler_sdf.maxpat 				** super nice with all params maxed
+> May you find forgiveness for yourself and forgive others.
 
-- comp_crest_flux_autoballistic.maxpat 			** excellent compressor, needs gain staging
-- comp_ssl_g384_bus_vca.maxpat 					** classic glue buss compressor? sounds excellent, might be the best. low cpu. "Widely known in the music industry as the ultimate "mix bus glue" machine", 2026 paper
-- comp_fairchild_6386_varimu.maxpat 			** sounds great and auto-gain stages well. makes the tuba sound better, has character
-
-- even_odd_harmonic_comb_splitter.maxpat 		* very good, does it well
-
-- buchla259_parallel_wavefolder.maxpat 			* very nice saturator
-- nonlinear_ladder_allpass.maxpat 				* very nice bright tone
-- vector_phaseshaper_lissajous.maxpat 			* strong distortion, can't turn it down, sounds good though
-- wave_pulse_phase_modulator.maxpat 			* same as above
-
-- chorus_bbd_compander_juno.maxpat 				* sounds very good
-- chorus_multiscale_random_env.maxpat 			* sounds quite good while dialed in
-- chorus_velvet_noise_ensemble.maxpat 			* sounds quite nice in small amounts
-
-- comp_ldr_microdynamics_shaper.maxpat 			* very transparent compressor, sounds useful
-- limiter_allpass_phase_antiklip.maxpat 		* decent, interesting limiter
-
-- comp_multiband_ldr_ott_inflator.maxpat 		same as above but multiband
-- amfm_hilbert_transcolorifer.maxpat 			super weird..
-- brassifier_shock_propagator.maxpat 			works and is neat but not particularly useful
-- chorus_psychoacoustic_hyperbolic_itd.maxpat 	sounds fine
-- chorus_erb_allpass_reson_deco.maxpat 			subtle
-- chorus_hammond_scanner_lc.maxpat 				subtle chorus
-- spectral_delay_chirp_filter.maxpat 			could be really good with some tweaking
-- loopback_fm_tvdl.maxpat 						sounds good but not as good as others
-- comp_la2a_t4b_opto_leveler.maxpat 			fine compressor i guess
-- chorus_dissonance_roughness_bank.maxpat 		sounds ok
-- fbam_delay_comb_operator.maxpat 				ok
-- cm_allpass_chain_synth.maxpat 				hmm
-- chorus_supersaw_waveform_animator.maxpat 		meh
-- chorus_amfm_hilbert_chorifer.maxpat 			badly gurgly
-- deformed_circle_map_fbfm.maxpat 				still sounds broken
-- modfm_pulse_saw_formant.maxpat 				still sounds broken
-- quadrature_chebyshev_shaper.maxpat  			works, uninteresting
-- heterodyne_fof_resonator.maxpat 				useless dirt
-- limiter_hamalainen_orderstat_peak.maxpat 		sounds good but ceiling does nothing when drive is 0? 
+> May you share freely, never taking more than you give.
 
 
-## Day 3 - vowel, formant, vocal, lowpass 
-- filter_crybaby_fasel_inductor_wah.txt 		* good old fashoned wah
-- filter_universal_comb_q_resonator.txt 		* sounds quite good as far as basic combs go
-- filter_ventricular_metal_scream_formant.txt 	* sounds really good
-- filter_dispersive_allpass_comb_resonator.txt  ok comb reso
-- filter_ems_vcs3_diode_ladder.txt 				ok LPF
-- filter_huovilainen_1plus4_moog_ladder.txt 	ok moog
-- filter_heterodyne_ephasor_formant.txt 		no
-- filter_hilbert_amfm_wahifer_vocal.txt 		meh
-- filter_photosonic_3sine_fir_vowel_comb.txt  	ok
-- filter_vplpc_vocal_effort_formant.txt 		ok
-- filter_sygyt_biphonic_overtone_vocal.txt 		hm
-- filter_time_varying_sync_comb.txt 			hm loud
-- filter_voicer_2d_vowel_talkbox.txt 			interesting
-- filter_kelly_lochbaum_vocal_tract.txt 		interesting but not useful
-- filter_buchla292_vactrol_lowpass_gate.txt 	broken, no sound
-- filter_edp_wasp_cmos_ota_svf.txt 				broken, no sound
-- filter_korg_ms50_diode_ring_sallen_key.txt 	broken, no sound
-
-## previous ports
-
-### Clipper
-
-- ADClip9 - super nice
-- ClipOnly3 - useful
-- ZOutputStage - for drums maybe
-- RCInflator2_Ideal
-
-
-### Limiter
-
-- mrelwood_Sky_is_the_limit_3v2_BETA
-
-
-### Compressor
-
-- mrelwood_GoldComp4 - excellent gain staging, higher cpu
-- Density3
-- Dynamics3
-- ButterComp2
-- PurestSquish
-- VariMu
-
-
-### Sidechain Bass Comp
-
-- mrelwood_BandbAss - sounds very good
-
-
-### 4-band Gate
-
-- mrelwood_GateIQ
-
-
-### Reverb
-
-- TakeCare
-- Ultralight2
-- VerbTiny
-- VerbThic
-- mrelwood_Chmahastic_Reverb_2
-
-
-### Tape
-
-- TapeHack2
-- ToTape9
-
-
-### mixbus
-
-- X2Buss
-- ChannelX
-
-
-### Crossover Filter
-
-- mrelwood_HP-LP_LR4_Filters
-
-
-### Acid Filter
-
-- ZAcidLowpass
-
-
-## Dither
-
-- PaulWide
+<a href="#studio_microphone-introduction">![rainbow](./media/rainbow.png)</a>
