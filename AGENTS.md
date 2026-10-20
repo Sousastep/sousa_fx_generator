@@ -69,7 +69,7 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 | `main_test_patcher.maxpat` | The human's audition rig. Never modify. The human is an expert maxer. Tell them what to change in main_test_patcher.maxpat and they will change it.  |
 | `file_list.js` | v8ui tree browser over `generated_maxpat/`; click → full path out |
 | `file_list.html` | html tree browser over `generated_maxpat/` |
-| `.github/README.md` | human-facing readme carrying the **listening verdicts** per effect |
+| `.github/README.md` | handwritten human-facing readme |
 | `logs/prompts.md` | the prompt history that built this repo (git-ignored) |
 | `logs/freebuff-chat-*.md` | session logs; the later one has a **"Root Causes Found & Fixed"** section worth reading before debugging DSP |
 | `papers_library/` | multi-corpus library (`DAFx`, `WASPAA`, `SMC`, `NIME`, `ISMIR`, `ICASSP`, `ICMC`, `AES`, `arXiv`): `index/`, `originals/`, `papers/`, `manifests/` (git-ignored except `README.md`; `DAFx-proceedings` is a compat symlink) |
