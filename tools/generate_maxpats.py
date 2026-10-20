@@ -14,7 +14,7 @@ The generated ``.maxpat`` mirrors the structure of the hand-made examples in
 ``generated_maxpat/``: a top level demo patcher that wires ``receive~ inN`` /
 ``send~ outN`` pairs into a single embedded ``rnbo~`` object, whose nested
 ``rnbo`` patcher holds the ``codebox~`` plus per-parameter
-``comment`` / ``loadmess`` / ``number`` / ``setparam`` controls.
+``comment`` / ``param`` / ``number`` / ``setparam`` controls.
 
 Usage::
 
@@ -51,7 +51,7 @@ APP_VERSION = {
 RNBO_VERSION = "1.4.5"
 DEFAULT_FONT = "Lato"
 CODEBOX_VERSION_ID = 527839773
-LOADMESS_VERSION_ID = -361086158
+PARAM_VERSION_ID = -1093178486
 SETPARAM_VERSION_ID = 1197449671
 IN_VERSION_ID = -1654556303
 OUT_VERSION_ID = 1989326771
@@ -65,7 +65,7 @@ IO_BOX_H = 23.0
 IO_X_MIN = 30.0
 IO_X_MAX = 605.0
 PARAM_X0 = 700.0
-PARAM_COL_STEP = 190.0
+PARAM_COL_GAP = 24.0
 PARAM_ROW_STEP = 115.0
 PARAM_Y0 = 65.0
 PARAM_BOX_W = 175.0
@@ -145,74 +145,396 @@ NOCACHE_ARGNAME = {
     "defaultValue": "false",
 }
 
-LOADMESS_RNBOINFO = {
-    "needsInstanceInfo": 1,
-    "argnames": {
-        "input": {
-            "attrOrProp": 1,
-            "digest": "Bang to trigger message.",
-            "isalias": 0,
-            "aliases": [],
-            "settable": 0,
-            "attachable": 0,
-            "isparam": 0,
-            "deprecated": 0,
-            "touched": 0,
-            "inlet": 1,
-            "type": "bang",
+def param_rnboinfo(default_str: str, min_str: str, max_str: str) -> dict[str, Any]:
+    return {
+        "needsInstanceInfo": 1,
+        "argnames": {
+            "value": {
+                "attrOrProp": 2,
+                "digest": "Set initial value",
+                "defaultarg": 2,
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "number",
+                "defaultValue": default_str,
+                "label": "Initial Value",
+                "displayorder": 3,
+            },
+            "normalizedvalue": {
+                "attrOrProp": 1,
+                "digest": "Set value normalized. ",
+                "isalias": 0,
+                "aliases": [],
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "inlet": 1,
+                "type": "number",
+            },
+            "reset": {
+                "attrOrProp": 1,
+                "digest": "Reset param to initial value",
+                "isalias": 0,
+                "aliases": [],
+                "attachable": 1,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "bang",
+            },
+            "normalized": {
+                "attrOrProp": 1,
+                "digest": "Normalized parameter value.",
+                "isalias": 0,
+                "aliases": [],
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "outlet": 1,
+                "type": "number",
+            },
+            "name": {
+                "attrOrProp": 2,
+                "digest": "Name of the parameter",
+                "defaultarg": 1,
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "symbol",
+                "label": "Parameter Name",
+                "mandatory": 1,
+            },
+            "enum": {
+                "attrOrProp": 2,
+                "digest": "Use an enumerated output",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "list",
+                "label": "Enum Values",
+                "displayorder": 6,
+            },
+            "minimum": {
+                "attrOrProp": 2,
+                "digest": "Minimum value",
+                "isalias": 0,
+                "aliases": ["min"],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "number",
+                "defaultValue": min_str,
+                "label": "Minimum",
+                "displayorder": 1,
+            },
+            "min": {
+                "attrOrProp": 2,
+                "digest": "Minimum value",
+                "isalias": 1,
+                "aliasOf": "minimum",
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "number",
+                "defaultValue": min_str,
+                "label": "Minimum",
+                "displayorder": 1,
+            },
+            "maximum": {
+                "attrOrProp": 2,
+                "digest": "Maximum value",
+                "isalias": 0,
+                "aliases": ["max"],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "number",
+                "defaultValue": max_str,
+                "label": "Maximum",
+                "displayorder": 2,
+            },
+            "max": {
+                "attrOrProp": 2,
+                "digest": "Maximum value",
+                "isalias": 1,
+                "aliasOf": "maximum",
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "number",
+                "defaultValue": max_str,
+                "label": "Maximum",
+                "displayorder": 2,
+            },
+            "exponent": {
+                "attrOrProp": 2,
+                "digest": "Scale values exponentially",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "number",
+                "defaultValue": "1",
+                "label": "Exponent",
+                "displayorder": 7,
+            },
+            "steps": {
+                "attrOrProp": 2,
+                "digest": "Divide the output into a number of discrete steps",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "number",
+                "defaultValue": "0",
+                "label": "Steps",
+                "displayorder": 8,
+            },
+            "displayName": {
+                "attrOrProp": 2,
+                "digest": "DEPRECATED: Use the lower case 'displayname' instead",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 1,
+                "touched": 0,
+                "type": "symbol",
+                "label": "Display Name",
+            },
+            "displayname": {
+                "attrOrProp": 2,
+                "digest": "A more readable name for the parameter in an external RNBO target",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "symbol",
+                "defaultValue": "",
+                "label": "Display Name",
+                "displayorder": 14,
+            },
+            "unit": {
+                "attrOrProp": 2,
+                "digest": "A symbol to describe the unit of the parameter in an external RNBO target",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "symbol",
+                "defaultValue": "",
+                "label": "Unit",
+                "displayorder": 15,
+            },
+            "tonormalized": {
+                "attrOrProp": 2,
+                "digest": "Converts a real parameter value to its normalized form",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "symbol",
+                "label": "To Normalized Expression",
+                "displayorder": 10,
+            },
+            "fromnormalized": {
+                "attrOrProp": 2,
+                "digest": "Converts a normalized parameter into its actual parameter value",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "symbol",
+                "label": "From Normalized Expression",
+                "displayorder": 9,
+            },
+            "order": {
+                "attrOrProp": 2,
+                "digest": "Order in which initial parameter values will be sent out on patcher load. The order can be numeric or symbolic ('first' and 'last')",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "symbol",
+                "defaultValue": "0",
+                "label": "Restore Order",
+                "displayorder": 12,
+            },
+            "displayorder": {
+                "attrOrProp": 2,
+                "digest": "Order in which parameters will show up in a list of all parameters. The order can be numeric or symbolic ('first' and 'last')",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "symbol",
+                "defaultValue": "-",
+                "label": "Display Order",
+                "displayorder": 13,
+            },
+            "sendinit": {
+                "attrOrProp": 2,
+                "digest": "Send initial value",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "bool",
+                "defaultValue": "true",
+                "label": "Send Init",
+                "displayorder": 4,
+            },
+            "ctlin": {
+                "attrOrProp": 2,
+                "digest": "MIDI controller number to control this parameter.",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "number",
+                "defaultValue": "-1",
+                "label": "MIDI Controller Number.",
+                "displayorder": 16,
+            },
+            "meta": {
+                "attrOrProp": 2,
+                "digest": "A JSON formatted string containing metadata for use by the exported code",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "symbol",
+                "defaultValue": "",
+                "label": "Metadata",
+                "displayorder": 17,
+            },
+            "nopreset": {
+                "attrOrProp": 2,
+                "digest": "Do not add this value to the preset [DEPRECATED - USE @preset 0 instead].",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 1,
+                "touched": 0,
+                "type": "bool",
+                "defaultValue": "false",
+            },
+            "preset": {
+                "attrOrProp": 2,
+                "digest": "Add this value to the preset.",
+                "isalias": 0,
+                "aliases": [],
+                "settable": 1,
+                "attachable": 0,
+                "isparam": 0,
+                "deprecated": 0,
+                "touched": 0,
+                "type": "bool",
+                "defaultValue": "true",
+                "label": "Include In Preset",
+                "displayorder": 11,
+            },
         },
-        "message": {
-            "attrOrProp": 1,
-            "digest": "Message when patcher is loaded.",
-            "defaultarg": 1,
-            "isalias": 0,
-            "aliases": [],
-            "settable": 1,
-            "attachable": 0,
-            "isparam": 0,
-            "deprecated": 0,
-            "touched": 0,
-            "outlet": 1,
-            "type": "list",
-            "defaultValue": "",
-        },
-        "startupbang": {
-            "attrOrProp": 1,
-            "digest": "startupbang",
-            "isalias": 0,
-            "aliases": [],
-            "attachable": 0,
-            "isparam": 0,
-            "deprecated": 0,
-            "touched": 0,
-            "type": "bang",
-        },
-    },
-    "inputs": [
-        {
-            "name": "input",
-            "type": "bang",
-            "digest": "Bang to trigger message.",
-            "hot": 1,
-            "docked": 0,
-        }
-    ],
-    "outputs": [
-        {
-            "name": "message",
-            "type": "list",
-            "digest": "Message when patcher is loaded.",
-            "defaultarg": 1,
-            "docked": 0,
-        }
-    ],
-    "helpname": "loadmess",
-    "aliasOf": "loadmess",
-    "classname": "loadmess",
-    "operator": 0,
-    "versionId": LOADMESS_VERSION_ID,
-    "changesPatcherIO": 0,
-}
+        "inputs": [
+            {
+                "name": "value",
+                "type": "number",
+                "digest": "Parameter value",
+                "defaultarg": 2,
+                "hot": 1,
+                "docked": 0,
+            },
+            {
+                "name": "normalizedvalue",
+                "type": "number",
+                "digest": "Set value normalized. ",
+                "docked": 0,
+            },
+        ],
+        "outputs": [
+            {
+                "name": "value",
+                "type": "number",
+                "digest": "Parameter value",
+                "defaultarg": 2,
+                "hot": 1,
+                "docked": 0,
+            },
+            {
+                "name": "normalized",
+                "type": "number",
+                "digest": "Normalized parameter value.",
+                "docked": 0,
+            },
+        ],
+        "helpname": "param",
+        "aliasOf": "param",
+        "classname": "param",
+        "operator": 0,
+        "versionId": PARAM_VERSION_ID,
+        "changesPatcherIO": 0,
+    }
 
 SETPARAM_RNBOINFO = {
     "needsInstanceInfo": 1,
@@ -436,14 +758,23 @@ NUM_RE = r"(-?(?:\d+\.\d*|\.\d+|\d+))"
 @dataclass
 class Param:
     name: str
-    minimum: float | None
-    maximum: float | None
+    minimum: float
+    maximum: float
     default: float
     steps: float | None = None
+    enum_values: list[str] | None = None
 
     @property
     def default_str(self) -> str:
         return fmt_num(self.default)
+
+    @property
+    def min_str(self) -> str:
+        return fmt_num(self.minimum)
+
+    @property
+    def max_str(self) -> str:
+        return fmt_num(self.maximum)
 
 
 @dataclass
@@ -478,6 +809,14 @@ def _find_float(pattern: str, text: str) -> float | None:
     return float(m.group(1)) if m else None
 
 
+def _find_enum(text: str) -> list[str] | None:
+    m = re.search(r"enum\s*:\s*\[([^\]]*)\]", text)
+    if not m:
+        return None
+    items = re.findall(r'"([^"]*)"|\'([^\']*)\'', m.group(1))
+    return [a or b for a, b in items] if items else None
+
+
 def parse_effect(txt_path: str, paraminfo_path: str | None) -> Effect:
     code = open(txt_path, encoding="utf-8").read()
     name = os.path.splitext(os.path.basename(txt_path))[0]
@@ -492,13 +831,21 @@ def parse_effect(txt_path: str, paraminfo_path: str | None) -> Effect:
     for m in PARAM_RE.finditer(code):
         opts = m.group("opts")
         default = float(m.group("default").strip())
+        enum_vals = _find_enum(opts)
+        minimum = _find_float(r"min\s*:\s*" + NUM_RE, opts)
+        maximum = _find_float(r"max\s*:\s*" + NUM_RE, opts)
+        if minimum is None:
+            minimum = 0.0
+        if maximum is None:
+            maximum = float(len(enum_vals) - 1) if enum_vals and len(enum_vals) > 1 else 1.0
         params.append(
             Param(
                 name=m.group("name"),
-                minimum=_find_float(r"min\s*:\s*" + NUM_RE, opts),
-                maximum=_find_float(r"max\s*:\s*" + NUM_RE, opts),
+                minimum=minimum,
+                maximum=maximum,
                 default=default,
                 steps=_find_float(r"steps\s*:\s*" + NUM_RE, opts),
+                enum_values=enum_vals,
             )
         )
 
@@ -722,17 +1069,41 @@ def build_nested_patcher(effect: Effect) -> dict[str, Any]:
             }
         )
 
-    # --- parameter controls (comment / loadmess / number / setparam) --------
+    # --- parameter controls (comment / param / number / setparam) -----------
+    num_cols = 4
+    param_texts: list[str] = []
+    param_widths: list[float] = []
+    col_widths = [PARAM_BOX_W] * num_cols
+
     for k, p in enumerate(effect.params):
-        col = k % 4
-        row = k // 4
-        x = PARAM_X0 + PARAM_COL_STEP * col
+        col = k % num_cols
+        p_text = f"param {p.name} {p.default_str} @min {p.min_str} @max {p.max_str}"
+        p_w = float(max(PARAM_BOX_W, round(len(p_text) * 6.5) + 18.0))
+        s_text = f"setparam {p.name}"
+        s_w = float(max(PARAM_BOX_W, round(len(s_text) * 6.5) + 18.0))
+        c_w = float(max(PARAM_BOX_W, round(len(p.name) * 6.5) + 14.0))
+        param_texts.append(p_text)
+        param_widths.append(p_w)
+        col_widths[col] = max(col_widths[col], p_w, s_w, c_w)
+
+    col_x: list[float] = []
+    cur_x = PARAM_X0
+    for col in range(num_cols):
+        col_x.append(cur_x)
+        cur_x += col_widths[col] + PARAM_COL_GAP
+
+    for k, p in enumerate(effect.params):
+        col = k % num_cols
+        row = k // num_cols
+        x = col_x[col]
         y = PARAM_Y0 + PARAM_ROW_STEP * row
+        param_box_w = param_widths[k]
+        param_text = param_texts[k]
 
         comment_id = ids.next()
         number_id = ids.next()
         setparam_id = ids.next()
-        loadmess_id = ids.next()
+        param_id = ids.next()
 
         boxes.append(
             {
@@ -791,23 +1162,38 @@ def build_nested_patcher(effect: Effect) -> dict[str, Any]:
         boxes.append(
             {
                 "box": {
-                    "id": loadmess_id,
+                    "id": param_id,
                     "maxclass": "newobj",
-                    "numinlets": 1,
-                    "numoutlets": 1,
-                    "outlettype": [""],
-                    "patching_rect": [x, y + 27.0, PARAM_BOX_W, 23.0],
-                    "rnbo_classname": "loadmess",
+                    "numinlets": 2,
+                    "numoutlets": 2,
+                    "outlettype": ["", ""],
+                    "patching_rect": [x, y + 27.0, param_box_w, 23.0],
+                    "rnbo_classname": "param",
+                    "rnbo_extra_attributes": {
+                        "ctlin": 0.0,
+                        "displayname": "",
+                        "displayorder": "-",
+                        "enum": "",
+                        "exponent": 1.0,
+                        "fromnormalized": "",
+                        "meta": "",
+                        "order": "0",
+                        "preset": 1,
+                        "sendinit": 1,
+                        "steps": 0.0,
+                        "tonormalized": "",
+                        "unit": "",
+                    },
                     "rnbo_serial": k + 1,
-                    "rnbo_uniqueid": f"load_{p.name}",
-                    "rnboinfo": LOADMESS_RNBOINFO,
-                    "text": f"loadmess {p.default_str}",
-                    "varname": f"load_{p.name}",
+                    "rnbo_uniqueid": p.name,
+                    "rnboinfo": param_rnboinfo(p.default_str, p.min_str, p.max_str),
+                    "text": param_text,
+                    "varname": p.name,
                 }
             }
         )
 
-        link(loadmess_id, 0, number_id, 0)
+        link(param_id, 0, number_id, 0)
         link(number_id, 0, setparam_id, 0)
         link(setparam_id, 0, codebox_id, 0)
 
@@ -842,7 +1228,12 @@ def build_nested_patcher(effect: Effect) -> dict[str, Any]:
             }
         )
 
-    max_param_x = PARAM_X0 + PARAM_COL_STEP * min(len(effect.params), 4)
+    used_cols = min(len(effect.params), num_cols)
+    max_param_x = (
+        col_x[used_cols - 1] + col_widths[used_cols - 1] + 40.0
+        if used_cols > 0
+        else PARAM_X0
+    )
     return {
         "fileversion": 1,
         "appversion": dict(APP_VERSION),
