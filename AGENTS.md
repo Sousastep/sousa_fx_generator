@@ -68,7 +68,7 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 | `docs/max_v8ui/` | `v8ui` examples (e.g. `pattr_sliders.js`) |
 | `main_test_patcher.maxpat` | The human's audition rig. Never modify. The human is an expert maxer. Tell them what to change in main_test_patcher.maxpat and they will change it.  |
 | `file_list.js` | v8ui tree browser over `generated_maxpat/`; click → full path out |
-| `file_list.html` | html tree browser over `generated_maxpat/` |
+| `file_list.html` | jweb html tree browser over `generated_maxpat/`; source of truth for the gh-pages page (see §2.1) |
 | `.github/README.md` | handwritten human-facing readme |
 | `logs/prompts.md` | the prompt history that built this repo (git-ignored) |
 | `logs/freebuff-chat-*.md` | session logs; the later one has a **"Root Causes Found & Fixed"** section worth reading before debugging DSP |
@@ -76,7 +76,23 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 
 | Branch | What it is |
 | --- | --- |
-| gh-pages | html tree browser over `generated_maxpat/` |
+| gh-pages | static deploy of `index.html`, the `file_list.html` browser adapted for the public site (see §2.1) |
+
+### 2.1 `gh-pages:index.html` vs. `main:file_list.html`
+
+One browser, two hosts. `gh-pages:index.html` is `main:file_list.html` plus the
+extras below and is otherwise identical, so **shared browser changes belong in
+both files**; page-only extras go in the gh-pages copy only.
+
+- `file_list.html` runs in Max's jweb: the patcher feeds it the tree
+  (`init_data`) and ratings, and its stars write ratings back through the
+  `rating` / `save_ratings` inlets — editable.
+- `index.html` runs on the public site: it builds the tree from the GitHub API
+  and reads `main`'s `ratings.json`; ratings are **display-only**
+  (`var ratingsEditable = isMax`, so row stars are static spans, the 1–5 keys are
+  inert, and the old `localStorage` rating override is ignored/cleared).
+- Page-only extras: header GitHub link back to the repo, and the footer
+  disclaimer under the effect list explaining what the star ratings mean.
 
 ---
 
