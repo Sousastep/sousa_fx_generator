@@ -1,0 +1,152 @@
+// ============================================================================
+// comp_fairchild_6386_varimu_mono.txt
+// Mono (single-channel) Fairchild 670 / 6386 Remote-Cutoff Triode Variable-Mu
+// Feedback Limiter — same model as comp_fairchild_6386_varimu without the
+// Lateral/Vertical matrix: one sidechain, one 6386 stage.
+// Based on Raffensperger (DAFx-2012, "Toward a Wave Digital Filter Model of
+// the Fairchild 670 Limiter", Eqs. 1, 10-14, Fig. 8, Table 3)
+// Standalone Mono RNBO codebox~ Effect (in1, in3, in4 -> out1, out2)
+// in1: mono in; in3: pitch (Hz); in4: mod (Hz); out1/out2: processed mono
+// ============================================================================
+
+@param({ min: 0.0, max: 24.0 }) drive_db = 8.0;
+@param({ min: 0.0, max: 1.0 }) ac_thresh = 0.55;
+@param({ min: 0.0, max: 1.0 }) dc_knee = 0.25;
+@param({ min: 1.0, max: 6.0 }) tc_mode = 5.0;
+@param({ min: 0.0, max: 1.0 }) tube_harmonics = 0.5;
+@param({ min: 0.0, max: 1.0 }) mix = 1.0;
+
+// Feedback output state (unit delay breaking feedback loop, Eq. 13)
+@state y_prev = 0.0;
+
+// 3-Capacitor sidechain network states (CT fast, CU medium, CV slow memory, Fig. 8)
+@state v_ct = 0.0;
+@state v_cu = 0.0;
+@state v_cv = 0.0;
+
+// Transformer DC-blocking & high-frequency inductive roll-off states
+@state dc_x = 0.0;
+@state dc_y = 0.0;
+@state hf_lp = 0.0;
+
+// Helper: Raffensperger Eq. 10 Class-B sidechain crossover nonlinearity
+function fairchild_stage1(vpot: number, phi_dc_prime: number): number {
+	let a = clamp(vpot - phi_dc_prime, -40.0, 40.0);
+	let b = clamp(-vpot - phi_dc_prime, -40.0, 40.0);
+	let num = log(1.0 + exp(a));
+	let den = log(1.0 + exp(b));
+	return num - den;
+}
+
+// Helper: Push-Pull 6386 remote-cutoff variable-mu triode amplifier (Raffensperger Sec. 2 & 6)
+// Models remote-cutoff variable transconductance and balanced odd-order harmonic saturation
+// that increases with gain reduction (Fig. 2, Fig. 12, Fig. 13)
+function varimu_6386_amp(x: number, v_sc: number, harm_amt: number): number {
+	// Remote-cutoff 6386 transconductance curve: smooth variable-mu attenuation as grid bias goes negative
+	let gr_gain = pow(1.0 + 0.14 * v_sc + 0.008 * v_sc * v_sc, -1.35);
+	// Raffensperger Sec. 6 Fig. 13: balanced push-pull cancels even harmonics, while 3rd-harmonic
+	// distortion rises from -21 dB at light GR to -14 dB under heavy GR
+	let gr_depth = clamp(1.0 - gr_gain, 0.0, 1.0);
+	let u = x * gr_gain;
+	let drive_sat = 1.0 + harm_amt * (0.45 + 1.85 * gr_depth);
+	let u_driven = u * drive_sat;
+	// Balanced push-pull soft-saturation (pure odd harmonics) normalized for unity small-signal gain
+	let sat_wave = tanh(u_driven) / drive_sat;
+	// Add subtle 3rd-order triode curvature before transformer ceiling
+	let k3 = harm_amt * (0.08 + 0.22 * gr_depth);
+	return tanh(sat_wave + k3 * sat_wave * sat_wave * sat_wave);
+}
+
+let sr_safe = maximum(samplerate(), 8000.0);
+let dt = 1.0 / sr_safe;
+
+let dry = in1;
+
+// Input transformer step gain
+let in_gain = dbtoa(clamp(drive_db, 0.0, 24.0));
+let x = dry * in_gain;
+
+// Feedback signal from previous sample
+let fb = y_prev;
+
+// Sidechain AC and DC threshold controls (Raffensperger Eq. 10, Fig. 9 & 12)
+// phi_dc sets Class-B crossover bias (soft vari-mu knee at 0 -> hard limiting knee at 1)
+// phi_ac scales the sidechain input potentiometer V_pot
+let phi_ac = clamp(ac_thresh, 0.0, 1.0);
+let phi_dc = clamp(dc_knee, 0.0, 1.0);
+let phi_dc_prime = 1.2 + 9.5 * phi_dc;
+let sc_scale = (1.5 + 22.0 * pow(phi_ac, 1.25)) * (1.0 + 0.55 * phi_dc);
+
+// Stage 1-3 sidechain voltage and germanium diode-bridge current (Raffensperger Eqs. 10-14)
+let v_st1 = fairchild_stage1(fb * sc_scale, phi_dc_prime);
+let v_st3 = clamp(8.4 * v_st1, -100.0, 100.0);
+let v_diff = abs(v_st3) - v_ct;
+let i_nom = 0.008 * log(1.0 + exp(clamp(4.0 * v_diff - 1.2, -20.0, 30.0)));
+let i_sc = clamp(i_nom, 0.0, 0.5);
+
+// Fairchild 670 6-position Time Constant network (Fig. 8 & Table 3)
+// Exact RC values from Table 3:
+//   Pos 1: CT=2uF, RT=51.9k  (tau_att=0.2ms, tau_rel=104ms)
+//   Pos 2: CT=2uF, RT=149.9k (tau_att=0.2ms, tau_rel=300ms)
+//   Pos 3: CT=4uF, RT=220k   (tau_att=0.4ms, tau_rel=880ms)
+//   Pos 4: CT=8uF, RT=220k   (tau_att=0.8ms, tau_rel=1760ms)
+//   Pos 5: CT=4uF, RT=220k, CU=8uF, RU=100k (dual program-dependent release)
+//   Pos 6: CT=2uF, RT=220k, CU=8uF, RU=100k, CV=20uF, RV=100k (triple program-dependent release)
+let sel = clamp(tc_mode, 1.0, 6.0);
+let c_t = 2.0;
+let tau_rel_fast = 0.104;
+if (sel < 1.5) {
+	c_t = 2.0;
+	tau_rel_fast = 0.104;
+} else if (sel < 2.5) {
+	c_t = 2.0;
+	tau_rel_fast = 0.300;
+} else if (sel < 3.5) {
+	c_t = 4.0;
+	tau_rel_fast = 0.880;
+} else if (sel < 4.5) {
+	c_t = 8.0;
+	tau_rel_fast = 1.760;
+} else if (sel < 5.5) {
+	c_t = 4.0;
+	tau_rel_fast = 0.450;
+} else {
+	c_t = 2.0;
+	tau_rel_fast = 0.250;
+}
+
+// Fast attack charging rate (scaled by 1 / CT)
+let charge_scale = 2800.0 / c_t;
+let g_cu = (sel >= 4.5) ? (1.0 / (0.10 * c_t)) : 0.0;
+let g_cv = (sel >= 5.5) ? (1.0 / (0.10 * c_t)) : 0.0;
+
+// Update 3-capacitor network (Fig. 8)
+let d_ct = i_sc * charge_scale - (v_ct / tau_rel_fast) - g_cu * (v_ct - v_cu) - g_cv * (v_ct - v_cv);
+v_ct = clamp(v_ct + dt * d_ct, 0.0, 60.0);
+let d_cu = (sel >= 4.5) ? ((v_ct - v_cu) / 0.80) : (0.0 - v_cu / 1.50);
+v_cu = clamp(v_cu + dt * d_cu, 0.0, 60.0);
+let d_cv = (sel >= 5.5) ? ((v_ct - v_cv) / 2.00) : (0.0 - v_cv / 3.00);
+v_cv = clamp(v_cv + dt * d_cv, 0.0, 60.0);
+
+// Apply 6386 Push-Pull Variable-Mu Amplifier
+let harm = clamp(tube_harmonics, 0.0, 1.0);
+let wet = varimu_6386_amp(x, v_ct, harm);
+
+// Store feedback output state
+y_prev = wet;
+
+// Output transformer gentle high-frequency silk & DC block (using lowercase pi!)
+let g_hf = 1.0 - exp(-2.0 * pi * 16500.0 / sr_safe);
+hf_lp = hf_lp + g_hf * (wet - hf_lp);
+
+// Automatic makeup / output level trim so output stays controlled across drive & threshold
+let out_comp = (1.0 + 0.55 * phi_ac) / pow(in_gain, 0.45 + 0.35 * (1.0 - phi_ac));
+let proc = hf_lp * out_comp;
+
+dc_y = proc - dc_x + 0.9992 * dc_y;
+dc_x = proc;
+
+let m = clamp(mix, 0.0, 1.0);
+let out_mono = (1.0 - m) * dry + m * dc_y;
+out1 = out_mono;
+out2 = out_mono;
