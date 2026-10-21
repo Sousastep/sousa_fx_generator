@@ -7,3 +7,6 @@
 [submodule "repos/JSFX"]
 	path = repos/JSFX
 	url = https://github.com/ReaTeam/JSFX.git
+[submodule "repos/midiChordController"]
+	path = repos/midiChordController
+	url = https://github.com/adam26davidson/midiChordController.git
