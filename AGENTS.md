@@ -284,6 +284,10 @@ right-aligned values, and `pattr` hooks. Each parameter change emits
 `<scripting_name>/<param_name> <value>`, where the scripting name is set at
 runtime by sending `scripting_name <name>` to the `v8ui` object's inlet 1 (a
 bare `scripting_name` clears it, which falls back to `<param_name> <value>`).
+The header title defaults to the effect name and is overridden by the `v8ui`
+object's `jsarguments` attribute when present (`@jsarguments 1 My Title`, or
+Inspector → javascript arguments); a leading object/script name in the list is
+ignored, and the remaining arguments are joined with spaces.
 
 `search.py` / `build_corpus.py` / `fetch_papers.py` — the multi-corpus library lives in
 `papers_library/` (with `DAFx-proceedings` symlinked to it for compatibility).

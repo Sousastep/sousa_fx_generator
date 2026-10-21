@@ -9,7 +9,8 @@ Each effect in ``generated_fx/<category>/<name>.txt`` becomes
 The generated ``v8ui`` script displays:
   - The effect name centered in a header above the sliders, plus a clickable
     info (``i``) icon in the header that pops up a Max text window displaying
-    the effect's ``<name>_paraminfo.txt`` documentation.
+    the effect's ``<name>_paraminfo.txt`` documentation. The title can be
+    overridden per instance with the v8ui's ``jsarguments`` attribute.
   - One horizontal slider per row, with the parameter name left-aligned
     inside the slider and the current parameter value right-aligned inside
     the slider.
@@ -52,6 +53,13 @@ V8UI_TEMPLATE = """\
 
     Click the "i" icon in the top-right of the header to pop up a Max text
     window displaying {paraminfo_filename}.
+
+    The header title defaults to the effect name and can be overridden with the
+    v8ui's jsarguments attribute, e.g. in the object box
+        v8ui @filename foo.js @jsarguments 1 My Title
+    or via Inspector > javascript arguments. The arguments are joined with
+    spaces to form the title; a leading object/script name ("v8ui", "foo.js",
+    ...) is ignored so both conventions work.
 */
 
 autowatch = 1;
@@ -61,7 +69,10 @@ outlets = 1;
 // Routing prefix, set at runtime with:  scripting_name my_fx
 var SCRIPTING_NAME = "";
 
-var EFFECT_NAME = {effect_name_json};
+// Title shown in the header (and in the paraminfo window title). Overridden by
+// the v8ui's jsarguments attribute when arguments are present.
+var DEFAULT_EFFECT_NAME = {effect_name_json};
+var EFFECT_NAME = resolveEffectName();
 var PARAMINFO_PATH = {paraminfo_rel_json};
 var PARAMINFO_FILENAME = {paraminfo_filename_json};
 var PARAMINFO_TEXT = {paraminfo_text_json};
@@ -79,6 +90,36 @@ for (var i = 0; i < NUM_SLIDERS; i++) {{
 var activeSlider = -1;
 var infoHighlight = false;
 var infoTextObj = null;
+
+// ---------------------------------------------------------------
+// Title
+// ---------------------------------------------------------------
+
+// jsarguments[0] may hold the object or script name instead of a title
+// (the v8 object puts the filename there), so drop a leading token that
+// looks like one and join whatever is left with spaces.
+function looksLikeObjectName(s) {{
+    var t = String(s).toLowerCase();
+    return t === "v8ui" || t === "v8" || t === "js" || t === "jsui" || /[.]js$/.test(t);
+}}
+
+function resolveEffectName() {{
+    var args = (typeof jsarguments !== "undefined" && jsarguments) ? jsarguments : [];
+    var parts = [];
+    for (var i = 0; i < args.length; i++) {{
+        var s = String(args[i]);
+        if (!s.length) continue;
+        if (parts.length === 0 && looksLikeObjectName(s)) continue;
+        parts.push(s);
+    }}
+    return parts.length > 0 ? parts.join(" ") : DEFAULT_EFFECT_NAME;
+}}
+
+// Pick up jsarguments even if the attribute was set after the script loaded.
+function loadbang() {{
+    EFFECT_NAME = resolveEffectName();
+    mgraphics.redraw();
+}}
 
 mgraphics.init();
 mgraphics.relative_coords = 0;
