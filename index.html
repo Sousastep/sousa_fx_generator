@@ -180,6 +180,10 @@
     padding: 0;
   }
 
+  .star-btn.star-static {
+    cursor: default;
+  }
+
   .star-svg {
     width: 12px;
     height: 12px;
@@ -203,6 +207,41 @@
   }
   .chip.active .star-svg.hollow polygon {
     stroke: #fff;
+  }
+
+  #gh-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    color: #9ea6b8;
+    text-decoration: none;
+    flex-shrink: 0;
+  }
+
+  #gh-link:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+  }
+
+  #gh-link svg {
+    width: 13px;
+    height: 13px;
+    display: block;
+    fill: currentColor;
+  }
+
+  /* Rating disclaimer footer, pinned below the effect list */
+  #list-footer {
+    flex-shrink: 0;
+    padding: 7px 10px 8px;
+    border-top: 1px solid var(--border-hairline);
+    background: var(--bg-header);
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.4;
   }
 
   /* Search bar (shown on wide/static views or toggled) */
@@ -456,6 +495,9 @@
         <button id="unrated-chip" class="chip" title="Show unrated effects only"></button>
         <button id="all-chip" class="chip active" title="Show all effects">All</button>
         <div id="filter-stars" title="Filter by minimum star rating"></div>
+        <a id="gh-link" href="https://github.com/Sousastep/sousa_fx_generator" target="_blank" rel="noopener" title="Sousastep/sousa_fx_generator on GitHub" aria-label="View source on GitHub">
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        </a>
       </div>
     </div>
     <div id="search-bar">
@@ -463,6 +505,7 @@
       <button id="search-clear" title="Clear search">&#x2715;</button>
     </div>
     <div id="rows-container"></div>
+    <div id="list-footer">Star ratings are based on how useful the effect may be for me personally. They do not reflect on the companies, authors, or their respective trademarks.</div>
   </div>
 
   <div id="detail-pane">
@@ -486,6 +529,9 @@
 
   // ---------- Environment & GitHub config ----------
   var isMax = typeof window.max !== "undefined" && window.max !== null;
+  // On the published page ratings are display-only (sourced from ratings.json).
+  // Only the Max host can change them, via the "rating" inlet.
+  var ratingsEditable = isMax;
   var GH_OWNER = "Sousastep";
   var GH_REPO = "sousa_fx_generator";
   var GH_BRANCH = "main";
@@ -640,13 +686,8 @@
 
   // ---------- Persistence ----------
   function saveRatings() {
-    if (isMax) {
-      window.max.outlet("save_ratings", JSON.stringify(ratings));
-    } else {
-      try {
-        localStorage.setItem("sousa_fx_ratings_override", JSON.stringify(ratings));
-      } catch (e) {}
-    }
+    if (!ratingsEditable) return; // display-only on the page
+    window.max.outlet("save_ratings", JSON.stringify(ratings));
   }
 
   function saveStateNow() {
@@ -1033,24 +1074,29 @@
 
           for (var s = 1; s <= 5; s++) {
             (function (starNum) {
-              var sBtn = document.createElement("button");
-              sBtn.className = "star-btn";
-              sBtn.title = "Rate " + starNum + "/5";
+              var sBtn;
+              if (ratingsEditable) {
+                sBtn = document.createElement("button");
+                sBtn.className = "star-btn";
+                sBtn.title = "Rate " + starNum + "/5";
+                sBtn.addEventListener("mouseenter", function () {
+                  hovPath = row.path;
+                  hovStar = starNum;
+                  updateRowStars(starsWrap, row.path);
+                });
+                sBtn.addEventListener("mouseleave", function () {
+                  hovStar = 0;
+                  updateRowStars(starsWrap, row.path);
+                });
+                sBtn.addEventListener("click", function (ev) {
+                  ev.stopPropagation();
+                  setRating(row, starNum);
+                });
+              } else {
+                sBtn = document.createElement("span");
+                sBtn.className = "star-btn star-static";
+              }
               sBtn.appendChild(createStarSvg(starNum <= shown, true));
-
-              sBtn.addEventListener("mouseenter", function () {
-                hovPath = row.path;
-                hovStar = starNum;
-                updateRowStars(starsWrap, row.path);
-              });
-              sBtn.addEventListener("mouseleave", function () {
-                hovStar = 0;
-                updateRowStars(starsWrap, row.path);
-              });
-              sBtn.addEventListener("click", function (ev) {
-                ev.stopPropagation();
-                setRating(row, starNum);
-              });
               starsWrap.appendChild(sBtn);
             })(s);
           }
@@ -1082,7 +1128,7 @@
 
   // ---------- Actions ----------
   function setRating(row, n) {
-    if (!row || !row.path) return;
+    if (!ratingsEditable || !row || !row.path) return;
     var key = ratingKeyForPath(row.path);
     var current = ratingOf(row.path);
     var next = (current === n) ? 0 : n;
@@ -1381,7 +1427,10 @@
       }
       return;
     }
-    if (action.indexOf("rate:") === 0) { rateSelected(Number(action.substring(5))); return; }
+    if (action.indexOf("rate:") === 0) {
+      if (ratingsEditable) rateSelected(Number(action.substring(5)));
+      return;
+    }
     if (action.indexOf("letter:") === 0) { jumpToLetter(action.substring(7)); return; }
   }
 
@@ -1584,16 +1633,10 @@
           if (v >= 1 && v <= 5) ratings[k] = v;
         }
 
-        // Merge any local browser rating overrides
+        // Ratings come only from the repo's ratings.json; the page cannot change
+        // them, so any previously saved local overrides are intentionally ignored.
         try {
-          var localOverride = localStorage.getItem("sousa_fx_ratings_override");
-          if (localOverride) {
-            var ov = JSON.parse(localOverride);
-            for (var ok in ov) {
-              var ovVal = parseInt(ov[ok], 10);
-              if (ovVal >= 1 && ovVal <= 5) ratings[ok] = ovVal;
-            }
-          }
+          localStorage.removeItem("sousa_fx_ratings_override");
         } catch (e) {}
 
         var dirMap = {};
