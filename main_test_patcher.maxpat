@@ -9,7 +9,7 @@
             "modernui": 1
         },
         "classnamespace": "box",
-        "rect": [ 34.0, 87.0, 2492.0, 1319.0 ],
+        "rect": [ 933.0, 122.0, 1306.0, 889.0 ],
         "openinpresentation": 1,
         "isolateaudio": 1,
         "boxes": [
@@ -324,7 +324,7 @@
             {
                 "box": {
                     "embed": 0,
-                    "filename": "01_harmonic_isolator.js",
+                    "filename": "chorus_bbd_blep_clock_matrix.js",
                     "id": "obj-31",
                     "maxclass": "v8ui",
                     "numinlets": 1,
@@ -335,7 +335,7 @@
                     "presentation": 1,
                     "presentation_rect": [ 10.0, 184.0, 239.0, 671.0 ],
                     "textfile": {
-                        "filename": "01_harmonic_isolator.js",
+                        "filename": "chorus_bbd_blep_clock_matrix.js",
                         "flags": 0,
                         "embed": 0,
                         "autowatch": 1
@@ -399,9 +399,8 @@
                     "numoutlets": 0,
                     "patching_rect": [ 100.0, 264.0, 150.0, 20.0 ],
                     "presentation": 1,
-                    "presentation_linecount": 2,
-                    "presentation_rect": [ 1112.0, 145.0, 106.0, 33.0 ],
-                    "text": "harmonic isolator LOUD"
+                    "presentation_rect": [ 1112.0, 145.0, 106.0, 20.0 ],
+                    "text": "harmonic isolator"
                 }
             },
             {
@@ -931,10 +930,10 @@
                 "box": {
                     "id": "obj-50",
                     "maxclass": "newobj",
-                    "numinlets": 2,
+                    "numinlets": 4,
                     "numoutlets": 0,
-                    "patching_rect": [ 822.0, 555.0, 55.0, 22.0 ],
-                    "text": "dac~ 3 4"
+                    "patching_rect": [ 808.0, 565.0, 75.0, 22.0 ],
+                    "text": "dac~ 1 2 3 4"
                 }
             },
             {
@@ -2945,7 +2944,7 @@
                     "lockeddragscroll": 0,
                     "lockedsize": 0,
                     "maxclass": "bpatcher",
-                    "name": "01_harmonic_isolator.maxpat",
+                    "name": "chorus_bbd_blep_clock_matrix.maxpat",
                     "numinlets": 0,
                     "numoutlets": 0,
                     "offset": [ 0.0, 0.0 ],
@@ -3415,6 +3414,7 @@
             }
         ],
         "parameters": {
+            "obj-21::obj-9": [ "rnbo~[1]", "rnbo~", 0 ],
             "obj-4": [ "rnbo~", "rnbo~", 0 ],
             "obj-51": [ "live.gain~", "dry", 0 ],
             "obj-53": [ "live.gain~[2]", "fx", 0 ],
