@@ -13,6 +13,16 @@
  *   3. cppcodegen                   C++ for the generated patcher
  *   4. clang++ -fsyntax-only        the generated C++ has to actually compile
  *
+ * Before stage 1 it also applies two static checks for traps that codebox
+ * accepts without a word, both reported with a line/column:
+ *
+ *   - a let/var/const, @state, @param, function name or function parameter
+ *     that shadows an RNBO numeric constant (phi, e, pi, twopi, ...) - every
+ *     read of it is silently replaced by the constant's literal
+ *   - a gap in the inlet/outlet numbering (in1, in2, in4 but no in3), which
+ *     leaves the patcher's in~/out~ connections pointing at nonexistent ports
+ *     and prints warnings in the Max console
+ *
  * Stage 1 catches everything codebox itself reports. Stages 2-4 catch the
  * quieter failures, for example a helper declared as `function f(buf, i)` that
  * is handed a FixedSampleArray: codebox types `buf` as a number and the C++
@@ -81,6 +91,27 @@ function loadCompiler(packageDir) {
 	return require(path.join(packageDir, "server/node_modules/@rnbo/xam"));
 }
 
+// Numeric constants registered in RNBO's operator table (pi, PI, e, E, phi, PHI,
+// twopi, sqrt2, ...). Declaring a local, @state, @param, or function parameter
+// with one of these names parses cleanly, but RNBO resolves every read to the
+// constant literal instead of the variable.
+function loadReservedConstants(packageDir) {
+	const reserved = new Map();
+	const opsPath = path.join(packageDir, "source/operators/simpleoperators.json");
+	if (fs.existsSync(opsPath)) {
+		const ops = JSON.parse(fs.readFileSync(opsPath, "utf8"));
+		for (const [key, op] of Object.entries(ops)) {
+			if (op && op.exprtext !== undefined && !isNaN(Number(op.exprtext))) {
+				const val = Number(op.exprtext);
+				reserved.set(key, val);
+				const aliases = Array.isArray(op.alias) ? op.alias : op.alias ? [op.alias] : [];
+				for (const alias of aliases) reserved.set(alias, val);
+			}
+		}
+	}
+	return reserved;
+}
+
 function hasClang() {
 	try {
 		execFileSync("clang++", ["--version"], { stdio: "pipe" });
@@ -127,37 +158,118 @@ function collectDocs(out) {
 // Checks
 // --------------------------------------------------------------------------- //
 
-// Strip line comments before counting in/out references so that prose in the
-// header comments cannot invent inlets. Good enough for IO counting: codebox
-// sources in this project do not use "//" inside string literals.
-function stripLineComments(source) {
+// Blank out comments before counting in/out references so that prose in the
+// header comments cannot invent inlets, without moving any byte: the blanks
+// keep the original offsets, so a reported error still points at the line the
+// user sees in Max. Good enough for these checks: codebox sources in this
+// project do not use "//" or "/*" inside string literals.
+function stripComments(source) {
+	const blank = (text) => text.replace(/[^\n]/g, " ");
 	return source
+		.replace(/\/\*[\s\S]*?\*\//g, (comment) => blank(comment))
 		.split("\n")
 		.map((line) => {
 			const comment = line.indexOf("//");
-			return comment === -1 ? line : line.slice(0, comment);
+			return comment === -1 ? line : line.slice(0, comment) + blank(line.slice(comment));
 		})
 		.join("\n");
 }
 
-function highestReference(source, pattern) {
-	let highest = 0;
+function collectReferences(source, pattern) {
+	const refs = new Set();
 	for (const match of source.matchAll(pattern)) {
-		highest = Math.max(highest, Number(match[1]));
+		refs.add(Number(match[1]));
 	}
-	return highest;
+	return refs;
 }
 
-function buildObjects(xam, source) {
-	const code = stripLineComments(source);
+function checkContiguousIO(code) {
+	for (const [prefix, pattern] of [["in", /\bin(\d+)\b/g], ["out", /\bout(\d+)\b/g]]) {
+		const refs = collectReferences(code, pattern);
+		const highest = refs.size ? Math.max(...refs) : 0;
+		const missing = [];
+		for (let i = 1; i <= highest; i++) {
+			if (!refs.has(i)) missing.push(prefix + i);
+		}
+		if (missing.length) {
+			throw new Error(
+				"non-contiguous " + (prefix === "in" ? "inlet" : "outlet") + " references: " +
+				"missing " + missing.join(", ") + " below " + prefix + highest +
+				" (add `let unused_" + missing[0] + " = " + missing[0] + ";` to avoid Max console warnings)"
+			);
+		}
+	}
+}
+
+// 1-based line/column of a byte offset, matching the numbers codebox and
+// clang++ report for the same file.
+function lineColumnAt(text, index) {
+	const before = text.slice(0, index);
+	const line = before.split("\n").length;
+	const column = index - (before.lastIndexOf("\n") + 1) + 1;
+	return { line, column };
+}
+
+function checkReservedConstants(code, reservedConstants) {
+	if (!reservedConstants || !reservedConstants.size) return;
+
+	const report = (kind, name, index) => {
+		const val = reservedConstants.get(name);
+		const err = new Error(
+			`${kind} '${name}' shadows the RNBO constant ${name} = ${val}: the declaration compiles, ` +
+			"but every read is replaced by that literal (rename it, e.g. phi -> phBase)"
+		);
+		err.loc = lineColumnAt(code, index);
+		throw err;
+	};
+
+	// @state / @param declarations (index at the decorator, column at the name)
+	for (const match of code.matchAll(/@(state|param)\b(?:\s*\([\s\S]*?\))?\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)) {
+		const [, decorator, name] = match;
+		if (reservedConstants.has(name)) {
+			report("@" + decorator, name, match.index + match[0].lastIndexOf(name));
+		}
+	}
+
+	// let / var / const locals
+	for (const match of code.matchAll(/\b(let|var|const)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)) {
+		const [, keyword, name] = match;
+		if (reservedConstants.has(name)) {
+			report(keyword + " declaration", name, match.index + match[0].lastIndexOf(name));
+		}
+	}
+
+	// function names and their parameters
+	for (const match of code.matchAll(/\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(([^)]*)\)/g)) {
+		const [full, fnName, rawParams] = match;
+		if (reservedConstants.has(fnName)) {
+			report("function", fnName, match.index + full.indexOf(fnName));
+		}
+		for (const rawParam of rawParams.split(",")) {
+			const paramName = rawParam.trim().split(/[:=\s]/)[0];
+			if (paramName && reservedConstants.has(paramName)) {
+				report("parameter", paramName, match.index + full.indexOf(paramName));
+			}
+		}
+	}
+}
+
+function buildObjects(xam, source, reservedConstants) {
+	const code = stripComments(source);
+	checkContiguousIO(code);
+	checkReservedConstants(code, reservedConstants);
 	const cb = xam.createObject("codebox~", { code: source });
 	const objects = [cb];
-	for (let i = 1; i <= highestReference(code, /\bout(\d+)\b/g); i++) {
+	const outRefs = collectReferences(code, /\bout(\d+)\b/g);
+	const highestOut = outRefs.size ? Math.max(...outRefs) : 0;
+	for (let i = 1; i <= highestOut; i++) {
 		const out = xam.createObject("out~", { index: i });
 		objects.push(out);
 		cb.connect("out" + i, out, "in1");
 	}
-	for (let i = 1; i <= highestReference(code, /\bin(\d+)\b/g); i++) {
+	const inRefs = collectReferences(code, /\bin(\d+)\b/g);
+	const highestIn = inRefs.size ? Math.max(...inRefs) : 0;
+	for (let i = 1; i <= highestIn; i++) {
 		const input = xam.createObject("in~", { index: i });
 		objects.push(input);
 		input.connect("out1", cb, "in" + i);
@@ -210,10 +322,10 @@ function withMutedConsole(fun) {
 	}
 }
 
-function checkFile(file, { xam, includeDirs, keepDir, tmpDir, runCxx }) {
+function checkFile(file, { xam, reservedConstants, includeDirs, keepDir, tmpDir, runCxx }) {
 	const source = fs.readFileSync(file, "utf8");
 	const cpp = withMutedConsole(() => {
-		const patch = xam.codegen.compile(buildObjects(xam, source), {
+		const patch = xam.codegen.compile(buildObjects(xam, source, reservedConstants), {
 			classname: "verify",
 			midi: false,
 			patcherserial: 1,
@@ -289,6 +401,7 @@ function main(argv) {
 	}
 
 	const xam = loadCompiler(packageDir);
+	const reservedConstants = loadReservedConstants(packageDir);
 	const rnboSource = path.join(packageDir, "source/rnbo");
 	const includeDirs = [
 		"-I" + path.join(rnboSource, "common"),
@@ -339,7 +452,7 @@ function main(argv) {
 			continue;
 		}
 		try {
-			checkFile(file, { xam, includeDirs, keepDir: options.keepDir, tmpDir, runCxx: options.runCxx });
+			checkFile(file, { xam, reservedConstants, includeDirs, keepDir: options.keepDir, tmpDir, runCxx: options.runCxx });
 			if (!options.quiet) console.log("PASS " + display(file));
 		}
 		catch (error) {

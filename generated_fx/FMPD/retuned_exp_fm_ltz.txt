@@ -112,13 +112,13 @@ let mR = hasExt ? clamp(extMod, -1.0, 1.0) : linearinterp(triBlend, sinM_R, triM
 let aLn2 = maximum(smoothOct * 0.69314718056, 0.0001);
 let eSine = besselI0(aLn2);
 let eTri = sinh(aLn2) / aLn2;
-let E = linearinterp(triBlend, eSine, eTri);
+let driftE = linearinterp(triBlend, eSine, eTri);
 
 // --- 3. Re-Tuned Linear-Through-Zero Exponential FM (DAFx-20 Eq. 17 & Fig. 7) ---
 // w_exp,dc(t) = w_c * (2^(alpha * m(t)) - comp * (E - 1))
 let comp = clamp(retune_comp, 0.0, 1.0);
-let instMultL = pow(2.0, smoothOct * mL) - comp * (E - 1.0);
-let instMultR = pow(2.0, smoothOct * mR) - comp * (E - 1.0);
+let instMultL = pow(2.0, smoothOct * mL) - comp * (driftE - 1.0);
+let instMultR = pow(2.0, smoothOct * mR) - comp * (driftE - 1.0);
 
 // Through-Zero phase integration (negative instantaneous frequencies reverse phase!)
 tzPhaseL = wrap(tzPhaseL + (f0 * instMultL) / sr, 0.0, 1.0);
@@ -129,8 +129,8 @@ let ltzSynthR = sin(2.0 * pi * tzPhaseR) * clamp(smoothEnv * 2.2, 0.0, 1.5);
 
 // --- 4. Adaptive Delay-Line Re-Tuned Exponential FM on Full Tuba ---
 // Integrate zero-mean deviation (instMult - 1) with leaky centering for TVDL excursion
-let devL = pow(2.0, smoothOct * mL) / E - 1.0;
-let devR = pow(2.0, smoothOct * mR) / E - 1.0;
+let devL = pow(2.0, smoothOct * mL) / driftE - 1.0;
+let devR = pow(2.0, smoothOct * mR) / driftE - 1.0;
 delPhaseL = delPhaseL * 0.999 + devL * (f0 / sr);
 delPhaseR = delPhaseR * 0.999 + devR * (f0 / sr);
 

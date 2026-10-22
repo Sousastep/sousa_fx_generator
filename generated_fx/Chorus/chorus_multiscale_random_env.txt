@@ -69,6 +69,7 @@ function nextRandBipolar(seedIn: Int): number {
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let unused_in3 = in3;
 let barIn = in4;
 
 // --- 1. Dyadic Multiscale Filterbank Split (Low, Mid, High, DAFx-98 Sec 7) ---

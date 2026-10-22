@@ -40,6 +40,7 @@ function modm(x: number, m: number): number {
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = in2;
+let unused_in3 = in3;
 let barPhasor = in4;
 
 let mono = 0.5 * (xL + xR);
@@ -65,19 +66,19 @@ let outIm = yIm3;
 
 let pol = cartopol(outRe, outIm);
 let instAmp = pol[0];
-let phi = wrap((pol[1] + pi) / (2.0 * pi), 0.0, 1.0);
+let phVal = wrap((pol[1] + pi) / (2.0 * pi), 0.0, 1.0);
 
 // --- 2. Variable-Slope Parabolic Triangle Phase svtri (Paper Eq. 16) ---
 let w = clamp(tilt_duty, 0.1, 0.9);
 let aT = 1.0 / (8.0 * maximum(w - w * w, 0.01));
-let gb1 = 2.0 * phi - 1.0;
-let phiShift = wrap(phi - w, 0.0, 1.0);
+let gb1 = 2.0 * phVal - 1.0;
+let phiShift = wrap(phVal - w, 0.0, 1.0);
 let gb2 = 2.0 * phiShift - 1.0;
 let svtri = clamp(aT * (gb1 * gb1 - gb2 * gb2) + 0.5, 0.0, 1.0);
 
-// Blend raw phasor phi with tilted triangle phase based on distance of tilt_duty from 0.5
+// Blend raw phasor phVal with tilted triangle phase based on distance of tilt_duty from 0.5
 let tiltAmt = abs(w - 0.5) * 2.0;
-let basePhiL = linearinterp(tiltAmt, phi, svtri);
+let basePhiL = linearinterp(tiltAmt, phVal, svtri);
 let basePhiR = wrap(basePhiL + 0.025 * ripple_detune, 0.0, 1.0);
 
 // --- 3. Algorithm A: Roland JP-8000 Triangle Modulation (Paper Eq. 26) ---

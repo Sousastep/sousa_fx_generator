@@ -63,7 +63,7 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 | `tools/build_corpus.py` | PDFs → searchable corpus (incremental; run for new PDFs) |
 | `tools/fetch_papers.py` | search & download open-access PDFs (SMC, NIME, ISMIR, WASPAA, ICASSP, ICMC, AES, arXiv) with `<100 GB` cap |
 | `tools/setup_env.sh` | installs the corpus toolchain (JDK 21, tesseract, `uv` venv, opendataloader-pdf) |
-| `docs/rnbo_codebox/` | the language reference + `example1`…`example16` (fundamentals) + `example17`…`example24` (**failure modes distilled from real breakage**) |
+| `docs/rnbo_codebox/` | the language reference + `example1`…`example16` (fundamentals) + `example17`…`example25` (**failure modes distilled from real breakage**) |
 | `docs/max_v8codebox/` | v8.codebox (Max's JS) examples + API reference |
 | `docs/max_v8ui/` | `v8ui` examples (e.g. `pattr_sliders.js`) |
 | `main_test_patcher.maxpat` | The human's audition rig. Never modify. The human is an expert maxer. Tell them what to change in main_test_patcher.maxpat and they will change it.  |
@@ -99,8 +99,9 @@ both files**; page-only extras go in the gh-pages copy only.
 ## 3. codebox~ rules that bite
 
 Read `docs/rnbo_codebox/Codebox_Reference.md` for the language and
-`example17`…`example24` for these specific traps. They are ordered by how
-expensive the mistake was.
+`example17`…`example25` for these specific traps. They are ordered by how
+expensive the mistake was. `tools/verify_codebox.js` enforces the first two
+(reserved constants, contiguous inlets/outlets) before it compiles anything.
 
 **Reserved identifiers — the declaration parses, every read becomes a literal.**
 `pi` (`PI`), `e`, `phi` (`PHI`), `twopi`, `sqrt2`, `sqrt1_2`, `degtorad`, `halfpi`,
@@ -111,6 +112,25 @@ carrier of four effects (`modfm_pulse_saw_formant`, `heterodyne_fof_resonator`,
 a slow LFO. Rename (`phVal`, `phBase`, …) and confirm with
 `grep -c 1.618033988 /tmp/<keep-dir>/*.cpp` → `0`. Lowercase `pi`/`PI` *do*
 resolve to π (verified in generated C++), so `2 * pi * f` is fine.
+
+`verify_codebox.js` now rejects any `let`/`var`/`const`, `@state`, `@param`,
+function name or function parameter that spells one of those constants (the list
+is read from `RNBO/source/operators/simpleoperators.json`, so it follows the
+installed RNBO). The check is a compile-stage error with a line/column, e.g.
+`let declaration 'phi' shadows the RNBO constant phi = 1.618…`. See `example20`.
+
+**Inlets and outlets must be contiguous.** RNBO creates a port only for the
+`inN`/`outN` indices the executable code actually reads/writes, so a file that
+uses `in1`, `in2`, `in4` but never `in3` has no third inlet — and the patcher
+`generate_maxpats.py` builds (`in~ 3` → `codebox~`) then complains in the Max
+console. Bind the skipped port to a dummy local:
+
+```js
+let unused_in3 = in3;   // keeps the in3 port present when in4 is used
+```
+
+`verify_codebox.js` fails the file (before compiling) on a gap below the highest
+referenced index, for both inlets and outlets. See `example25`.
 
 **No unary minus in a declaration whose initialiser is not a plain literal.**
 ```js
@@ -213,7 +233,8 @@ out2 = linearinterp(w, in2, filt.next(in2, f));
 
 **New effect derived from a paper**
 1. Search the corpus, read the relevant sections (`§1` below), cite them in the header.
-2. Write `<name>.txt` + `<name>_paraminfo.txt` in the right category.
+2. Write `<name>.txt` + `<name>_paraminfo.txt` in the right category (contiguous
+   inlets/outlets, no constant-shadowing names).
 3. `node tools/verify_codebox.js <path>` until it passes (exit 0).
 4. `python3 tools/generate_maxpats.py --only <name>` and `python3 tools/generate_v8uis.py --only <name>`.
 5. Report what you verified and hand the listening test to the human. Never claim
@@ -258,6 +279,17 @@ node tools/verify_codebox.js --keep /tmp/cbox    # keep generated C++ for inspec
 node tools/verify_codebox.js --no-cxx            # skip the clang++ stage
 ```
 Exit status: `0` all pass, `1` at least one failure, `2` toolchain not found.
+
+It applies two static checks before handing the file to the compiler, so these
+traps are caught even though codebox itself accepts them silently:
+
+- **reserved-constant shadowing** — a declaration naming `phi`, `e`, `pi`,
+  `twopi`, … (see §3 and `example20`);
+- **non-contiguous inlets/outlets** — a gap below the highest `inN` / `outN`
+  reference (see §3 and `example25`).
+
+Both run on the source with comments blanked out but byte offsets preserved, so
+the reported line/column is the line the user sees in Max.
 A doc example may opt out with a `verify: skip` marker. When you filter its
 output through a pipe, keep the exit status (`set -o pipefail`) — a pretty
 `PASS` line is not proof on its own.

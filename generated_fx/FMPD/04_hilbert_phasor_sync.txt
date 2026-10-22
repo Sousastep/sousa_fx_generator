@@ -102,15 +102,15 @@ let yIm2 = cIm2 * (sIm - hImY[2]) + hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm 
 let yIm3 = cIm3 * (sIm - hImY[3]) + hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;
 let outIm = yIm3;
 
-// Instantaneous amplitude A(t) and normalized phasor phi(t) in [0, 1)
+// Instantaneous amplitude A(t) and normalized phasor phBase in [0, 1)
 let pol = cartopol(outRe, outIm);
 let instAmp = pol[0];
 let instTheta = pol[1]; // [-pi, pi]
-let phi = wrap((instTheta + pi) / (2.0 * pi), 0.0, 1.0);
+let phBase = wrap((instTheta + pi) / (2.0 * pi), 0.0, 1.0);
 
 // Stereo phase offset for wide stereo sync image
-let phiL = phi;
-let phiR = wrap(phi + 0.04, 0.0, 1.0);
+let phiL = phBase;
+let phiR = wrap(phBase + 0.04, 0.0, 1.0);
 
 // --- 3. SMC 2010 Eq. (22) & (24): Hard Sync & Soft Sync Phaseshapers ---
 let a1 = smoothRatio;

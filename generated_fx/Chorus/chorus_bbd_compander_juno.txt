@@ -62,6 +62,7 @@
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+let unused_in3 = in3;
 let barIn = in4;
 
 // --- 1. NE570 2:1 Feedback Compressor Before BBD (DAFx-05 Sec 5.2 Eq. 27, DAFx-10 Sec 3.4) ---

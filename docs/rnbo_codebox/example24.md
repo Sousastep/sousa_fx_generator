@@ -55,6 +55,7 @@
 
 let sampleRate = maximum(samplerate(), 1.0);
 let gain = clamp(in1, 0.0, 1.0);
+let unused_in2 = in2;
 
 // --- 1. Fundamental estimate from lowpassed zero crossings ---
 // The 190 Hz lowpass removes the harmonics that would otherwise add extra

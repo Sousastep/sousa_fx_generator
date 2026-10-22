@@ -47,6 +47,15 @@
 // emitted as written. The rule is about these specific constant spellings,
 // not about avoiding every short name.
 //
+// `tools/verify_codebox.js` refuses such a file before it compiles it (it reads
+// the constant list from RNBO/source/operators/simpleoperators.json and reports
+// the offending line), so a shadowing declaration cannot reach generated_fx/
+// unnoticed. Its message looks like:
+//
+//   FAIL ... -> let declaration 'phi' shadows the RNBO constant phi = 1.618…:
+//               the declaration compiles, but every read is replaced by that
+//               literal (rename it, e.g. phi -> phBase) [line 109 col 5]
+//
 // Naming rules used by every generated_fx patch:
 //   phases          phBase, phase01, phaseInc, pllPhase, phA
 //   angular rate    write 2.0 * pi * f inline, do not cache it as `twopi`/`tau`

@@ -121,7 +121,7 @@ let outIm = yIm3;
 let pol = cartopol(outRe, outIm);
 let instAmp = pol[0];
 let theta = pol[1];
-let phi = wrap((theta + pi) / (2.0 * pi), 0.0, 1.0);
+let phBase = wrap((theta + pi) / (2.0 * pi), 0.0, 1.0);
 
 // Track wraps for zero-drift sub-octave cos(theta / 2)
 let dTheta = theta - prevTheta;
@@ -147,11 +147,11 @@ let Ts = clamp((f0 * a1) / sr, 0.0001, 0.45);
 // --- 4. Variable-Slope Tilted Triangle Pre-Shaper svtri (SMC 2010 Eq. 16) ---
 let w = clamp(tilt_duty_w, 0.1, 0.9);
 let aT = 1.0 / (8.0 * maximum(w - w * w, 0.01));
-let gb1 = 2.0 * phi - 1.0;
-let gb2 = 2.0 * wrap(phi - w, 0.0, 1.0) - 1.0;
+let gb1 = 2.0 * phBase - 1.0;
+let gb2 = 2.0 * wrap(phBase - w, 0.0, 1.0) - 1.0;
 let svtri = clamp(aT * (gb1 * gb1 - gb2 * gb2) + 0.5, 0.0, 1.0);
 
-let phiL = linearinterp(abs(w - 0.5) * 2.0, phi, svtri);
+let phiL = linearinterp(abs(w - 0.5) * 2.0, phBase, svtri);
 let phiR = wrap(phiL + 0.03, 0.0, 1.0);
 
 // --- 5. Compute the 3 SMC 2010 Phaseshaper Voices ---
