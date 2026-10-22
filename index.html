@@ -443,6 +443,18 @@
     color: #fff;
   }
 
+  #download-maxpat {
+    margin-left: 4px;
+  }
+
+  #download-maxpat:disabled,
+  #download-maxpat:disabled:hover {
+    opacity: 0.45;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: default;
+  }
+
   #detail-body {
     flex: 1;
     overflow-y: auto;
@@ -553,6 +565,7 @@
       <div id="detail-tabs">
         <button id="tab-paraminfo" class="tab-btn active">Param Info</button>
         <button id="tab-code" class="tab-btn">Codebox~ DSP</button>
+        <button id="download-maxpat" class="tab-btn" title="Download this effect as a Max demo patcher" disabled>Download .maxpat</button>
       </div>
     </div>
     <div id="detail-body">
@@ -561,6 +574,7 @@
   </div>
 </div>
 
+<script src="maxpat_builder.js"></script>
 <script>
 (function () {
   "use strict";
@@ -629,6 +643,7 @@
   var tabParaminfoBtn = document.getElementById("tab-paraminfo");
   var tabCodeBtn = document.getElementById("tab-code");
   var paraminfoContentEl = document.getElementById("paraminfo-content");
+  var downloadMaxpatBtn = document.getElementById("download-maxpat");
 
   // ---------- Responsive Layout ----------
   function checkCompactLayout() {
@@ -961,7 +976,25 @@
     return out.join("\n");
   }
 
+  // ---------- Maxpat Download ----------
+  // The page already holds both texts for the selected effect; the builder
+  // script mirrors tools/generate_maxpats.py to turn them into a demo patcher.
+  function maxpatSourceFor(key) {
+    if (!Object.prototype.hasOwnProperty.call(codeCache, key)) return null;
+    if (!Object.prototype.hasOwnProperty.call(paraminfoCache, key)) return null;
+    var code = codeCache[key];
+    if (!code || code.indexOf("(No ") === 0) return null;
+    var docs = paraminfoCache[key] || "";
+    if (docs.indexOf("(No ") === 0) docs = "";
+    return { code: code, paraminfo: docs };
+  }
+
+  function updateDownloadButton() {
+    downloadMaxpatBtn.disabled = !(currentEffectKey && maxpatSourceFor(currentEffectKey));
+  }
+
   function renderDetailView() {
+    updateDownloadButton();
     tabParaminfoBtn.classList.toggle("active", activeTab === "paraminfo");
     tabCodeBtn.classList.toggle("active", activeTab === "code");
 
@@ -1066,6 +1099,14 @@
   tabCodeBtn.addEventListener("click", function () {
     activeTab = "code";
     renderDetailView();
+  });
+
+  downloadMaxpatBtn.addEventListener("click", function () {
+    if (!currentEffectKey) return;
+    var source = maxpatSourceFor(currentEffectKey);
+    if (!source) return;
+    var parts = currentEffectKey.split("/");
+    SousaMaxpat.download(parts[parts.length - 1], source.code, source.paraminfo);
   });
 
   // ---------- Filtering & Sorting ----------
