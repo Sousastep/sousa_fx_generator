@@ -21,7 +21,7 @@
 //   out1: Left Endless Barberpole Comb/SSB Output
 //   out2: Right Endless Barberpole Comb/SSB Output
 
-@param({ min: -4.0, max: 4.0 }) sweep_rate_hz = 0.5;
+@param({ min: -16.0, max: 16.0 }) sweep_rate_hz = 3;
 @param({ min: 0.4, max: 12.0 }) center_delay_ms = 2.2;
 @param({ min: -0.92, max: 0.92 }) feedback = 0.72;
 @param({ min: 0.0, max: 1.0 }) dual_to_ssb_mode = 0.4;
@@ -49,9 +49,11 @@
 // Feedback states & LFO phasor
 @state fbStateL = 0.0;
 @state fbStateR = 0.0;
-@state lfoPhasor = new phasor();
 @state prevBarIn = 0.0;
 @state smoothCenterMs = 2.2;
+@state sweepPhase = 0.0;
+@state smoothRate = 0.0;
+@state prevBarActive = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
@@ -72,14 +74,30 @@ if (pitchIn > 25.0 && pitchIn < 1000.0) {
 let dMin = clamp(baseDelaySamps * 0.68, 4.0, 1200.0);
 let dMax = clamp(baseDelaySamps * 1.32, 8.0, 1800.0);
 
-// --- 1. Barberpole Sweep Phasor (Internal Hz or 1-Bar Synced) ---
-let rate = clamp(sweep_rate_hz, -4.0, 4.0);
-let dirSign = (rate >= 0.0) ? 1.0 : -1.0;
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
-prevBarIn = barIn;
+// --- 1. Barberpole Sweep Phase (signed integration: continuous through 0 Hz) ---
+let rateTarget = clamp(sweep_rate_hz, -16.0, 16.0);
+let rateSlew = 1.0 - exp(-1.0 / (0.02 * sr));
+smoothRate += (rateTarget - smoothRate) * rateSlew;
 
-let rawPh = barActive ? wrap(barIn * maximum(floor(abs(rate) + 0.5), 1.0), 0.0, 1.0) : lfoPhasor.next(abs(rate));
-let phL = (dirSign > 0.0) ? rawPh : (1.0 - rawPh);
+let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+
+if (barActive > 0.5) {
+	// Tempo-synced: advance by the signed change in the bar phasor (cycles per bar = rounded |rate|)
+	if (prevBarActive > 0.5) {
+		let d = barIn - prevBarIn;
+		d = d - floor(d + 0.5); // wrap delta to [-0.5, 0.5)
+		let cyc = maximum(floor(abs(smoothRate) + 0.5), 1.0);
+		let sgn = (smoothRate >= 0.0) ? 1.0 : -1.0;
+		sweepPhase = wrap(sweepPhase + d * cyc * sgn, 0.0, 1.0);
+	}
+} else {
+	// Free-running: signed rate, so the phase simply slows, stops and reverses
+	sweepPhase = wrap(sweepPhase + smoothRate / sr, 0.0, 1.0);
+}
+prevBarIn = barIn;
+prevBarActive = barActive;
+
+let phL = sweepPhase;
 // Stereo counter-direction option: Right channel sweeps opposite direction when stereo_counter_dir > 0.5
 let counter = clamp(stereo_counter_dir, 0.0, 1.0);
 let phR = (counter > 0.5) ? (1.0 - phL) : wrap(phL + 0.25 * counter, 0.0, 1.0);

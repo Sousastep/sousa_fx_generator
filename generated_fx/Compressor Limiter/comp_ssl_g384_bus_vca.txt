@@ -6,6 +6,7 @@
 // Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
 // ============================================================================
 
+@param({ min: -24.0, max: 36.0 }) input_gain_db = 0.0;
 @param({ min: -36.0, max: 0.0 }) thresh_db = -18.0;
 @param({ min: 2.0, max: 10.0 }) ratio_mode = 4.0;
 @param({ min: 0.1, max: 30.0 }) attack_ms = 10.0;
@@ -14,6 +15,7 @@
 @param({ min: 20.0, max: 350.0 }) sc_hpf_hz = 85.0;
 @param({ min: 0.0, max: 1.0 }) vca_harmonics = 0.35;
 @param({ min: 0.0, max: 1.0 }) mix = 1.0;
+@param({ min: -24.0, max: 36.0 }) output_gain_db = 0.0;
 
 // Sidechain high-pass filter state (prevents sub-bass kick from over-pumping mix)
 @state sc_lp_L = 0.0;
@@ -56,8 +58,11 @@ function that202_vca_sat(x: number, cv_atten_db: number, drive: number): number 
 }
 
 let sr_safe = max(samplerate(), 8000.0);
-let dryL = in1;
-let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+
+// Input trim (plain gain stage, outside the detector)
+let g_in = dbtoa(clamp(input_gain_db, -24.0, 36.0));
+let dryL = in1 * g_in;
+let dryR = ((abs(in2) > 1e-18) ? in2 : in1) * g_in;
 
 // 1st-order sidechain high-pass filter (20 Hz to 350 Hz)
 let fc_sc = clamp(sc_hpf_hz, 20.0, 350.0);
@@ -114,5 +119,8 @@ let vcaL = that202_vca_sat(dryL * total_gain, cv_att_db, vca_harmonics);
 let vcaR = that202_vca_sat(dryR * total_gain, cv_att_db, vca_harmonics);
 
 let m = clamp(mix, 0.0, 1.0);
-out1 = (1.0 - m) * dryL + m * vcaL;
-out2 = (1.0 - m) * dryR + m * vcaR;
+
+// Output trim (plain gain stage, after the sidechain tap)
+let g_out = dbtoa(clamp(output_gain_db, -24.0, 36.0));
+out1 = ((1.0 - m) * dryL + m * vcaL) * g_out;
+out2 = ((1.0 - m) * dryR + m * vcaR) * g_out;

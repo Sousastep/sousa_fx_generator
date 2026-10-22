@@ -16,34 +16,44 @@ release time after sustained heavy peaks. The signal path models a balanced
 push-pull pair of GE 6386 remote-cutoff triodes whose odd-order harmonic
 saturation increases proportionally with gain reduction (Sec. 6, Fig. 13).
 
-PARAMETERS (7 total)
+PARAMETERS (9 total)
 --------------------
-1. drive_db        [0.0 .. 24.0 dB, default: 8.0]
+1. input_gain_db   [-24.0 .. +36.0 dB, default: 0.0]
+   Input trim, a plain gain stage ahead of the input transformer. Raising it
+   feeds more level into the existing limiter (so it limits harder, as on real
+   hardware); it does not alter any other setting.
+
+2. drive_db        [0.0 .. 24.0 dB, default: 8.0]
    Input step attenuator / transformer drive into the 6386 variable-mu stage.
 
-2. ac_thresh       [0.0 .. 1.0, default: 0.55]
+3. ac_thresh       [0.0 .. 1.0, default: 0.55]
    Front-panel AC Threshold (phi_AC): controls sidechain sensitivity and amount
    of feedback limiting.
 
-3. dc_knee         [0.0 .. 1.0, default: 0.25]
+4. dc_knee         [0.0 .. 1.0, default: 0.25]
    Under-chassis DC Threshold (phi_DC, Eq. 10): biases the Class-B sidechain
    crossover stage, continuously morphing from soft vari-mu compression to hard
    brickwall limiting.
 
-4. tc_mode         [1.0 .. 6.0, default: 5.0]
+5. tc_mode         [1.0 .. 6.0, default: 5.0]
    Six-way Fairchild Time-Constant selector (Table 3):
    - 1..4: Single-RC release (100 ms, 300 ms, 880 ms, 1.76 s).
    - 5: Dual-RC program-dependent release (CT + CU).
    - 6: Triple-RC dual-memory auto-release (CT + CU + CV) for fast transient
         recovery and slow sustained leveling.
 
-5. tube_harmonics  [0.0 .. 1.0, default: 0.5]
+6. tube_harmonics  [0.0 .. 1.0, default: 0.5]
    Gain-reduction-dependent push-pull 6386 3rd-harmonic saturation depth
    (Raffensperger Sec. 6, Fig. 13).
 
-6. lat_vert_mode   [0.0 .. 1.0, default: 0.35]
+7. lat_vert_mode   [0.0 .. 1.0, default: 0.35]
    Continuous blend between Left/Right independent feedback limiting (0.0) and
    Lateral/Vertical (Mid-Side) matrixed limiting (1.0).
 
-7. mix             [0.0 .. 1.0, default: 1.0]
+8. mix             [0.0 .. 1.0, default: 1.0]
    Dry/wet parallel NY-compression blend.
+
+9. output_gain_db  [-24.0 .. +36.0 dB, default: 0.0]
+   Output trim, a plain gain stage after the feedback tap and the dry/wet
+   blend, so it makes the effect up or down in level without feeding back into
+   the sidechain.

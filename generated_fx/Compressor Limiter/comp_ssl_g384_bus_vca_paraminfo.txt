@@ -15,31 +15,41 @@ compression knee (wide/gentle at 2:1, progressively tighter toward 10:1), a
 variable sidechain high-pass filter, the signature two-pole dual-time-constant
 SSL AUTO release circuit, and THAT 202 audio-path VCA harmonic coloration.
 
-PARAMETERS (8 total)
---------------------
-1. thresh_db       [-36.0 .. 0.0 dB, default: -18.0]
+PARAMETERS (10 total)
+---------------------
+1. input_gain_db   [-24.0 .. +36.0 dB, default: 0.0]
+   Input trim, a plain gain stage ahead of the sidechain tap. Raising it feeds
+   more level into the existing compressor (so it compresses harder, as on real
+   hardware); it does not alter any other setting.
+
+2. thresh_db       [-36.0 .. 0.0 dB, default: -18.0]
    Compression threshold (with automatic loudness-compensated makeup gain).
 
-2. ratio_mode      [2.0 .. 10.0, default: 4.0]
+3. ratio_mode      [2.0 .. 10.0, default: 4.0]
    Compression ratio (2:1 to 10:1); simultaneously narrows knee curvature at
    higher ratios as in the SSL G384 hardware (DAFx-2026 Sec. 3).
 
-3. attack_ms       [0.1 .. 30.0 ms, default: 10.0]
+4. attack_ms       [0.1 .. 30.0 ms, default: 10.0]
    Sidechain VCA attack time constant (0.1 ms fast clamp to 30 ms punchy snap).
 
-4. release_s       [0.05 .. 1.5 s, default: 0.30]
+5. release_s       [0.05 .. 1.5 s, default: 0.30]
    Manual single-pole release time constant when auto_release is 0.
 
-5. auto_release    [0.0 .. 1.0, default: 0.65]
+6. auto_release    [0.0 .. 1.0, default: 0.65]
    Blends in the SSL two-pole dual-RC AUTO release filter (75 ms fast transient
    recovery pole coupled to a 1.25 s slow program-sustained recovery pole).
 
-6. sc_hpf_hz       [20.0 .. 350.0 Hz, default: 85.0]
+7. sc_hpf_hz       [20.0 .. 350.0 Hz, default: 85.0]
    Sidechain high-pass filter cutoff to prevent sub-bass energy from triggering
    excessive full-mix pumping.
 
-7. vca_harmonics   [0.0 .. 1.0, default: 0.35]
+8. vca_harmonics   [0.0 .. 1.0, default: 0.35]
    THAT 202 audio VCA odd/even harmonic saturation modulated by control voltage.
 
-8. mix             [0.0 .. 1.0, default: 1.0]
+9. mix             [0.0 .. 1.0, default: 1.0]
    Dry/wet parallel bus compression blend.
+
+10. output_gain_db [-24.0 .. +36.0 dB, default: 0.0]
+   Output trim, a plain gain stage after the sidechain tap and the dry/wet
+   blend, so it makes the effect up or down in level without feeding back into
+   the detector.

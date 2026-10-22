@@ -9,12 +9,14 @@
 // in1: mono in; in3: pitch (Hz); in4: mod (Hz); out1/out2: processed mono
 // ============================================================================
 
+@param({ min: -24.0, max: 36.0 }) input_gain_db = 0.0;
 @param({ min: 0.0, max: 24.0 }) drive_db = 8.0;
 @param({ min: 0.0, max: 1.0 }) ac_thresh = 0.55;
 @param({ min: 0.0, max: 1.0 }) dc_knee = 0.25;
 @param({ min: 1.0, max: 6.0 }) tc_mode = 5.0;
 @param({ min: 0.0, max: 1.0 }) tube_harmonics = 0.5;
 @param({ min: 0.0, max: 1.0 }) mix = 1.0;
+@param({ min: -24.0, max: 36.0 }) output_gain_db = 0.0;
 
 // Feedback output state (unit delay breaking feedback loop, Eq. 13)
 @state y_prev = 0.0;
@@ -60,7 +62,9 @@ function varimu_6386_amp(x: number, v_sc: number, harm_amt: number): number {
 let sr_safe = maximum(samplerate(), 8000.0);
 let dt = 1.0 / sr_safe;
 
-let dry = in1;
+// Input trim (plain gain stage, ahead of the transformer/6386 drive)
+let g_in = dbtoa(clamp(input_gain_db, -24.0, 36.0));
+let dry = in1 * g_in;
 
 // Input transformer step gain
 let in_gain = dbtoa(clamp(drive_db, 0.0, 24.0));
@@ -147,6 +151,9 @@ dc_y = proc - dc_x + 0.9992 * dc_y;
 dc_x = proc;
 
 let m = clamp(mix, 0.0, 1.0);
-let out_mono = (1.0 - m) * dry + m * dc_y;
+
+// Output trim (plain gain stage, after the sidechain feedback tap)
+let g_out = dbtoa(clamp(output_gain_db, -24.0, 36.0));
+let out_mono = ((1.0 - m) * dry + m * dc_y) * g_out;
 out1 = out_mono;
 out2 = out_mono;
