@@ -10,3 +10,6 @@
 [submodule "repos/midiChordController"]
 	path = repos/midiChordController
 	url = https://github.com/adam26davidson/midiChordController.git
+[submodule "tools/rnbo-codebox-extension"]
+	path = tools/rnbo-codebox-extension
+	url = https://github.com/groovmekanik/rnbo-codebox-extension
