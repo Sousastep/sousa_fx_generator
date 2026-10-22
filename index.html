@@ -443,14 +443,40 @@
     color: #fff;
   }
 
+  /* Maxpat download: a neutral outlined action. Slightly brighter than the
+     flat Param Info / Codebox~ tabs, without competing with them. */
   #download-maxpat {
-    margin-left: 4px;
+    height: 22px;
+    margin-left: 6px;
+    padding: 0 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-dir);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+
+  #download-maxpat:hover {
+    background: rgba(255, 255, 255, 0.10);
+    border-color: rgba(255, 255, 255, 0.28);
+    color: #ffffff;
+  }
+
+  #download-maxpat:active {
+    background: rgba(255, 255, 255, 0.15);
   }
 
   #download-maxpat:disabled,
   #download-maxpat:disabled:hover {
     opacity: 0.45;
     background: transparent;
+    border-color: rgba(255, 255, 255, 0.10);
     color: var(--text-muted);
     cursor: default;
   }
@@ -565,7 +591,7 @@
       <div id="detail-tabs">
         <button id="tab-paraminfo" class="tab-btn active">Param Info</button>
         <button id="tab-code" class="tab-btn">Codebox~ DSP</button>
-        <button id="download-maxpat" class="tab-btn" title="Download this effect as a Max demo patcher" disabled>Download .maxpat</button>
+        <button id="download-maxpat" title="Download this effect as a Max demo patcher" disabled>Download .maxpat</button>
       </div>
     </div>
     <div id="detail-body">
