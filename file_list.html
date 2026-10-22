@@ -432,6 +432,26 @@
     word-break: break-word;
   }
 
+  /* ---------- Detail-pane syntax highlighting ----------
+     The param guide is prose with headings/labels, the DSP tab is rnbo
+     codebox~ source. Same dark-panel palette, distinct token sets. */
+  .tok-rule    { color: #4c4d57; }
+  .tok-section { color: #f0b46a; font-weight: 700; letter-spacing: 0.04em; }
+  .tok-title   { color: #ffffff; font-weight: 600; }
+  .tok-param   { color: #ffd479; font-weight: 600; }
+  .tok-key     { color: #8fb6ff; }
+  .tok-bullet  { color: #6fb3e8; }
+  .tok-ref     { color: #b49be8; }
+  .tok-inline  { color: #a8d987; background: rgba(255, 255, 255, 0.05); border-radius: 3px; }
+  .tok-comment { color: #7e8797; font-style: italic; }
+  .tok-string  { color: #a8d987; }
+  .tok-number  { color: #d9a86c; }
+  .tok-keyword { color: #c792ea; font-weight: 600; }
+  .tok-builtin { color: #6fc3ff; }
+  .tok-port    { color: #fac247; font-weight: 600; }
+  .tok-annot   { color: #ff9d6c; }
+  .tok-func    { color: #86d6c8; }
+
   .empty-detail {
     color: var(--text-muted);
     font-family: var(--font-sans);
@@ -718,6 +738,129 @@
     return relPath.split("/").map(encodeURIComponent).join("/");
   }
 
+  // ---------- Syntax Highlighting ----------
+  // Two dependency-free highlighters: `<name>_paraminfo.txt` is prose with
+  // headings, parameter names and units; the DSP tab is rnbo codebox~.
+  // Both feed one single-pass tokenizer, so generated spans are never
+  // re-scanned and every piece of source text is HTML-escaped.
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  // rules: [{ cls: "tok-...", src: "<regex source, non-capturing groups only>" }]
+  // Earlier rules win where two could match at the same position.
+  function highlightWithRules(text, rules) {
+    var sources = [];
+    var i;
+    for (i = 0; i < rules.length; i++) sources.push("(" + rules[i].src + ")");
+    var re = new RegExp(sources.join("|"), "g");
+    var out = "";
+    var last = 0;
+    var m;
+    while ((m = re.exec(text)) !== null) {
+      if (m[0] === "") { re.lastIndex++; continue; }
+      if (m.index > last) out += escapeHtml(text.slice(last, m.index));
+      for (i = 0; i < rules.length; i++) {
+        if (m[i + 1] !== undefined) {
+          out += '<span class="' + rules[i].cls + '">' + escapeHtml(m[0]) + "</span>";
+          break;
+        }
+      }
+      last = m.index + m[0].length;
+    }
+    return out + escapeHtml(text.slice(last));
+  }
+
+  function wordSet(words) {
+    return "\\b(?:" + words.join("|") + ")\\b";
+  }
+
+  var CODEBOX_KEYWORDS = ["let", "var", "const", "function", "return", "if",
+    "else", "for", "while", "do", "new", "true", "false", "null", "this",
+    "break", "continue"];
+  var CODEBOX_BUILTINS = ["abs", "acos", "acosh", "asin", "asinh", "atan",
+    "atan2", "atanh", "atodb", "cartopol", "ceil", "clamp", "cos", "cosh",
+    "cubicinterp", "dbtoa", "exp", "exp2", "floor", "fmod", "interp",
+    "linearinterp", "log", "log10", "log2", "max", "maximum", "min",
+    "minimum", "mstosamps", "noise", "peek", "phasewrap", "poke", "poltocar",
+    "pow", "random", "remainder", "round", "samples", "samplerate", "scale",
+    "sin", "sinh", "sqrt", "tan", "tanh", "trunc", "vectorsize", "wrap"];
+  var CODEBOX_TYPES = ["FixedFloat32Array", "FixedFloat64Array",
+    "FixedSampleArray", "FixedInt32Array", "BufferRef", "DataRef", "Index",
+    "Int", "list", "number", "biquad", "onepole", "twopole", "allpass",
+    "comb", "delay", "buffer", "fftbuffer", "fftstream", "ifftstream",
+    "cycle", "phasor", "svf"];
+
+  var CODEBOX_RULES = [
+    { cls: "tok-comment", src: "/\\*[\\s\\S]*?\\*/" },
+    { cls: "tok-comment", src: "//[^\\n]*" },
+    { cls: "tok-string",  src: "\"(?:[^\"\\\\\\n]|\\\\.)*\"|'(?:[^'\\\\\\n]|\\\\.)*'" },
+    { cls: "tok-annot",   src: "@[A-Za-z_][A-Za-z0-9_]*" },
+    { cls: "tok-keyword", src: wordSet(CODEBOX_KEYWORDS) },
+    { cls: "tok-builtin", src: wordSet(CODEBOX_BUILTINS) },
+    { cls: "tok-builtin", src: wordSet(CODEBOX_TYPES) },
+    { cls: "tok-port",    src: "\\b(?:in|out)\\d+\\b" },
+    { cls: "tok-number",  src: "\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b|\\.\\d+" },
+    { cls: "tok-func",    src: "\\b[A-Za-z_$][A-Za-z0-9_$]*(?=\\s*\\()" }
+  ];
+
+  var PARAMINFO_RULES = [
+    { cls: "tok-inline", src: "`[^`\\n]*`" },
+    { cls: "tok-string", src: "\"[^\"\\n]*\"" },
+    { cls: "tok-ref",    src: "\\bDAFx-\\d+\\b|\\b(?:Eqs?|Figs?|Sections?|Tables?)\\.?\\s?\\d+(?:[\u2013-]\\d+)?\\b" },
+    { cls: "tok-key",    src: "(?:\\b[Rr]ange\\b|\\b[Dd]efault\\b|\\b[Tt]aper\\b|\\b[Ff]unction\\b|\\b[Nn]otes?\\b|\\b[Uu]nits?\\b)(?=\\s*:)" },
+    { cls: "tok-port",   src: "\\b(?:in|out)\\d+\\b" },
+    { cls: "tok-number", src: "\\d+(?:\\.\\d+)?\\s?(?:kHz|Hz|dBFS|dB|ms|uF|nF|pF|mF|samples|cents|bits|octaves?|degrees?)\\b|\\d+(?:\\.\\d+)?%|\\b\\d+(?:\\.\\d+)?\\b" }
+  ];
+
+  function highlightCodebox(src) {
+    return highlightWithRules(String(src), CODEBOX_RULES);
+  }
+
+  function highlightParaminfoInline(text) {
+    return highlightWithRules(text, PARAMINFO_RULES);
+  }
+
+  // Line-aware pass: keeps leading indentation, then marks the guide's
+  // structure (title, === rules, SECTION headings, numbered parameter names,
+  // LABEL: lines, bullets) before tokenizing the remaining prose.
+  function highlightParaminfo(src) {
+    var lines = String(src).split("\n");
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var trimmed = line.replace(/^\s+/, "");
+      var lead = line.slice(0, line.length - trimmed.length);
+      var body;
+      var m;
+
+      if (i < 3 && (m = /^([^\u2014]{1,80}?)\s+\u2014\s+([\s\S]*)$/.exec(trimmed))) {
+        body = '<span class="tok-title">' + escapeHtml(m[1]) + "</span> \u2014 " + escapeHtml(m[2]);
+      } else if (/^={3,}$/.test(trimmed)) {
+        body = '<span class="tok-rule">' + escapeHtml(trimmed) + "</span>";
+      } else if (/^[A-Z][A-Z0-9 &\/()'.,:_+-]*$/.test(trimmed) && /[A-Z]{2}/.test(trimmed)) {
+        body = '<span class="tok-section">' + escapeHtml(trimmed) + "</span>";
+      } else if ((m = /^(\d+\.)\s+([a-z][a-z0-9_]*)\b([\s\S]*)$/.exec(trimmed))) {
+        body = '<span class="tok-number">' + escapeHtml(m[1]) + '</span> <span class="tok-param">' +
+               escapeHtml(m[2]) + "</span>" + highlightParaminfoInline(m[3]);
+      } else if ((m = /^([A-Z][A-Za-z0-9 _&\/()-]{1,30}):(\s*)([\s\S]*)$/.exec(trimmed))) {
+        body = '<span class="tok-key">' + escapeHtml(m[1]) + ":</span>" + m[2] +
+               highlightParaminfoInline(m[3]);
+      } else if ((m = /^([-*\u2022])(\s+)([\s\S]*)$/.exec(trimmed))) {
+        body = '<span class="tok-bullet">' + escapeHtml(m[1]) + "</span>" + m[2] +
+               highlightParaminfoInline(m[3]);
+      } else {
+        body = highlightParaminfoInline(trimmed);
+      }
+      out.push(lead + body);
+    }
+    return out.join("\n");
+  }
+
   function renderDetailView() {
     tabParaminfoBtn.classList.toggle("active", activeTab === "paraminfo");
     tabCodeBtn.classList.toggle("active", activeTab === "code");
@@ -740,8 +883,15 @@
 
     var cache = (activeTab === "paraminfo") ? paraminfoCache : codeCache;
     if (Object.prototype.hasOwnProperty.call(cache, currentEffectKey)) {
+      var text = cache[currentEffectKey];
       paraminfoContentEl.className = "";
-      paraminfoContentEl.textContent = cache[currentEffectKey] || "(No documentation found for this effect)";
+      if (text) {
+        paraminfoContentEl.innerHTML = (activeTab === "paraminfo")
+          ? highlightParaminfo(text)
+          : highlightCodebox(text);
+      } else {
+        paraminfoContentEl.textContent = "(No documentation found for this effect)";
+      }
     } else {
       paraminfoContentEl.className = "empty-detail";
       paraminfoContentEl.textContent = "Loading " + (activeTab === "paraminfo" ? "parameter documentation" : "DSP code") + "...";
