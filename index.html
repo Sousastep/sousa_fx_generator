@@ -52,7 +52,7 @@
   #list-pane {
     display: flex;
     flex-direction: column;
-    width: 380px;
+    width: var(--list-width, 380px);
     min-width: 240px;
     max-width: 100%;
     height: 100%;
@@ -82,6 +82,44 @@
   }
   body.compact.show-info #detail-pane {
     display: flex;
+  }
+
+  /* Draggable divider between the list and detail panes. It overlays the
+     list's right border, so it adds no layout width of its own. */
+  #pane-divider {
+    flex: 0 0 8px;
+    width: 8px;
+    margin-right: -8px;
+    position: relative;
+    z-index: 5;
+    cursor: col-resize;
+    touch-action: none;
+    background: transparent;
+  }
+  #pane-divider::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -1px;
+    width: 1px;
+    background: transparent;
+    transition: background-color 0.12s ease;
+  }
+  #pane-divider:hover::after,
+  #pane-divider.dragging::after,
+  #pane-divider:focus-visible::after {
+    background: var(--border-focus);
+  }
+  #pane-divider:focus {
+    outline: none;
+  }
+  body.resizing,
+  body.resizing * {
+    cursor: col-resize !important;
+  }
+  body.compact #pane-divider {
+    display: none;
   }
 
   /* Fixed Header */
@@ -584,6 +622,8 @@
     <div id="list-footer">Star ratings are based on how useful the effect may be for me personally. They do not reflect on the companies, authors, or their respective trademarks.</div>
   </div>
 
+  <div id="pane-divider" role="separator" aria-orientation="vertical" aria-label="Resize the effects list" aria-valuemin="240" aria-valuemax="1440" aria-valuenow="380" tabindex="0" title="Drag to resize"></div>
+
   <div id="detail-pane">
     <div id="detail-header">
       <div id="detail-title">Select an effect to view parameter documentation</div>
@@ -664,6 +704,7 @@
   var searchInput = document.getElementById("search-input");
   var searchClear = document.getElementById("search-clear");
   var rowsContainer = document.getElementById("rows-container");
+  var paneDivider = document.getElementById("pane-divider");
   var detailTitleEl = document.getElementById("detail-title");
   var metaBadgeEl = document.getElementById("meta-badge");
   var tabParaminfoBtn = document.getElementById("tab-paraminfo");
@@ -687,6 +728,83 @@
     document.body.classList.toggle("show-info");
     infoToggleChip.classList.toggle("active", document.body.classList.contains("show-info"));
   });
+
+  // ---------- Resizable Panes ----------
+  // Dragging the divider sets the list pane's width; the detail pane takes the
+  // rest. Clamp so the list keeps at least 240px while the detail pane keeps at
+  // least 320px and at least 25% of the window.
+  var dividerDragging = false;
+  var dividerStartX = 0;
+  var dividerStartWidth = 0;
+  var listWidth = 380;
+  var listWidthCustom = false;
+
+  function listWidthLimits() {
+    var minWidth = 240;
+    var maxWidth = Math.max(minWidth, Math.min(window.innerWidth * 0.75, window.innerWidth - 320));
+    return { min: minWidth, max: maxWidth };
+  }
+
+  function updateDividerLimits() {
+    var limits = listWidthLimits();
+    paneDivider.setAttribute("aria-valuemin", String(Math.round(limits.min)));
+    paneDivider.setAttribute("aria-valuemax", String(Math.round(limits.max)));
+  }
+
+  function applyListWidth(width) {
+    var limits = listWidthLimits();
+    listWidth = Math.max(limits.min, Math.min(limits.max, width));
+    listPane.style.setProperty("--list-width", listWidth + "px");
+    paneDivider.setAttribute("aria-valuenow", String(Math.round(listWidth)));
+    updateDividerLimits();
+  }
+
+  paneDivider.addEventListener("pointerdown", function (e) {
+    if (document.body.classList.contains("compact") || e.button !== 0) return;
+    dividerDragging = true;
+    listWidthCustom = true;
+    dividerStartX = e.clientX;
+    dividerStartWidth = listPane.getBoundingClientRect().width;
+    paneDivider.classList.add("dragging");
+    document.body.classList.add("resizing");
+    if (paneDivider.setPointerCapture) paneDivider.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  paneDivider.addEventListener("pointermove", function (e) {
+    if (!dividerDragging) return;
+    applyListWidth(dividerStartWidth + (e.clientX - dividerStartX));
+  });
+
+  function endDividerDrag(e) {
+    if (!dividerDragging) return;
+    dividerDragging = false;
+    paneDivider.classList.remove("dragging");
+    document.body.classList.remove("resizing");
+    if (e && paneDivider.hasPointerCapture && paneDivider.hasPointerCapture(e.pointerId)) {
+      paneDivider.releasePointerCapture(e.pointerId);
+    }
+  }
+  paneDivider.addEventListener("pointerup", endDividerDrag);
+  paneDivider.addEventListener("pointercancel", endDividerDrag);
+  paneDivider.addEventListener("lostpointercapture", endDividerDrag);
+
+  paneDivider.addEventListener("keydown", function (e) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    e.stopPropagation();
+    listWidthCustom = true;
+    applyListWidth(listPane.getBoundingClientRect().width + (e.key === "ArrowLeft" ? -16 : 16));
+  });
+
+  window.addEventListener("resize", function () {
+    updateDividerLimits();
+    if (listWidthCustom && !document.body.classList.contains("compact")) {
+      applyListWidth(listWidth);
+    }
+  });
+
+  updateDividerLimits();
 
   // ---------- SVG Helpers ----------
   function starPoints(cx, cy, radius) {
