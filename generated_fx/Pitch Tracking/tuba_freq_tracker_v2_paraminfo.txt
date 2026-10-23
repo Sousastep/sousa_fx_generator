@@ -1,0 +1,112 @@
+================================================================================
+00_tuba_freq_tracker — Parameter Information
+================================================================================
+
+OVERVIEW
+A custom tuba-specialized hybrid pitch & phasor tracker for live low-brass
+dubstep, built to avoid the frame latency of generic FFT-based YinFFT
+(fluid.pitch~), which needs a 2048/4096-sample window (~46 to 93 ms at 44.1/48 kHz)
+and only updates once per hop. It unites three complementary DSP stages inside
+a single RNBO codebox~:
+
+1. 4x-Decimated Recursive Sliding YIN (CMNDF): Computes the Cumulative Mean
+   Normalized Difference Function in the time domain. The difference function
+   is updated recursively over a sliding window (add the newest sample's term,
+   subtract the term leaving the window), so nothing is recomputed from scratch.
+   The cost is O(maxLag) per decimated sample (up to ~430 lags), not O(1), which
+   is still light on CPU. The CMNDF search runs every 32 audio samples (~0.7 ms at
+   48 kHz) with parabolic sub-sample interpolation, a first-dip search to reduce
+   octave errors, and a 3-point median filter to reject valve/tongue transients.
+
+2. Instantaneous Frequency Tracking (IFT): Isolates the tuba's fundamental with
+   a dual-stage adaptive SVF bandpass centered on the fused pitch, builds the
+   analytic signal s_a(t) = A(t)*e^(j*theta(t)) with a 4-stage quadrature IIR
+   Hilbert pair (z^-2 allpass sections, ~90 degrees +/- 1 degree across 28 to 420 Hz),
+   and differentiates the unwrapped phase d(theta)/dt on EVERY sample. There is no
+   frame or hop latency, but the narrow bandpass filters still add group delay,
+   which grows as pitch gets lower.
+
+3. Confidence-Weighted Fusion + Phase-Locked Loop (PLL): YIN supplies a coarse
+   octave anchor, and IFT follows fast lip bends, vibrato, and glissandi within
+   +/- 18% of that anchor (it falls back to the anchor otherwise). The two are
+   mixed with a fixed crossfade (IFT_speed), and YIN confidence scales how quickly
+   the fused pitch adapts. This is a complementary blend, not a Kalman filter: there
+   is no covariance or motion model. The last valid pitch is held on note
+   releases. A PLL phasor locks to the analytic phase of the fundamental.
+
+   Note: the anchor reduces octave errors but cannot eliminate them. If YIN
+   locks to the wrong octave, IFT will follow it.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo (or mono on in1) tuba audio input
+- in3: Optional external pitch hint in Hz (if fluid.pitch~ is patched here, it is
+  averaged 50/50 with the internal YIN anchor; only values between 20 and 1000 Hz
+  are used)
+- out1: Tracked fundamental pitch f0 in Hz (patch directly into in3 of effects 01–18!)
+- out2: Pitch confidence / periodicity [0.0 to 1.0]
+- out3: Phase-locked tuba phasor [0.0 to 1.0) (phase-locked sawtooth ramp at f0)
+- out4: Phase-locked fundamental sine wave [-1.0 to 1.0] (scaled by confidence)
+
+PARAMETERS (5)
+
+1. min_freq_hz
+   - Range: 24.0 to 120.0 Hz (Default: 28.0 Hz, covering down to Pedal Bb0 = 29.14 Hz)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the longest lag boundary of the YIN search. Raising this to ~38 Hz
+     when not playing pedal notes shortens the lag loop and lowers CPU. It does not
+     reduce latency, since the integration window is set separately by yin_window_ms.
+   - Note: At sample rates above 48 kHz the lag range is capped at 430 lags, so the
+     lowest trackable pitch rises (roughly 55 Hz at 96 kHz) regardless of this setting.
+
+2. max_freq_hz
+   - Range: 150.0 to 700.0 Hz (Default: 420.0 Hz, covering up to high G4/Ab4)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the shortest lag boundary of the YIN search and the upper clamp
+     of the tracker, preventing high brass lip buzz or valve clicks from triggering
+     false high-frequency jumps.
+
+3. IFT_speed
+   - Range: 0.0 to 1.0
+     (0.0 = median-filtered YIN only, 1.0 = full per-sample IFT instantaneous frequency,
+     still gated to within +/- 18% of the YIN anchor)
+   - Taper: Linear crossfade coupled with tracking time-constant reduction
+     (from 10 ms down to 1.5 ms).
+   - Function: Controls how strongly the Hilbert phase differentiator (IFT) is
+     weighted against the YIN lag estimator during fast lip slurs, pitch bends,
+     and vibrato, and how quickly the fused pitch follows the target. The adaptation
+     rate is further scaled by YIN confidence (full speed at confidence >= 0.75,
+     fading to a hold at confidence <= 0.35).
+
+4. gate_thresh_db
+   - Range: -60.0 to -18.0 dB (Default: -42.0 dB)
+   - Taper: dB converted to a linear amplitude (dbtoa) and compared against an
+     8 ms RMS envelope.
+   - Function: Holds the tracked pitch f0 at its last valid frequency whenever the
+     tuba's RMS level drops below this threshold, which prevents pitch-drop glitches
+     at the end of notes. YIN evaluation is also paused below the threshold. The
+     gate has no hysteresis, so keep it clear of your noise floor.
+
+5. yin_window_ms
+   - Range: 10.0 to 60.0 ms (Default: 28.0 ms)
+   - Taper: Direct time in milliseconds.
+   - Function: Length of the YIN integration window. Longer windows give more
+     reliable low notes but add latency and smooth the response; shorter windows
+     react faster but are less stable. At the default 28 ms, the window is shorter
+     than one period of a 28 Hz pedal tone (~36 ms), so the lowest notes are partly
+     a guess at onset. Try 36 to 40 ms if pedal tones feel unreliable.
+   - Notes: The window is capped so that window + maxLag fits the 1024-sample
+     buffer (about 49 ms at 48 kHz with min_freq_hz = 28). Changing this
+     parameter while audio runs resets the running sums, so expect a brief
+     (about one window) dip in confidence while they refill. Treat it as
+     set-and-forget rather than a performance control.
+
+REVISION NOTES
+- The Hilbert quadrature pair was corrected (z^-2 allpass sections with the proper
+  sign, plus a sign fix on the imaginary part). Before this fix the two paths were
+  not in quadrature, so IFT readings were rejected by the anchor gate and the output
+  was effectively smoothed YIN. IFT_speed and the PLL phasor/sine outputs now
+  respond to the true analytic phase, so expect different behavior from earlier
+  patches.
+- Added the yin_window_ms parameter and made the YIN confidence weighting a soft ramp
+  instead of a hard gate at 0.35.
+================================================================================

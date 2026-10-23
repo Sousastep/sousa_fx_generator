@@ -9,7 +9,7 @@
             "modernui": 1
         },
         "classnamespace": "box",
-        "rect": [ 613.0, 266.0, 1306.0, 889.0 ],
+        "rect": [ 613.0, 266.0, 1436.0, 889.0 ],
         "openinpresentation": 1,
         "isolateaudio": 1,
         "boxes": [
@@ -335,7 +335,7 @@
             {
                 "box": {
                     "embed": 0,
-                    "filename": "harmonizer_microshift_doubler.js",
+                    "filename": "harmonizer_scale_degree.js",
                     "id": "obj-31",
                     "maxclass": "v8ui",
                     "numinlets": 1,
@@ -346,7 +346,7 @@
                     "presentation": 1,
                     "presentation_rect": [ 10.0, 184.0, 239.0, 671.0 ],
                     "textfile": {
-                        "filename": "harmonizer_microshift_doubler.js",
+                        "filename": "harmonizer_scale_degree.js",
                         "flags": 0,
                         "embed": 0,
                         "autowatch": 1
@@ -457,7 +457,7 @@
                     "outlettype": [ "" ],
                     "patching_rect": [ 1101.0, 674.0, 1148.0, 523.0 ],
                     "presentation": 1,
-                    "presentation_rect": [ 254.0, 184.0, 1019.0, 671.0 ],
+                    "presentation_rect": [ 254.0, 184.0, 1127.0, 671.0 ],
                     "rendermode": 0,
                     "url": "file://file_list.html"
                 }
@@ -2955,7 +2955,7 @@
                     "lockeddragscroll": 0,
                     "lockedsize": 0,
                     "maxclass": "bpatcher",
-                    "name": "harmonizer_microshift_doubler.maxpat",
+                    "name": "harmonizer_scale_degree.maxpat",
                     "numinlets": 0,
                     "numoutlets": 0,
                     "offset": [ 0.0, 0.0 ],

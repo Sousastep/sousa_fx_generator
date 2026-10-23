@@ -1,5 +1,5 @@
 // ============================================================================
-// 00_tuba_freq_tracker.txt
+// 00_tuba_freq_tracker.txt -> SUPERSEDED BY v2
 // Hybrid IFT (Instantaneous Frequency Tracking) + Recursive YIN (CMNDF)
 // + Phase-Locked Loop (PLL) Pitch & Analytic Phasor Tracker for Live Tuba
 // ============================================================================

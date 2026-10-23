@@ -1,0 +1,341 @@
+// ============================================================================
+// 00_tuba_freq_tracker_v2.txt
+// Hybrid IFT (Instantaneous Frequency Tracking) + Recursive YIN (CMNDF)
+// + Phase-Locked Loop (PLL) Pitch & Analytic Phasor Tracker for Live Tuba
+// improved via https://claude.ai/chat/1e1737ab-fa1b-4053-a564-f507a7c931e2
+// ============================================================================
+// Design rationale (vs. a standalone YinFFT such as fluid.pitch~):
+//   1. YinFFT needs a 2048-to-4096 sample FFT window (~46 to 93 ms at 44.1/48k)
+//      to resolve a 29 Hz pedal Bb0, and only updates once per hop.
+//   2. This tracker combines TWO complementary real-time engines:
+//      (A) YIN (de Cheveigne & Kawahara 2002) whose difference function is
+//          updated recursively over a sliding window (add the newest sample's
+//          term, subtract the term leaving the window) instead of being
+//          recomputed from scratch. Cost per decimated sample is O(maxLag)
+//          (up to ~430 lags), NOT O(1). The CMNDF search is evaluated every
+//          32 audio samples (~0.7 ms hop) with parabolic sub-sample
+//          interpolation and a first-dip search that reduces octave errors.
+//      (B) IFT: an adaptive narrowband SVF pair isolates the fundamental, a
+//          4-stage quadrature IIR Hilbert pair makes the analytic signal, and
+//          d(theta)/dt is taken EVERY SAMPLE, so there is no frame/hop latency
+//          for fast lip bends and vibrato. NOTE: "no frame latency" is not
+//          "zero latency": the narrow isolating bandpass filters still add
+//          group delay, which grows as the tracked pitch gets lower.
+//   3. A confidence-weighted complementary fusion blends the unambiguous YIN
+//      coarse fundamental with the fast IFT instantaneous frequency, and a
+//      Type-II-style PLL phasor locks to the analytic phase. Outputs are Hz,
+//      confidence, a locked [0..1) phasor, and a fundamental sine wave.
+//
+// What this is NOT:
+//   - It is not a Kalman filter or HMM. There is no covariance, no motion
+//     model and no uncertainty propagation. It is a state-carrying cascade of
+//     smoothers and gates. Confidence scales how fast the fused pitch adapts
+//     (soft ramp), but nothing is propagated as a variance.
+//   - It has no valve or breath priors. The only external prior is the
+//     optional in3 hint, which is averaged 50/50 with YIN. in3 (or a
+//     constraint on the candidate lags) is the natural place to add a
+//     fingering-derived harmonic-series prior later.
+//
+// Known limitations:
+//   - Onset latency at the low end: the default 28 ms YIN window is shorter
+//     than one period of a 28 Hz pedal tone (~36 ms), so the lowest notes are
+//     partly a guess at onset. yin_window_ms can be raised to ~36-40 ms for
+//     more reliable pedal tones, at the cost of extra latency/smoothing. The
+//     window is capped so that window + maxLag fits the 1024-sample buffer
+//     (about 49 ms at 48 kHz with min_freq_hz = 28).
+//   - Sample rates above 48 kHz: decimation is fixed at 4x and maxLag is
+//     capped at 430, so at 96 kHz the lowest trackable pitch rises to roughly
+//     55 Hz. Use 44.1/48 kHz, or raise the buffer sizes and the maxLag cap.
+//   - Changing yin_window_ms while audio runs resets the running sums, so
+//     expect a brief (~one window) dropout in confidence while they refill.
+// ============================================================================
+// Inlets:
+//   in1: Left Audio Input (Tuba)
+//   in2: Right Audio Input (Tuba; if unpatched, mono in1 is used automatically)
+//   in3: Optional External Pitch Hint in Hz (e.g. fluid.pitch~; if 20..1000 Hz,
+//        averaged 50/50 with YIN)
+// Outlets:
+//   out1: Tracked Fundamental Frequency f0 in Hz (audio-rate)
+//   out2: Pitch Confidence / Periodicity [0.0 .. 1.0]
+//   out3: Phase-Locked Tuba Phasor [0.0 .. 1.0) (drop-in replacement for phasor~)
+//   out4: Phase-Locked Fundamental Sine Wave [-1.0 .. 1.0], scaled by confidence
+
+@param({ min: 24.0, max: 120.0 }) min_freq_hz = 28.0;
+@param({ min: 150.0, max: 700.0 }) max_freq_hz = 420.0;
+@param({ min: 0.0, max: 1.0 }) IFT_speed = 0.65;
+@param({ min: -60.0, max: -18.0 }) gate_thresh_db = -42.0;
+@param({ min: 10.0, max: 60.0 }) yin_window_ms = 28.0;
+
+// --- Pre-Conditioning Filters (Isolate 25..450 Hz brass fundamental region) ---
+@state preHp = new svf();
+@state preLp1 = new onepole();
+@state preLp2 = new onepole();
+
+// --- Recursive Sliding YIN (CMNDF) State ---
+// Downsampled by 4x (e.g. 12 kHz at 48 kHz SR) so lags up to 430 cover 28 Hz
+// and up. yinBuf is a 1024-sample circular buffer (window + maxLag must fit).
+@state yinBuf = new FixedSampleArray(1024);
+@state runDiff = new FixedSampleArray(440);
+@state yinWrite: Int = 0;
+@state decCount: Int = 0;
+@state hopCount: Int = 0;
+@state lastWinSize: Int = 0;
+@state yinFreq = 58.27; // Default Bb1
+@state yinConf = 0.0;
+
+// 3-point Median filter history on YIN pitch to reject transient tongue clicks
+@state med0 = 58.27;
+@state med1 = 58.27;
+@state med2 = 58.27;
+
+// --- IFT (Instantaneous Frequency Tracking) State ---
+// Adaptive narrowband SVF tracks the fundamental, followed by a 4-stage Hilbert pair.
+// Each allpass stage is second order in z^-2, so it keeps two past inputs and
+// two past outputs: indices [2k] = value at n-1, [2k+1] = value at n-2.
+@state IFTSvf1 = new svf();
+@state IFTSvf2 = new svf();
+@state hReX = new FixedSampleArray(8);
+@state hReY = new FixedSampleArray(8);
+@state hImX = new FixedSampleArray(8);
+@state hImY = new FixedSampleArray(8);
+@state hDelRe = 0.0;
+@state prevTheta = 0.0;
+@state IFTInstHz = 58.27;
+
+// --- Fusion & Phase-Locked Loop (PLL) State ---
+@state fusedF0 = 58.27;
+@state smoothConf = 0.0;
+@state envRms = 0.0;
+@state pllPhase = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let extHint = in3;
+
+// Sum stereo (or mono if in2 is silent)
+let rawMono = (abs(xR) > 0.0000001) ? (0.5 * (xL + xR)) : xL;
+
+// ============================================================================
+// 1. RMS ENVELOPE & SILENCE GATE
+// ============================================================================
+let envCoeff = 1.0 - exp(-1.0 / (0.008 * sr));
+envRms += (rawMono * rawMono - envRms) * envCoeff;
+let rmsAmp = sqrt(maximum(envRms, 0.0));
+let threshLin = dbtoa(clamp(gate_thresh_db, -60.0, -18.0));
+let isPlaying = (rmsAmp > threshLin) ? 1.0 : 0.0;
+
+// ============================================================================
+// 2. PRE-CONDITIONING FOR RECURSIVE YIN
+// Highpass at 22 Hz (remove breath thumps/DC) + 2-stage lowpass at 260 Hz
+// ============================================================================
+let hpSig = preHp.next(rawMono, 22.0, 0.707)[1];
+let condSig = preLp2.next(preLp1.next(hpSig, 260.0), 260.0);
+
+// ============================================================================
+// 3. 4x DECIMATED RECURSIVE YIN (CMNDF) ENGINE
+// ============================================================================
+decCount = (decCount + 1) % 4;
+if (decCount == 0) {
+	let dSr = sr * 0.25;
+	let minLag: Int = floor(clamp(dSr / clamp(max_freq_hz, 150.0, 700.0), 12.0, 120.0));
+	let maxLag: Int = floor(clamp(dSr / clamp(min_freq_hz, 24.0, 120.0), 130.0, 430.0));
+
+	// Integration window (yin_window_ms). Capped so winSize + maxLag stays
+	// inside the 1024-sample circular buffer. Cost is O(maxLag) per decimated
+	// sample regardless of window length.
+	let winSize: Int = floor(clamp(dSr * 0.001 * clamp(yin_window_ms, 10.0, 60.0), 128.0, 1020.0 - maxLag));
+
+	// The recursive sums are only valid for a fixed window length, so reset
+	// them if the window length changes (parameter edit or sample-rate change).
+	if (winSize != lastWinSize) {
+		for (let i: Int = 0; i < 440; i++) {
+			runDiff[i] = 0.0;
+		}
+		lastWinSize = winSize;
+	}
+
+	yinBuf[yinWrite] = condSig;
+	let oldIdx: Int = (yinWrite - winSize + 1024) % 1024;
+	let xNew = condSig;
+	let xOld = yinBuf[oldIdx];
+
+	// Update running squared difference d_t(tau) recursively (O(maxLag) loop)
+	for (let tau: Int = 1; tau <= maxLag; tau++) {
+		let idxNewTau: Int = (yinWrite - tau + 1024) % 1024;
+		let idxOldTau: Int = (oldIdx - tau + 1024) % 1024;
+		let diffNew = xNew - yinBuf[idxNewTau];
+		let diffOld = xOld - yinBuf[idxOldTau];
+		let updated = runDiff[tau] + diffNew * diffNew - diffOld * diffOld;
+		runDiff[tau] = maximum(updated, 0.0);
+	}
+
+	// Evaluate Cumulative Mean Normalized Difference Function d'(tau) every 8 decimated samples (32 audio samples = ~0.7 ms)
+	hopCount = (hopCount + 1) % 8;
+	if (hopCount == 0 && isPlaying > 0.5) {
+		let cumSum = 0.0;
+		let bestTau: Int = minLag;
+		let bestVal = 10.0;
+		let thresh = 0.14; // YIN absolute threshold for first subharmonic dip
+		let foundDip: Int = 0;
+
+		for (let tau: Int = 1; tau <= maxLag; tau++) {
+			cumSum += runDiff[tau];
+			let cmndf = (cumSum > 0.0000001) ? (runDiff[tau] * tau / cumSum) : 1.0;
+
+			if (tau >= minLag) {
+				if (foundDip == 0) {
+					if (cmndf < bestVal) {
+						bestVal = cmndf;
+						bestTau = tau;
+					}
+					// Once we enter a dip below threshold and start rising, lock to this fundamental!
+					// This favors the first dip over the 2*tau sub-octave while rejecting the 0.5*tau 2nd harmonic
+					if (bestVal < thresh && cmndf > bestVal + 0.02) {
+						foundDip = 1;
+					}
+				}
+			}
+		}
+
+		// Parabolic interpolation around bestTau for sub-sample accuracy
+		let tauM1: Int = maximum(bestTau - 1, 1);
+		let tauP1: Int = minimum(bestTau + 1, maxLag);
+		let y1 = runDiff[tauM1];
+		let y2 = runDiff[bestTau];
+		let y3 = runDiff[tauP1];
+		let denom = 2.0 * (2.0 * y2 - y1 - y3);
+		let delta = (abs(denom) > 0.0000001) ? clamp((y1 - y3) / denom, -0.5, 0.5) : 0.0;
+
+		let refinedLag = bestTau + delta;
+		let rawYinHz = clamp(dSr / refinedLag, min_freq_hz, max_freq_hz);
+		let rawConf = clamp(1.0 - bestVal, 0.0, 1.0);
+
+		// 3-point median filter to strip brass valve/tongue transient spikes
+		if (rawConf > 0.45) {
+			med2 = med1;
+			med1 = med0;
+			med0 = rawYinHz;
+			let a = med0; let b = med1; let c = med2;
+			let medianHz = maximum(minimum(a, b), minimum(maximum(a, b), c));
+			yinFreq = medianHz;
+		}
+		yinConf = rawConf;
+	}
+	yinWrite = (yinWrite + 1) % 1024;
+}
+
+// Optional blend with external fluid.pitch~ hint on in3 if user patches it.
+// (Currently a fixed 50/50 average; a fingering-derived prior could replace this.)
+let anchorHz = (extHint > 20.0 && extHint < 1000.0) ? linearinterp(0.5, yinFreq, extHint) : yinFreq;
+
+// ============================================================================
+// 4. IFT (Instantaneous FREQUENCY TRACKING) ENGINE
+// Isolates the fundamental partial using a dual-stage SVF centered at fusedF0,
+// extracts the analytic signal via a 4-stage quadrature Hilbert transform,
+// and differentiates instantaneous phase d(theta)/dt every single sample.
+// (Per-sample update = no hop latency, but the isolating filters add group delay.)
+// ============================================================================
+let trackCenter = clamp(fusedF0, min_freq_hz, max_freq_hz);
+let bp1 = IFTSvf1.next(hpSig, trackCenter, 0.86)[2];
+let isoFund = IFTSvf2.next(bp1, trackCenter, 0.86)[2];
+
+// 4-Stage Quadrature IIR Hilbert Allpass Pair (polyphase design).
+// Coefficients are the squared values of a standard 4+4 polyphase IIR Hilbert
+// set. They MUST be used in a z^-2 allpass, H(z) = (c - z^-2) / (1 - c*z^-2),
+// i.e. y[n] = c*(x[n] + y[n-2]) - x[n-2], with the real path delayed by one
+// sample. (A z^-1 section, or the opposite sign, gives ~0 degrees of phase
+// difference between the two paths at 28..420 Hz, i.e. no quadrature at all.)
+// Verified numerically at 44.1/48 kHz: phase difference is -90 deg +/- ~1 deg
+// across 28..420 Hz, and recovered frequency matches the input sine.
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+// Real path (delayed one sample at the end)
+let sRe = isoFund;
+let yRe0 = cRe0 * (sRe + hReY[1]) - hReX[1];
+hReX[1] = hReX[0]; hReX[0] = sRe; hReY[1] = hReY[0]; hReY[0] = yRe0; sRe = yRe0;
+let yRe1 = cRe1 * (sRe + hReY[3]) - hReX[3];
+hReX[3] = hReX[2]; hReX[2] = sRe; hReY[3] = hReY[2]; hReY[2] = yRe1; sRe = yRe1;
+let yRe2 = cRe2 * (sRe + hReY[5]) - hReX[5];
+hReX[5] = hReX[4]; hReX[4] = sRe; hReY[5] = hReY[4]; hReY[4] = yRe2; sRe = yRe2;
+let yRe3 = cRe3 * (sRe + hReY[7]) - hReX[7];
+hReX[7] = hReX[6]; hReX[6] = sRe; hReY[7] = hReY[6]; hReY[6] = yRe3;
+let outRe = hDelRe; hDelRe = yRe3;
+
+// Imaginary path
+let sIm = isoFund;
+let yIm0 = cIm0 * (sIm + hImY[1]) - hImX[1];
+hImX[1] = hImX[0]; hImX[0] = sIm; hImY[1] = hImY[0]; hImY[0] = yIm0; sIm = yIm0;
+let yIm1 = cIm1 * (sIm + hImY[3]) - hImX[3];
+hImX[3] = hImX[2]; hImX[2] = sIm; hImY[3] = hImY[2]; hImY[2] = yIm1; sIm = yIm1;
+let yIm2 = cIm2 * (sIm + hImY[5]) - hImX[5];
+hImX[5] = hImX[4]; hImX[4] = sIm; hImY[5] = hImY[4]; hImY[4] = yIm2; sIm = yIm2;
+let yIm3 = cIm3 * (sIm + hImY[7]) - hImX[7];
+hImX[7] = hImX[6]; hImX[6] = sIm; hImY[7] = hImY[6]; hImY[6] = yIm3;
+let outIm = yIm3;
+
+// With the one-sample delay on the real path, the pair rotates clockwise
+// (theta decreases for positive frequencies), so the imaginary part is negated
+// to make theta increase with time and the frequency estimate positive.
+let pol = cartopol(outRe, -outIm);
+let instAmp = pol[0];
+let theta = pol[1];
+
+// Unwrap single-sample phase difference dTheta in [-pi, pi]
+let dTheta = theta - prevTheta;
+if (dTheta < -pi) { dTheta += 2.0 * pi; }
+else if (dTheta > pi) { dTheta -= 2.0 * pi; }
+prevTheta = theta;
+
+// Instantaneous frequency f_inst(t) = (dTheta / (2*pi)) * sr
+let rawInstHz = (dTheta / (2.0 * pi)) * sr;
+
+// Gate IFT instantaneous frequency: only trust when within +/- 18% of the YIN octave anchor.
+// This follows vibrato/glissandi at the sample rate while making octave errors impossible.
+let devRatio = abs(rawInstHz - anchorHz) / maximum(anchorHz, 20.0);
+if (devRatio < 0.18 && instAmp > 0.0002) {
+	let IFTSlew = 1.0 - exp(-1.0 / (0.0018 * sr));
+	IFTInstHz += (rawInstHz - IFTInstHz) * IFTSlew;
+} else {
+	let anchorSlew = 1.0 - exp(-1.0 / (0.006 * sr));
+	IFTInstHz += (anchorHz - IFTInstHz) * anchorSlew;
+}
+
+// ============================================================================
+// 5. YIN + IFT CONFIDENCE-WEIGHTED FUSION & PHASE-LOCKED LOOP (PLL) OSCILLATOR
+// (Complementary blend, not a Kalman filter: fixed IFT_speed mix, with YIN
+// confidence scaling how quickly the fused pitch adapts.)
+// ============================================================================
+let speed = clamp(IFT_speed, 0.0, 1.0);
+let targetF0 = linearinterp(speed, anchorHz, IFTInstHz);
+
+// Soft confidence weight: 0 at yinConf <= 0.35, ramping to 1 at yinConf >= 0.75.
+// Replaces the old hard yinConf > 0.35 gate so adaptation fades in smoothly.
+let confW = clamp((yinConf - 0.35) / 0.4, 0.0, 1.0);
+
+// Hold last valid pitch when player stops blowing or confidence is low
+// (no pitch drop on note release).
+if (isPlaying > 0.5 && confW > 0.0) {
+	let trackSlew = (1.0 - exp(-1.0 / ((0.010 - 0.0085 * speed) * sr))) * confW;
+	fusedF0 += (targetF0 - fusedF0) * trackSlew;
+}
+fusedF0 = clamp(fusedF0, min_freq_hz, max_freq_hz);
+
+// Smooth confidence output [0..1]
+let targetConf = isPlaying * yinConf;
+smoothConf += (targetConf - smoothConf) * (1.0 - exp(-1.0 / (0.010 * sr)));
+
+// Advance PLL Phasor & gently phase-lock to the analytic phase of the tuba fundamental
+let targetPh = wrap((theta + pi) / (2.0 * pi), 0.0, 1.0);
+let phErr = targetPh - pllPhase;
+if (phErr > 0.5) { phErr -= 1.0; }
+else if (phErr < -0.5) { phErr += 1.0; }
+
+let pllLockStrength = 0.015 * smoothConf;
+pllPhase = wrap(pllPhase + (fusedF0 / sr) + pllLockStrength * phErr, 0.0, 1.0);
+
+out1 = fusedF0;
+out2 = smoothConf;
+out3 = pllPhase;
+out4 = sin(2.0 * pi * pllPhase) * smoothConf;

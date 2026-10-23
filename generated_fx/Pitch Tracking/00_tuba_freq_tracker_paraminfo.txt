@@ -2,6 +2,8 @@
 00_tuba_freq_tracker — Parameter Information
 ================================================================================
 
+-> SUPERSEDED BY v2 <-
+
 OVERVIEW
 A custom Tuba-Specialized Hybrid Pitch & Phasor Tracker that outperforms generic FFT-based YinFFT (fluid.pitch~) for live low-brass dubstep performance by uniting three complementary DSP architectures inside a single RNBO codebox~:
 1. 4x-Decimated Recursive Sliding YIN (CMNDF): Computes the Cumulative Mean Normalized Difference Function continuously in the time domain with parabolic sub-sample interpolation and a 3-point transient median filter, updating every 32 samples (0.66 ms) instead of waiting for a 2048/4096-sample FFT frame.
