@@ -1,21 +1,22 @@
 ================================================================================
-harmonizer_microshift_doubler — Parameter Information
+harmonizer_minishift_doubler — Parameter Information
 ================================================================================
 
 OVERVIEW
-A microshift / micropitch doubler: the tuba is copied twice and each copy is
+A microshift (tm Soundtoys) / micropitch (tm Eventide) style doubler: 
+the audio input is copied twice and each copy is
 pitch-shifted by a few cents in opposite directions, one per side. Unlike a
 chorus there is no wobbling modulation — the detune is a constant offset — so
-the copies beat slowly against the dry horn and against each other (DAFx-08
+the copies beat slowly against the dry audio and against each other (DAFx-08
 Paper 30 Sec. 3-4), and because the two sides drift apart in pitch they
 decorrelate, which is what produces the width (DAFx-24 Paper 92 Sec. 1). The
 result is a thick, wide double with no audible pitch of its own, made for a
-live horn that has to fill a big rig.
+live bass that has to fill a big rig.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba). Voice A shifts the left input up, voice
+- in1 / in2: Stereo Audio Input. Voice A shifts the left input up, voice
   B shifts the right input down.
-- in3: Tuba f0 in Hz, used only to size the grains so the splices land on a
+- in3: Pitch f0 in Hz, used only to size the grains so the splices land on a
   period. 0 or out-of-range (outside 20..1200 Hz) holds the last valid value,
   starting at fallback_hz. There is no pitch tracker and in3 is never divided
   by.
@@ -29,7 +30,7 @@ PARAMETERS (6)
    - Range: 0 to 40 cents (Default: 12)
    - Taper: Linear, one voice up and one down by this amount.
    - Function: How far each copy is detuned. Small values (5-10 cents) give a
-     subtle widening that still reads as one horn; 15-25 cents give the classic
+     subtle widening that still reads as one instrument; 15-25 cents give the classic
      Eventide-style double; 30-40 cents are audibly out of tune, useful as a
      sour, unstable layer under a riddim bass.
 
@@ -37,7 +38,7 @@ PARAMETERS (6)
    - Range: 0 to 30 ms (Default: 12)
    - Taper: Linear.
    - Function: Delays the doubled pair behind the dry signal, so the copies read
-     as a second horn rather than as a comb on top of the first. Very small
+     as a second instrument rather than as a comb on top of the first. Very small
      values (0-3 ms) are the tightest, most comb-like doubling.
 
 3. width
@@ -50,7 +51,7 @@ PARAMETERS (6)
 4. mix
    - Range: 0 to 100 % (Default: 50)
    - Taper: Linear dry-to-double crossfade.
-   - Function: How much of the widened pair replaces the dry horn.
+   - Function: How much of the widened pair replaces the dry audio.
 
 5. motion
    - Range: 0 to 100 % (Default: 20)

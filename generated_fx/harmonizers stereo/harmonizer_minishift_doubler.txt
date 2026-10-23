@@ -1,7 +1,7 @@
 // ============================================================================
-// harmonizer_microshift_doubler.txt
-// Doubles the input with two micro-detuned voices for stereo width and
-// thickness (microshift / micropitch).
+// harmonizer_minipitch_doubler.txt
+// Doubles the input with two mini-detuned voices for stereo width and
+// thickness.
 // From: M. Hoffman & P. Cook, "Real-Time Dissonancizers: Two Dissonance-
 //       Augmenting Audio Effects", DAFx-08, Paper 30, Sec. 3-4 (detuned
 //       spectral duplicates beat against the source and thicken it), and
@@ -14,11 +14,11 @@
 //      0 (or anything outside 20..1200 Hz) holds the last valid value,
 //      initialised to fallback_hz
 // in4: one-bar phasor 0..1 -> detune breathing; frozen at 0 the effect is a
-//      static microshift (motion free-runs internally)
+//      static minishift (motion free-runs internally)
 // out1/out2: stereo out
 // ============================================================================
 
-// Micro-detune per side, in cents
+// Mini-detune per side, in cents
 @param({ min: 0.0, max: 40.0 }) detune_cents = 12.0;
 // Pre-delay of the doubled pair
 @param({ min: 0.0, max: 30.0 }) pre_delay_ms = 12.0;
