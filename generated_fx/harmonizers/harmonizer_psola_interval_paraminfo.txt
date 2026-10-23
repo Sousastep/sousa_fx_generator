@@ -1,0 +1,70 @@
+================================================================================
+harmonizer_psola_interval — Parameter Information
+================================================================================
+
+OVERVIEW
+One harmony voice at a fixed musical interval, added to the tuba. The voice is
+built by pitch-synchronous overlap-add (PSOLA, DAFx-11 Paper 52 Sec. 4.1-4.2;
+DAFx-03 Paper 20 Sec. 2): the tuba's incoming period is marked every cycle, and
+grains copied from those marks are re-spaced at the interval ratio. Because the
+grain content is not resampled, the formants of the tuba are preserved — a fifth
+up sounds like a smaller tuba, not a chipmunk. The drift control lets the voice
+move a few cents against the dry horn so the double never phase-locks.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba)
+- in3: Tuba f0 in Hz. 0 or out-of-range (outside 20..1200 Hz) holds the last
+  valid value; it starts at fallback_hz, so the effect is usable before the
+  tracker locks. in3 is never divided by and never treated as 1 Hz.
+- in4: One-Bar Phasor [0..1]. Frozen at 0 the drift oscillator free-runs.
+- out1 / out2: Stereo Output (dry crossfaded with the harmony voice)
+
+PARAMETERS (6)
+
+1. interval
+   - Range: -12.0 to +12.0 semitones (Default: +7)
+   - Taper: Linear in semitones (equal-tempered ratio 2^(st/12)).
+   - Function: Pitch of the harmony voice relative to the tuba. Negative values
+     are sub-harmonies. Below ±0.5 semitone the voice fades out, where it would
+     only beat against the dry signal instead of forming an interval.
+
+2. mix
+   - Range: 0 to 100 % (Default: 40)
+   - Taper: Linear dry-to-harmony crossfade.
+   - Function: Balance between the tuba and the harmony voice. At 0 the output
+     is the untouched input.
+
+3. grain_smooth
+   - Range: 5 to 60 % of a period (Default: 5)
+   - Taper: Linear, added to the two-period minimum grain length.
+   - Function: Extra overlap in the grain window. Low values keep the voice at
+     full level with sharper articulation; high values smear the splices for a
+     smoother, softer double, but overlapping more grains costs level on wide
+     upward intervals (about 4 dB at a fifth from 5 % to 25 %).
+
+4. width
+   - Range: 0 to 100 % (Default: 30)
+   - Taper: Linear side-gain of the harmony voice (1.0x to 2.5x).
+   - Function: Stereo spread of the harmony voice only. The mid component is
+     untouched, so the effect stays mono-compatible.
+
+5. drift_cents
+   - Range: 0 to 25 cents (Default: 4)
+   - Taper: Linear.
+   - Function: Depth of a one-bar-rate pitch drift on the harmony voice. At 0 the
+     voice is perfectly static. The drift phase comes from in4 when the phasor
+     moves, otherwise from an internal slow oscillator.
+
+6. fallback_hz
+   - Range: 40 to 300 Hz (Default: 82)
+   - Taper: Linear.
+   - Function: f0 assumed until in3 first reports a valid pitch (and after a
+     reset). 82 Hz is the tuba's low E.
+
+PORT NOTES
+- Grain length is two tuba periods, stretched to at least two synthesis hops for
+  downward shifts, so the overlap never opens a gap. Output level follows the
+  spectral density of the shift: octave-up keeps only the even harmonics of the
+  source, so it is about 6 dB quieter than dry even at the shortest grain — use
+  mix to balance.
+- Delay through the voice is roughly 3-4 tuba periods (about 40 ms at 82 Hz).

@@ -1,0 +1,244 @@
+// ============================================================================
+// harmonizer_scale_degree.txt
+// Two harmony voices, each locked to a diatonic scale degree above the tuba.
+// From: M. Lagrange, G. Percival & G. Tzanetakis, "Adaptive Harmonization and
+//       Pitch Correction of Polyphonic Audio using Spectral Clustering",
+//       DAFx-07, Paper 69, Sec. 3.3 (harmonization by scale degree: the played
+//       note's degree in the key decides the interval), with the PSOLA grain
+//       re-spacing of A. von dem Knesebeck, S. Kraft & U. Zoelzer, DAFx-11,
+//       Paper 52, Sec. 4.1-4.2.
+//
+// in3 gives the tuba's f0; it is snapped to the key to find the played scale
+// degree, each voice's target degree is that many steps above it, and its
+// PSOLA stream is re-spaced at that interval. As the horn moves in the scale
+// both voices move with it, so a third and a fifth stay a third and a fifth of
+// the key. degree2 = 0 switches the second voice off.
+//
+// tuning = 1 places each voice on a 5-limit just ratio above the horn itself
+// (3/2 for a fifth, 5/4 for a major third, 6/5 for a minor third, ...), so the
+// two pitch-lock and never beat; tuning = 0 uses equal temperament, where a
+// third above the horn sits about 14 cents sharp of the pure ratio.
+// in1/in2: stereo audio
+// in3: tuba f0 in Hz; 0 (or anything outside 20..1200 Hz) holds the last valid
+//      value, initialised to a fixed 82 Hz
+// in4: one-bar phasor 0..1; frozen at 0 the drift free-runs internally
+// out1/out2: stereo out (dry crossfaded with the harmony voices)
+// ============================================================================
+
+// Key: semitones above C
+@param({ min: 0.0, max: 11.0 }) key = 0.0;
+// Mode: 0 major, 1 natural minor, 2 dorian, 3 mixolydian, 4 harmonic minor
+@param({ min: 0.0, max: 4.0 }) mode = 0.0;
+// Voice 1: scale steps above the tuba (2 = a diatonic third)
+@param({ min: 1.0, max: 7.0 }) degree = 2.0;
+// Voice 2: scale steps above the tuba (0 = off, 4 = a diatonic fifth)
+@param({ min: 0.0, max: 7.0 }) degree2 = 4.0;
+// Dry <-> harmony balance
+@param({ min: 0.0, max: 100.0 }) mix = 40.0;
+// Interval glide on note changes
+@param({ min: 5.0, max: 200.0 }) glide_ms = 40.0;
+// Bar-rate drift depth, in cents
+@param({ min: 0.0, max: 25.0 }) drift_cents = 0.0;
+// Tuning: 0 = equal temperament, 1 = just intonation
+@param({ min: 0.0, max: 1.0 }) tuning = 1.0;
+
+@state bufL = new FixedSampleArray(16384);
+@state bufR = new FixedSampleArray(16384);
+@state winTab = new FixedSampleArray(1025);
+@state scaleTab = new FixedIntArray(35);
+@state jiTab = new FixedSampleArray(13);
+@state aStart = new FixedIntArray(12);
+@state aAge = new FixedIntArray(12);
+@state bStart = new FixedIntArray(12);
+@state bAge = new FixedIntArray(12);
+@state wi: Int = 0;
+@state markIdx: Int = 0;
+@state gLenI: Int = 256;
+@state slotA: Int = 0;
+@state slotB: Int = 0;
+@state f0Hold = 0.0;
+@state markAcc = 0.0;
+@state synA = 0.0;
+@state synB = 0.0;
+@state ratioA = 1.0;
+@state ratioB = 1.0;
+@state v2mix = 0.0;
+@state v2K = 0.005;
+@state prevBarIn = 0.0;
+@state freeLfo = new phasor();
+@state srCached = 0.0;
+@state glideCached = -1.0;
+@state ratioK = 0.01;
+
+function init() {
+	for (let i = 0; i < 1025; i++) {
+		winTab[i] = 0.5 - 0.5 * cos(2.0 * pi * i / 1024.0);
+	}
+	for (let g = 0; g < 12; g++) {
+		aStart[g] = 0;
+		aAge[g] = 100000;
+		bStart[g] = 0;
+		bAge[g] = 100000;
+	}
+	// major, natural minor, dorian, mixolydian, harmonic minor
+	scaleTab[0] = 0;  scaleTab[1] = 2;  scaleTab[2] = 4;  scaleTab[3] = 5;  scaleTab[4] = 7;  scaleTab[5] = 9;  scaleTab[6] = 11;
+	scaleTab[7] = 0;  scaleTab[8] = 2;  scaleTab[9] = 3;  scaleTab[10] = 5; scaleTab[11] = 7; scaleTab[12] = 8; scaleTab[13] = 10;
+	scaleTab[14] = 0; scaleTab[15] = 2; scaleTab[16] = 3; scaleTab[17] = 5; scaleTab[18] = 7; scaleTab[19] = 9; scaleTab[20] = 10;
+	scaleTab[21] = 0; scaleTab[22] = 2; scaleTab[23] = 4; scaleTab[24] = 5; scaleTab[25] = 7; scaleTab[26] = 9; scaleTab[27] = 10;
+	scaleTab[28] = 0; scaleTab[29] = 2; scaleTab[30] = 3; scaleTab[31] = 5; scaleTab[32] = 7; scaleTab[33] = 8; scaleTab[34] = 11;
+	// 5-limit just ratios by interval class above the horn: unison, m2, M2, m3,
+	// M3, P4, tritone, P5, m6, M6, m7, M7, octave
+	jiTab[0] = 1.0;          jiTab[1] = 1.0666666667; jiTab[2] = 1.125;
+	jiTab[3] = 1.2;          jiTab[4] = 1.25;         jiTab[5] = 1.3333333333;
+	jiTab[6] = 1.40625;      jiTab[7] = 1.5;          jiTab[8] = 1.6;
+	jiTab[9] = 1.6666666667; jiTab[10] = 1.8;         jiTab[11] = 1.875;
+	jiTab[12] = 2.0;
+}
+
+let sr = maximum(samplerate(), 1.0);
+if (srCached != sr || glideCached != glide_ms) {
+	srCached = sr;
+	glideCached = glide_ms;
+	ratioK = 1.0 - exp(-1.0 / (0.001 * clamp(glide_ms, 5.0, 200.0) * sr));
+	v2K = 1.0 - exp(-1.0 / (0.02 * sr));
+}
+
+let xL = in1;
+let xR = in2;
+let pIn = in3;
+let barIn = in4;
+
+// --- 1. f0 conditioning: hold the last valid value, never divide by in3 ---
+if (pIn > 20.0 && pIn < 1200.0) { f0Hold = pIn; }
+if (f0Hold <= 0.0) { f0Hold = 82.0; }
+let f0 = clamp(f0Hold, 20.0, 1200.0);
+let period = sr / f0;
+
+// --- 2. f0 -> scale degree -> the two intervals in semitones ---
+let midi = 69.0 + 12.0 * log(f0 / 440.0) / log(2.0);
+let noteNum = floor(midi + 0.5);
+let rel = wrap(noteNum - clamp(key, 0.0, 11.0), 0.0, 12.0);
+let miI: Int = clamp(floor(clamp(mode, 0.0, 4.0) + 0.5), 0.0, 4.0);
+let bestI: Int = 0;
+let bestD = 99.0;
+for (let k = 0; k < 7; k++) {
+	let d = abs(rel - scaleTab[miI * 7 + k]);
+	if (d > 6.0) { d = 12.0 - d; }
+	if (d < bestD) { bestD = d; bestI = k; }
+}
+
+let degI: Int = clamp(floor(clamp(degree, 1.0, 7.0) + 0.5), 1.0, 7.0);
+let totalF = bestI + degI;
+let octUp = floor(totalF / 7.0);
+let tIdx: Int = floor(totalF - 7.0 * octUp);
+let interval1St = scaleTab[miI * 7 + tIdx] - scaleTab[miI * 7 + bestI] + 12.0 * octUp;
+
+let deg2I: Int = clamp(floor(clamp(degree2, 0.0, 7.0) + 0.5), 0.0, 7.0);
+let v2on = (deg2I > 0) ? 1.0 : 0.0;
+// 20 ms fade so switching voice 2 off does not cut a grain in half
+v2mix += (v2on - v2mix) * v2K;
+let total2F = bestI + deg2I;
+let octUp2 = floor(total2F / 7.0);
+let tIdx2: Int = floor(total2F - 7.0 * octUp2);
+let interval2St = scaleTab[miI * 7 + tIdx2] - scaleTab[miI * 7 + bestI] + 12.0 * octUp2;
+
+// --- 3. intervals + bar-rate drift (opposite signs) -> read ratios ---
+let barMoving = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let driftPhase = barMoving ? wrap(barIn, 0.0, 1.0) : freeLfo.next(0.13);
+let driftSemis = 0.01 * clamp(drift_cents, 0.0, 25.0) * sin(2.0 * pi * driftPhase);
+let idx1: Int = clamp(floor(interval1St + 0.5), 0.0, 12.0);
+let idx2: Int = clamp(floor(interval2St + 0.5), 0.0, 12.0);
+let driftRatio1 = pow(2.0, driftSemis / 12.0);
+let driftRatio2 = pow(2.0, -driftSemis / 12.0);
+let etRatio1 = pow(2.0, interval1St / 12.0) * driftRatio1;
+let etRatio2 = pow(2.0, interval2St / 12.0) * driftRatio2;
+let jiRatio1 = jiTab[idx1] * driftRatio1;
+let jiRatio2 = jiTab[idx2] * driftRatio2;
+let useJi = (clamp(tuning, 0.0, 1.0) >= 0.5) ? 1.0 : 0.0;
+let ratio1 = useJi * jiRatio1 + (1.0 - useJi) * etRatio1;
+let ratio2 = useJi * jiRatio2 + (1.0 - useJi) * etRatio2;
+ratioA += (ratio1 - ratioA) * ratioK;
+ratioB += (ratio2 - ratioB) * ratioK;
+
+// --- 4. marks every tuba period, grains every P/ratio per voice ---
+let hopA = maximum(period / maximum(ratioA, 0.25), 8.0);
+let hopB = maximum(period / maximum(ratioB, 0.25), 8.0);
+let lf = 2.0 * maximum(period, maximum(hopA, hopB)) + 0.05 * period;
+lf = clamp(lf, 64.0, 10000.0);
+let lInt: Int = floor(lf);
+gLenI = lInt;
+
+bufL[wi] = xL;
+bufR[wi] = xR;
+
+markAcc += 1.0;
+if (markAcc >= period) {
+	markAcc -= period;
+	markIdx = wi;
+}
+
+synA += 1.0;
+if (synA >= hopA) {
+	synA -= hopA;
+	aStart[slotA] = (markIdx - gLenI + 16384) & 16383;
+	aAge[slotA] = 0;
+	slotA = (slotA + 1) % 12;
+}
+
+if (v2on > 0.5) {
+	synB += 1.0;
+	if (synB >= hopB) {
+		synB -= hopB;
+		bStart[slotB] = (markIdx - gLenI + 16384) & 16383;
+		bAge[slotB] = 0;
+		slotB = (slotB + 1) % 12;
+	}
+}
+
+// --- 5. voice 1: Hann overlap-add, normalised by the window sum ---
+let accA = 0.0;
+let wsumA = 0.0;
+for (let g = 0; g < 12; g++) {
+	let ag = aAge[g];
+	if (ag < gLenI) {
+		let xi: Int = floor(ag * 1024.0 / gLenI);
+		if (xi > 1024) { xi = 1024; }
+		let wv = winTab[xi];
+		accA += wv * bufL[(aStart[g] + ag) & 16383];
+		wsumA += wv;
+		aAge[g] = ag + 1;
+	}
+}
+
+// --- 6. voice 2 ---
+let accB = 0.0;
+let wsumB = 0.0;
+for (let g = 0; g < 12; g++) {
+	let ag = bAge[g];
+	if (ag < gLenI) {
+		let xi: Int = floor(ag * 1024.0 / gLenI);
+		if (xi > 1024) { xi = 1024; }
+		let wv = winTab[xi];
+		accB += wv * bufR[(bStart[g] + ag) & 16383];
+		wsumB += wv;
+		bAge[g] = ag + 1;
+	}
+}
+wi = (wi + 1) & 16383;
+
+// --- 7. both voices, spread slightly apart, then dry/wet ---
+let v1 = 0.0;
+let v2 = 0.0;
+if (wsumA > 0.000001) { v1 = accA / wsumA; }
+if (wsumB > 0.000001) { v2 = accB / wsumB * v2mix; }
+let nv = 1.0 + v2mix;
+let sum = v1 + v2;
+let dif = v1 - v2;
+let sp = 0.6 * v2mix;
+let wetL = (sum + sp * dif) / nv;
+let wetR = (sum - sp * dif) / nv;
+
+let w = clamp(mix / 100.0, 0.0, 1.0);
+out1 = linearinterp(w, xL, wetL);
+out2 = linearinterp(w, xR, wetR);

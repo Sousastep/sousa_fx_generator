@@ -1,0 +1,73 @@
+================================================================================
+harmonizer_microshift_doubler — Parameter Information
+================================================================================
+
+OVERVIEW
+A microshift / micropitch doubler: the tuba is copied twice and each copy is
+pitch-shifted by a few cents in opposite directions, one per side. Unlike a
+chorus there is no wobbling modulation — the detune is a constant offset — so
+the copies beat slowly against the dry horn and against each other (DAFx-08
+Paper 30 Sec. 3-4), and because the two sides drift apart in pitch they
+decorrelate, which is what produces the width (DAFx-24 Paper 92 Sec. 1). The
+result is a thick, wide double with no audible pitch of its own, made for a
+live horn that has to fill a big rig.
+
+INLETS & OUTLETS
+- in1 / in2: Stereo Audio Input (Tuba). Voice A shifts the left input up, voice
+  B shifts the right input down.
+- in3: Tuba f0 in Hz, used only to size the grains so the splices land on a
+  period. 0 or out-of-range (outside 20..1200 Hz) holds the last valid value,
+  starting at fallback_hz. There is no pitch tracker and in3 is never divided
+  by.
+- in4: One-Bar Phasor [0..1]. Drives the detune breathing; frozen at 0 the
+  effect is a static microshift (the breathing oscillator free-runs).
+- out1 / out2: Stereo Output (dry crossfaded with the doubled pair)
+
+PARAMETERS (6)
+
+1. detune_cents
+   - Range: 0 to 40 cents (Default: 12)
+   - Taper: Linear, one voice up and one down by this amount.
+   - Function: How far each copy is detuned. Small values (5-10 cents) give a
+     subtle widening that still reads as one horn; 15-25 cents give the classic
+     Eventide-style double; 30-40 cents are audibly out of tune, useful as a
+     sour, unstable layer under a riddim bass.
+
+2. pre_delay_ms
+   - Range: 0 to 30 ms (Default: 12)
+   - Taper: Linear.
+   - Function: Delays the doubled pair behind the dry signal, so the copies read
+     as a second horn rather than as a comb on top of the first. Very small
+     values (0-3 ms) are the tightest, most comb-like doubling.
+
+3. width
+   - Range: 0 to 100 % (Default: 70)
+   - Taper: Mid/side crossfade between the two voices.
+   - Function: 0 puts both detunes in the centre (a mono double), 100 puts voice
+     A fully left and voice B fully right. The mid component is untouched, so
+     the effect stays mono-compatible.
+
+4. mix
+   - Range: 0 to 100 % (Default: 50)
+   - Taper: Linear dry-to-double crossfade.
+   - Function: How much of the widened pair replaces the dry horn.
+
+5. motion
+   - Range: 0 to 100 % (Default: 20)
+   - Taper: Linear depth, one bar per cycle.
+   - Function: Breathes the detune in opposite directions on the two sides, so
+     the width opens and closes once per bar instead of sitting still. At 0 the
+     detune is constant. The phase comes from in4 when the phasor moves,
+     otherwise from an internal slow oscillator.
+
+6. fallback_hz
+   - Range: 40 to 300 Hz (Default: 82)
+   - Taper: Linear.
+   - Function: f0 assumed until in3 first reports a pitch; it only sets the grain
+     length, so the effect is fully usable with no tracker at all.
+
+PORT NOTES
+- No pitch tracking and no modulation LFO: the detune is constant, which is what
+  separates this from the chorus effects in this repo.
+- At detune_cents = 0 the two voices are identical and the wet is just a delayed
+  copy of the dry; use mix or a non-zero detune.

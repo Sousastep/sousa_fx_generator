@@ -1,0 +1,150 @@
+// ============================================================================
+// harmonizer_psola_interval.txt
+// One pitch-synchronous harmony voice at a fixed musical interval.
+// From: A. von dem Knesebeck, S. Kraft & U. Zoelzer, "Realtime System for
+//       Backing Vocal Harmonization", DAFx-11, Paper 52, Sec. 4.1-4.2
+//       (PSOLA pitch shifters feed each backing voice), and D. Arfib &
+//       V. Verfaille, "Driving Pitch-Shifting and Time-Scaling Algorithms with
+//       Adaptive and Gestural Techniques", DAFx-03, Paper 20, Sec. 2
+//       (PSOLA = analysis grains on pitch marks, re-spaced on synthesis).
+//
+// The tuba's f0 (in3) gives the analysis period: a pitch mark is stored every
+// period, and each synthesis grain is copied from the last mark backwards at
+// rate 1.0 (content untouched, spectral envelope/formants preserved) and
+// re-spaced every P/ratio samples, so the output F0 is the tuba's f0 times the
+// interval ratio. Hann grains of two periods (longer when a downward shift
+// needs more overlap) are overlap-added and normalised by the summed window.
+// in1/in2: stereo audio
+// in3: tuba f0 in Hz; 0 (or anything outside 20..1200 Hz) holds the last valid
+//      value, initialised to fallback_hz
+// in4: one-bar phasor 0..1; frozen at 0 the drift free-runs internally
+// out1/out2: stereo out (dry crossfaded with the harmony voice)
+// ============================================================================
+
+// Interval above (+) or below (-) the tuba
+@param({ min: -12.0, max: 12.0 }) interval = 7.0;
+// Dry <-> harmony balance
+@param({ min: 0.0, max: 100.0 }) mix = 40.0;
+// Extra grain length, % of a period (more = smoother splices)
+@param({ min: 5.0, max: 60.0 }) grain_smooth = 5.0;
+// Stereo width of the harmony voice
+@param({ min: 0.0, max: 100.0 }) width = 30.0;
+// Bar-rate drift depth, in cents
+@param({ min: 0.0, max: 25.0 }) drift_cents = 4.0;
+// f0 used until in3 reports a pitch
+@param({ min: 40.0, max: 300.0 }) fallback_hz = 82.0;
+
+@state bufL = new FixedSampleArray(16384);
+@state bufR = new FixedSampleArray(16384);
+@state winTab = new FixedSampleArray(1025);
+@state gStart = new FixedIntArray(12);
+@state gAge = new FixedIntArray(12);
+@state wi: Int = 0;
+@state markIdx: Int = 0;
+@state gLenI: Int = 256;
+@state slot: Int = 0;
+@state f0Hold = 0.0;
+@state markAcc = 0.0;
+@state synAcc = 0.0;
+@state ratioSm = 1.0;
+@state prevBarIn = 0.0;
+@state freeLfo = new phasor();
+@state srCached = 0.0;
+@state ratioK = 0.01;
+
+function init() {
+	for (let i = 0; i < 1025; i++) {
+		winTab[i] = 0.5 - 0.5 * cos(2.0 * pi * i / 1024.0);
+	}
+	for (let g = 0; g < 12; g++) {
+		gStart[g] = 0;
+		gAge[g] = 100000;
+	}
+}
+
+let sr = maximum(samplerate(), 1.0);
+if (srCached != sr) {
+	srCached = sr;
+	ratioK = 1.0 - exp(-1.0 / (0.03 * sr));
+}
+
+let xL = in1;
+let xR = in2;
+let pIn = in3;
+let barIn = in4;
+
+// --- 1. f0 conditioning: hold the last valid value, never divide by in3 ---
+if (pIn > 20.0 && pIn < 1200.0) { f0Hold = pIn; }
+if (f0Hold <= 0.0) { f0Hold = clamp(fallback_hz, 40.0, 300.0); }
+let period = sr / clamp(f0Hold, 40.0, 1200.0);
+
+// --- 2. interval + bar-rate drift -> read ratio (30 ms glide) ---
+let semis = clamp(interval, -12.0, 12.0);
+let barMoving = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+prevBarIn = barIn;
+let driftPhase = barMoving ? wrap(barIn, 0.0, 1.0) : freeLfo.next(0.13);
+let driftSemis = 0.01 * clamp(drift_cents, 0.0, 25.0) * sin(2.0 * pi * driftPhase);
+let ratio = pow(2.0, (semis + driftSemis) / 12.0);
+ratioSm += (ratio - ratioSm) * ratioK;
+
+// --- 3. analysis marks every tuba period, synthesis grains every P/ratio ---
+let hop = maximum(period / maximum(ratioSm, 0.25), 8.0);
+let lf = 2.0 * maximum(period, hop) + 0.01 * clamp(grain_smooth, 5.0, 60.0) * period;
+lf = clamp(lf, 64.0, 10000.0);
+let lInt: Int = floor(lf);
+gLenI = lInt;
+
+bufL[wi] = xL;
+bufR[wi] = xR;
+
+markAcc += 1.0;
+if (markAcc >= period) {
+	markAcc -= period;
+	markIdx = wi;
+}
+
+synAcc += 1.0;
+if (synAcc >= hop) {
+	synAcc -= hop;
+	gStart[slot] = (markIdx - gLenI + 16384) & 16383;
+	gAge[slot] = 0;
+	slot = (slot + 1) % 12;
+}
+
+// --- 4. Hann overlap-add of the active grains, normalised by the window sum ---
+let accL = 0.0;
+let accR = 0.0;
+let wsum = 0.0;
+for (let g = 0; g < 12; g++) {
+	let ag = gAge[g];
+	if (ag < gLenI) {
+		let xi: Int = floor(ag * 1024.0 / gLenI);
+		if (xi > 1024) { xi = 1024; }
+		let wv = winTab[xi];
+		let idx = (gStart[g] + ag) & 16383;
+		accL += wv * bufL[idx];
+		accR += wv * bufR[idx];
+		wsum += wv;
+		gAge[g] = ag + 1;
+	}
+}
+wi = (wi + 1) & 16383;
+
+// --- 5. mono-safe width, then dry/wet ---
+let wetL = 0.0;
+let wetR = 0.0;
+if (wsum > 0.000001) {
+	let gL = accL / wsum;
+	let gR = accR / wsum;
+	let gm = 0.5 * (gL + gR);
+	let gs = 0.5 * (gL - gR);
+	let sideGain = 1.0 + 1.5 * clamp(width / 100.0, 0.0, 1.0);
+	wetL = gm + sideGain * gs;
+	wetR = gm - sideGain * gs;
+}
+
+// The voice fades out below half a semitone, where it would only beat with dry
+let voiceGate = clamp(abs(semis) / 0.5, 0.0, 1.0);
+let w = clamp(mix / 100.0, 0.0, 1.0) * voiceGate;
+out1 = linearinterp(w, xL, wetL);
+out2 = linearinterp(w, xR, wetR);
