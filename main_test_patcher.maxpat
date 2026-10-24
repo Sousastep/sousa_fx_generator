@@ -9,10 +9,20 @@
             "modernui": 1
         },
         "classnamespace": "box",
-        "rect": [ 850.0, 436.0, 1436.0, 889.0 ],
+        "rect": [ 752.0, 212.0, 1436.0, 889.0 ],
         "openinpresentation": 1,
         "isolateaudio": 1,
         "boxes": [
+            {
+                "box": {
+                    "id": "obj-78",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 0,
+                    "patching_rect": [ 535.0, 573.0, 41.0, 22.0 ],
+                    "text": "s~ in5"
+                }
+            },
             {
                 "box": {
                     "id": "obj-76",
@@ -3280,7 +3290,7 @@
                                     "origin": "70089a4a-cfe9-11f1-9114-a2f417e70586",
                                     "type": "rnbo",
                                     "subtype": "",
-                                    "embed": 0,
+                                    "embed": 1,
                                     "snapshot": {
                                         "damping": {
                                             "value": 0.7
@@ -3301,10 +3311,10 @@
                                     },
                                     "fileref": {
                                         "name": "untitled",
-                                        "filename": "untitled_20261024.maxsnap",
+                                        "filename": "untitled_20261024_7.maxsnap",
                                         "filepath": "~/Documents/Max 9/Snapshots",
                                         "filepos": -1,
-                                        "snapshotfileid": "dcc66f5d91db8cfc0df127497c1f0a53"
+                                        "snapshotfileid": "17642cdd209b80b9f5ca7a6392fdf1d7"
                                     }
                                 }
                             ]
@@ -6482,7 +6492,7 @@
                                     "origin": "70082e2a-cfe9-11f1-9114-a2f417e70586",
                                     "type": "rnbo",
                                     "subtype": "",
-                                    "embed": 0,
+                                    "embed": 1,
                                     "snapshot": {
                                         "curve": {
                                             "value": 0.8
@@ -6503,10 +6513,10 @@
                                     },
                                     "fileref": {
                                         "name": "untitled",
-                                        "filename": "untitled_20261024_1.maxsnap",
+                                        "filename": "untitled_20261024_8.maxsnap",
                                         "filepath": "~/Documents/Max 9/Snapshots",
                                         "filepos": -1,
-                                        "snapshotfileid": "a50121887fbb87db4d8195f17bab1878"
+                                        "snapshotfileid": "c9f2fd319597f5d130dcadfcfb9c40a9"
                                     }
                                 }
                             ]
@@ -9137,7 +9147,7 @@
                                     "origin": "7007ce8a-cfe9-11f1-9114-a2f417e70586",
                                     "type": "rnbo",
                                     "subtype": "",
-                                    "embed": 0,
+                                    "embed": 1,
                                     "snapshot": {
                                         "release_ms": {
                                             "value": 500.0
@@ -9155,10 +9165,10 @@
                                     },
                                     "fileref": {
                                         "name": "untitled",
-                                        "filename": "untitled_20261024_2.maxsnap",
+                                        "filename": "untitled_20261024_9.maxsnap",
                                         "filepath": "~/Documents/Max 9/Snapshots",
                                         "filepos": -1,
-                                        "snapshotfileid": "c2374f1cecea8ede168433d8ebd3d2d8"
+                                        "snapshotfileid": "39176a3ccd8f0d40e5fe3d56126800d2"
                                     }
                                 }
                             ]
@@ -11242,7 +11252,7 @@
                                     "origin": "70077c78-cfe9-11f1-9114-a2f417e70586",
                                     "type": "rnbo",
                                     "subtype": "",
-                                    "embed": 0,
+                                    "embed": 1,
                                     "snapshot": {
                                         "release_ms": {
                                             "value": 250.0
@@ -11257,10 +11267,10 @@
                                     },
                                     "fileref": {
                                         "name": "untitled",
-                                        "filename": "untitled_20261024_3.maxsnap",
+                                        "filename": "untitled_20261024_10.maxsnap",
                                         "filepath": "~/Documents/Max 9/Snapshots",
                                         "filepos": -1,
-                                        "snapshotfileid": "fac229ed670d9015109a197b20a47156"
+                                        "snapshotfileid": "bd7d4c02d751f93a006d0288d119eb54"
                                     }
                                 }
                             ]
@@ -13891,7 +13901,7 @@
                                     "origin": "7006befa-cfe9-11f1-9114-a2f417e70586",
                                     "type": "rnbo",
                                     "subtype": "",
-                                    "embed": 0,
+                                    "embed": 1,
                                     "snapshot": {
                                         "floor_db": {
                                             "value": -60.0
@@ -13909,10 +13919,10 @@
                                     },
                                     "fileref": {
                                         "name": "untitled",
-                                        "filename": "untitled_20261024_4.maxsnap",
+                                        "filename": "untitled_20261024_11.maxsnap",
                                         "filepath": "~/Documents/Max 9/Snapshots",
                                         "filepos": -1,
-                                        "snapshotfileid": "bfc993c405eaf4502409bbe84ace929f"
+                                        "snapshotfileid": "6aa66614d357c2930ff3960db58aa88b"
                                     }
                                 }
                             ]
@@ -15449,7 +15459,7 @@
                                     "origin": "700685e8-cfe9-11f1-9114-a2f417e70586",
                                     "type": "rnbo",
                                     "subtype": "",
-                                    "embed": 0,
+                                    "embed": 1,
                                     "snapshot": {
                                         "smooth_ms": {
                                             "value": 10.0
@@ -15461,10 +15471,10 @@
                                     },
                                     "fileref": {
                                         "name": "untitled",
-                                        "filename": "untitled_20261024_5.maxsnap",
+                                        "filename": "untitled_20261024_12.maxsnap",
                                         "filepath": "~/Documents/Max 9/Snapshots",
                                         "filepos": -1,
-                                        "snapshotfileid": "56dc112d223b517a616e65d7f3427bf5"
+                                        "snapshotfileid": "43426201646fe67a61eb0939d19b023f"
                                     }
                                 }
                             ]
@@ -18095,7 +18105,7 @@
                                     "origin": "70061a04-cfe9-11f1-9114-a2f417e70586",
                                     "type": "rnbo",
                                     "subtype": "",
-                                    "embed": 0,
+                                    "embed": 1,
                                     "snapshot": {
                                         "stages": {
                                             "value": 4.0
@@ -18113,10 +18123,10 @@
                                     },
                                     "fileref": {
                                         "name": "untitled",
-                                        "filename": "untitled_20261024_6.maxsnap",
+                                        "filename": "untitled_20261024_13.maxsnap",
                                         "filepath": "~/Documents/Max 9/Snapshots",
                                         "filepos": -1,
-                                        "snapshotfileid": "22d0917338dec2eff21d477677fce114"
+                                        "snapshotfileid": "3114a0ca3d6764c5e253b9c6e6aeec54"
                                     }
                                 }
                             ]
@@ -22239,7 +22249,7 @@
             {
                 "box": {
                     "embed": 0,
-                    "filename": "chorus_bbd_blep_clock_matrix.js",
+                    "filename": "wavefold_259_bass.js",
                     "id": "obj-31",
                     "maxclass": "v8ui",
                     "numinlets": 1,
@@ -22250,7 +22260,7 @@
                     "presentation": 1,
                     "presentation_rect": [ 10.0, 184.0, 239.0, 671.0 ],
                     "textfile": {
-                        "filename": "chorus_bbd_blep_clock_matrix.js",
+                        "filename": "wavefold_259_bass.js",
                         "flags": 0,
                         "embed": 0,
                         "autowatch": 1
@@ -22842,7 +22852,6 @@
                                 "filename": "sousa_mic.aif",
                                 "filekind": "audiofile",
                                 "id": "u026004737",
-                                "selection": [ 0.5304347826086957, 0.7195652173913043 ],
                                 "loop": 1,
                                 "content_state": {
                                     "loop": 1
@@ -22898,7 +22907,7 @@
                     "lockeddragscroll": 0,
                     "lockedsize": 0,
                     "maxclass": "bpatcher",
-                    "name": "chorus_bbd_blep_clock_matrix.maxpat",
+                    "name": "wavefold_259_bass.maxpat",
                     "numinlets": 0,
                     "numoutlets": 0,
                     "offset": [ 0.0, 0.0 ],
@@ -22974,6 +22983,12 @@
                     "destination": [ "obj-5", 1 ],
                     "order": 2,
                     "source": [ "obj-16", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-78", 0 ],
+                    "source": [ "obj-16", 2 ]
                 }
             },
             {
@@ -23429,7 +23444,7 @@
         "parameters": {
             "obj-16": [ "rnbo~[2]", "rnbo~", 0 ],
             "obj-20": [ "rnbo~[4]", "rnbo~", 0 ],
-            "obj-21::obj-9": [ "rnbo~", "rnbo~", 0 ],
+            "obj-21::obj-10": [ "rnbo~", "rnbo~", 0 ],
             "obj-22": [ "rnbo~[5]", "rnbo~", 0 ],
             "obj-32": [ "rnbo~[6]", "rnbo~", 0 ],
             "obj-33": [ "rnbo~[7]", "rnbo~", 0 ],
