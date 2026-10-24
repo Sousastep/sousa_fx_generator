@@ -1,0 +1,81 @@
+================================================================================
+enharmonic_sideband_tremolo — Parameter Information
+================================================================================
+
+WHAT IT IS
+An enharmonic tremolo: the amplitude modulation runs at an integer multiple of
+the tracked note, so the modulation sidebands land back on that same note's
+harmonic series. A partial at k·f0 modulated at m·f0 gives (k ± m)·f0, and both
+are harmonics of f0 (a negative result folds back with inverted sign). Every
+component of the output is therefore a spelling of the note being played — the
+tremolo thickens, growls and adds bite, and it cannot produce a pitch that is
+out of tune, even while the tuba bends or the player moves between notes.
+
+With f0 = 55 Hz and 4/1 the rate is 220 Hz: a single sine becomes its 3rd and
+5th harmonics (165 + 275 Hz) around a retained fundamental. At 2/1 the sidebands
+land on the fundamental and the 12th (55 + 165 Hz); at 6/1 on the 5th and 7th.
+
+Slow it down conceptually and this is an amp tremolo; speed it into the audio
+range and — as the tremolo-oscillator paper puts it — the percept fuses into one
+complex tone. That is exactly the range this effect lives in, which is why it is
+"enharmonic" rather than a wobble: the tremolo is heard as timbre, not as level.
+
+"depth" is a phase-coherent dry/wet: at 0 the sideband gain is exactly 0 and the
+output is the input sample for sample. No dry copy is mixed in, so there is no
+comb notch at the middle of the knob.
+
+Source: Holopainen, DAFx-10 §2 (audio-rate tremolo fuses to one complex tone);
+Disch & Zölzer, DAFx-99 §2 Eqs. 1-2 (AM vs. ring modulation); Werner et al.,
+DAFx-16 §3 (AM+FM sidebands around a sustained tone); Tong & Tojo, SMC-19 §2
+(5-limit ratios).
+
+PARAMETERS (5 + output gain)
+
+1. trem_ratio — 2/1, 3/1, 4/1, 5/1, 6/1; default 4/1
+   Tremolo rate as an integer multiple of the tracked note. Lower values are a
+   warm doubling (2/1) or a hollow even-harmonic shimmer (3/1); 4/1 and 5/1 add
+   odd harmonics and bite; 6/1 is bright and buzzy. All five are 5-limit
+   ratios, so every sideband stays on the note's own harmonic series.
+
+2. depth — 0…1, default 0.7
+   Phase-coherent dry/wet. 0 = untouched input, 1 = the full modulation swing.
+   This is the amount of sideband generation, not a crossfade with a dry copy.
+
+3. carrier — 0…1, default 0.5
+   How much of the original fundamental survives. 1 = plain unipolar AM (the
+   note stays put and grows harmonics), 0 = balanced/ring modulation (the
+   fundamental and every even-order survivor cancels, leaving the enharmonic
+   upper/lower partials only). Intermediate values shift the balance between
+   "thicker note" and "metallic growl".
+
+4. spin — 0…1, default 0.3
+   Rotates the added sidebands between left and right once per bar, driven by
+   in4. 0 is mono-coherent; 1 swings the sideband energy fully from side to
+   side. With in4 held at 0 the rotation is off, so an unpatched phasor leaves
+   both channels identical.
+
+5. glide_ms — 1…200 ms, default 25 ms
+   How fast the tremolo rate follows a new tracked pitch. Short values track a
+   fast slide but chirp; long values keep the growl steady across a phrase but
+   lag behind big interval jumps. 20-40 ms suits a tuba.
+
+6. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim, the last thing in the chain. Does not count toward the
+   8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: tracked f0 in Hz (20…1200) — the rate source. 0 or out of range holds
+  the last valid value; cold start 55 Hz (A1).
+- in4: 0..1 one-bar phasor for the sideband rotation. Held at 0 the sidebands
+  are centred.
+- out1 / out2: stereo audio, exactly dry at depth = 0.
+- out3: transient click, 0..1, one sample per detected attack (fast vs slow
+  rectified envelope, 3 ms / 60 ms). Audio-rate control signal, not audio.
+
+NOTES
+- The rate is capped at a quarter of the sample rate so the highest sideband
+  stays clear of Nyquist; the cap only bites on very high notes at 5/1 and 6/1.
+- The modulation gain is allowed to go negative at high depth/carrier settings:
+  that is ring modulation, not a polarity bug.
+- No safety limiter, no metering, no presets.

@@ -1,0 +1,78 @@
+================================================================================
+harmonic_triband_tremolo — Parameter Information
+================================================================================
+
+WHAT IT IS
+A three-band harmonic tremolo that rotates. The note is split into low, mid and
+high bands at two 5-limit multiples of the tracked pitch, and each band's gain
+is breathed at its own LFO phase. At rotation 0 all three bands pump together
+(an ordinary tremolo); as rotation approaches 1 the three LFOs sit a third of a
+cycle apart, their gains sum to a constant, and the whole-signal level stops
+pumping while the colour of the note travels up and down the harmonic series.
+That is the spectral-timbre half of what the DAFx-06 effect taxonomy calls
+"tremolo" (loudness / rhythm / spectral timbre).
+
+"depth" is a phase-coherent dry/wet. The split is complementary
+(low + mid + high = input exactly), so at depth 0 every band gain is 1.0 and the
+output is the input sample for sample — no dry copy, no comb notch, no level dip
+at the middle of the knob.
+
+Source: Disch & Zölzer, DAFx-99 §2 Eqs. 1-2 (AM law) and §5 (three 120°-spaced
+modulators with constant sum); Verfaille/Guastavino/Traube, DAFx-06 paper 107
+(tremolo as loudness + rhythm + spectral timbre); Pekonen & Välimäki, DAFx-11
+§1-2 (organ tremolo stronger on high partials).
+
+PARAMETERS (6 + output gain)
+
+1. rate_hz — 0.05…12 Hz, default 2.4 Hz
+   Rotation speed. Slow values (0.2-1 Hz) read as a drifting filter; 2-5 Hz is
+   a musical tremolo; above 8 Hz it fuses into a buzz.
+
+2. depth — 0…1, default 0.8
+   Phase-coherent dry/wet. 0 = untouched input, 1 = every band gain swings the
+   full ±range around unity.
+
+3. rotation — 0…1, default 0.4
+   Phase spread between the three bands, 0 to a third of a cycle each.
+   0 = all bands pump together (plain tremolo, obvious level pumping).
+   1 = thirds apart, gains sum to a constant, only the band balance moves.
+   Between the two you get a tremolo that pumps and rotates at once.
+
+4. split_ratio — 1/1, 3/2, 2/1, 5/2, 3/1, 4/1; default 2/1
+   First band edge as a 5-limit multiple of f0; the second edge is one octave
+   above it. 1/1 puts only the fundamental in the low band, 4/1 puts nearly the
+   whole note in the low band and tremolos just the top.
+
+5. sub_hold — 0…1, default 0.5
+   How much the lowest band is exempt from modulation. At 1 the fundamental
+   never moves and only the upper bands rotate, which keeps a bass note solid
+   under a busy top end; at 0 all three bands rotate equally.
+
+6. bar_sync — 0…1, default 0.7
+   How far the rotation is organised by the bar phasor. At 0 the LFO runs at
+   rate_hz. Turning it up pulls the rate to the nearest whole number of cycles
+   per bar and locks the phase to the downbeat; the settle is a 200 ms glide in
+   frequency, never a jump in gain. At 1 the rotation repeats identically every
+   bar, and the rate knob picks the multiple.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim, the last thing in the chain. Does not count toward the
+   8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: tracked f0 in Hz (20…1200). 0 or out of range holds the last valid
+  value; cold start 55 Hz (A1).
+- in4: 0..1 one-bar phasor. bar_sync pulls the rate to the nearest whole number
+  of cycles per bar and phase-locks to the downbeat; held at 0 the LFO runs at
+  rate_hz.
+- out1 / out2: stereo audio, exactly dry at depth = 0.
+- out3: transient click, 0..1, one sample per detected attack (fast vs slow
+  rectified envelope, 3 ms / 60 ms). Audio-rate control signal, not audio.
+
+NOTES
+- Bands are differences of two identical cascaded one-pole lowpasses, so
+  low + mid + high reconstructs the input exactly and the bands are phase
+  coherent with each other at every frequency.
+- Band gains are floored at 0 so a deep setting cannot invert polarity.
+- No safety limiter, no metering, no presets.

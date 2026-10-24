@@ -1,0 +1,80 @@
+================================================================================
+transient_retrig_tremolo — Parameter Information
+================================================================================
+
+WHAT IT IS
+A tremolo that is keyed by the tuba's attacks. A fast-vs-slow rectified
+envelope detector fires once per note (50 ms refractory), pulls the LFO phase
+back to its open peak and opens the gain for ~40 ms, so the consonant punches
+through and every note starts its wobble the same way instead of the LFO
+landing wherever it happens to be. The keyed phase offset unwinds over 60 ms, so
+the tremolo glides back into the groove rather than stepping, and the same
+detector's 0..1 output is available on out3 for other effects.
+
+The rate can come from three places: a free-running rate, pulses per bar read
+from in4 (sample-exact — the phase is taken straight off the bar phasor), or a
+5-limit division of the tracked pitch (f0/16), so the wobble sits at a fixed
+relationship to the note. If in4 stops moving, bar sync falls back to rate_hz
+instead of freezing.
+
+"depth" is a phase-coherent dry/wet: at 0 the gain is exactly 1 and the output
+is the input sample for sample. No dry copy is mixed in.
+
+Source: Duxbury/Sandler/Davies, DAFx-02 §1-2 (energy-based onset detection
+function); McGovern et al., DAFx-09 paper 10 §2.3 (modulation keying of effect
+control); Disch & Zölzer, DAFx-99 §2 Eq. 1 (AM law).
+
+PARAMETERS (7 + output gain)
+
+1. sync — free / bar / pitch; default bar
+   Rate source. free = rate_hz. bar = pulses per bar taken from the in4 phasor.
+   pitch = f0/16 (a 5-limit division), so the tremolo tracks the note itself.
+
+2. rate_hz — 0.1…12 Hz, default 4.0 Hz
+   Free-running rate, and the fallback when in4 is not moving. 1-2 Hz sways,
+   4-6 Hz is a proper dubstep wobble, 8-12 Hz starts to buzz.
+
+3. pulses — 1…16, default 4
+   Tremolo cycles per bar in bar sync. 4 = sixteenth-note pumping at 4/4,
+   1 = one slow swell per bar, 8-16 = fast stutter.
+
+4. depth — 0…1, default 0.8
+   Phase-coherent dry/wet. 0 = untouched input, 1 = the gain closes completely
+   at the trough of every cycle.
+
+5. retrigger — 0…1, default 0.7
+   How hard an attack keys the tremolo: the amount of phase pull toward the open
+   peak, and how far the tremolo opens up for the ~40 ms duck. 0 = a plain
+   free-running tremolo that ignores attacks.
+
+6. shape — 0…1, default 0.3
+   Wave shape, round to gated. The cosine is raised to (1 + 3·shape), so the open
+   part of the cycle gets narrower: 0 is a smooth swell, 1 is a short on-pulse
+   followed by a long closed gap.
+
+7. sens — 0…1, default 0.4
+   Detector sensitivity, i.e. how quiet an attack can be and still key the LFO.
+   Low values need a hard tongue, high values also catch soft legato re-articu-
+   lation (and, on a noisy input, more false triggers).
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim, the last thing in the chain. Does not count toward the
+   8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: tracked f0 in Hz (20…1200) — rate source in pitch sync. 0 or out of range
+  holds the last valid value; cold start 55 Hz (A1).
+- in4: 0..1 one-bar phasor — rate source in bar sync. Held at 0 the tremolo
+  falls back to rate_hz.
+- out1 / out2: stereo audio, exactly dry at depth = 0.
+- out3: the transient click that keys the LFO, 0..1, one sample per detected
+  attack (fast vs slow rectified envelope, 3 ms / 60 ms). Audio-rate control
+  signal, not audio.
+
+NOTES
+- Bar sync reads the phase from the phasor itself, so there is no tempo drift;
+  the sync offset absorbed on entry decays over 50 ms so locking in never clicks.
+- The detector is mono-summed from in1/in2 and has a 50 ms refractory window, so
+  one tongue gives exactly one key.
+- No safety limiter, no metering, no presets.

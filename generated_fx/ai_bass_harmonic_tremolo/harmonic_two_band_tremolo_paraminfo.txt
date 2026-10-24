@@ -1,0 +1,80 @@
+================================================================================
+harmonic_two_band_tremolo — Parameter Information
+================================================================================
+
+WHAT IT IS
+A two-band harmonic tremolo. The note is split into a low band and a high band
+at a multiple of the tracked pitch, and the two bands are turned up and down in
+antiphase by one LFO: as the low end closes, the top opens. On a tuba that reads
+as the note rocking between "body" and "bite" rather than the whole sound
+ducking, and the upper partials swing harder than the fundamental — exactly the
+behaviour the original Hammond tremolo has, where the effect was deliberately
+stronger on high partials (Pekonen & Välimäki, DAFx-11 §1-2).
+
+"depth" is the dry/wet, but there is no dry signal to cross-fade. The split is
+complementary (low + high = input exactly), so at depth 0 both band gains are
+1.0 and the output is the input sample for sample. Turning depth up splits the
+two band gains apart symmetrically; nothing is ever summed with a delayed or
+phase-shifted copy, so there is no comb notch and no level dip at the middle of
+the knob.
+
+Source: Disch & Zölzer, DAFx-99 §2 Eqs. 1-2 (AM and ring-modulation laws);
+Pekonen & Välimäki, DAFx-11 §1-2 (5 Hz tremolo, high-partial bias);
+Huovilainen, DAFx-05 §2 (phase-split pumping family).
+
+PARAMETERS (6 + output gain)
+
+1. rate_hz — 0.05…12 Hz, default 3.2 Hz
+   Tremolo speed. 0.1-1 Hz is a slow breathe, 3-6 Hz is the classic amp
+   tremolo, above 8 Hz it starts to fuse into a buzz.
+
+2. depth — 0…1, default 0.85
+   Phase-coherent dry/wet. 0 = untouched input (the two bands still sum to it),
+   0.85 = a deep, obviously pumping tremolo, 1.0 = full antiphase swing with
+   both band gains reaching 2x and 0x.
+
+3. spread — 0…1, default 0.5
+   Phase offset between the left and right LFO, 0 to half a cycle (180 deg).
+   0 is a mono tremolo; 0.5 makes the two channels breathe against each other,
+   which reads as width on a sustained note.
+
+4. shape — 0…1, default 0.25
+   LFO wave shape, sine to square-ish. The knob blends the sine with its cube
+   (sin^3), which dwells at the extremes and crosses the middle quickly: at 0
+   the tremolo is soft and round, at 1 it is closer to an on/off gate.
+
+5. split_ratio — 2/1, 3/1, 5/2, 4/1, 6/1, 8/1; default 3/1
+   Where the bands split, as a 5-limit multiple of the tracked f0. The split is
+   smoothed over 30 ms, so it glides with the note instead of jumping. Low
+   values (2/1) leave only the fundamental in the low band; high values (8/1)
+   keep most of the note's body in one band and tremolo only the top.
+
+6. bar_sync — 0…1, default 0.7
+   How far the tremolo is organised by the bar phasor. At 0 the LFO runs at
+   rate_hz. Turning it up pulls the rate to the nearest whole number of cycles
+   per bar and locks the phase to the downbeat; the settle is a 200 ms glide in
+   frequency, never a jump in gain. At 1 the pattern repeats identically every
+   bar, and the rate knob picks the multiple.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim, the last thing in the chain. Does not count toward the
+   8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: tracked f0 in Hz (20…1200). 0 or out of range holds the last valid
+  value; cold start is 55 Hz (A1), so the split is sensible with nothing
+  patched.
+- in4: 0..1 one-bar phasor. bar_sync pulls the rate to the nearest whole number
+  of cycles per bar and phase-locks to the downbeat; held at 0 the LFO runs at
+  rate_hz.
+- out1 / out2: stereo audio, exactly dry at depth = 0.
+- out3: transient click, 0..1, one sample on each detected attack (fast vs slow
+  rectified envelope, 3 ms / 60 ms). Audio-rate control signal, not audio.
+
+NOTES
+- The high band is the exact complement of the filtered low band, so the two
+  always reconstruct the input at depth 0; there is no allpass stage and no
+  group-delay mismatch between bands.
+- Band gains are floored at 0 so a deep setting cannot invert a band's polarity.
+- No safety limiter, no metering, no presets.

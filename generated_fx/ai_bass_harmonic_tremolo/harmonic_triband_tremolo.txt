@@ -1,0 +1,171 @@
+// ============================================================================
+// harmonic_triband_tremolo.txt
+// Rotating harmonic tremolo: the input is split into three bands at 5-limit
+// multiples of the tracked note, and each band's gain is breathed at its own
+// LFO phase, so the tremolo travels up the harmonic series instead of pumping
+// the whole note. With the phases a third of a cycle apart the three gains sum
+// to a constant, so the note does not change level while its colour rotates.
+// "depth" is a phase-coherent dry/wet: the split is complementary
+// (low + mid + high = input exactly), so at depth 0 every band gain is 1 and
+// the output is the input sample for sample.
+// From: Disch & Zoelzer, "Modulation and Delay Line Based Digital Audio
+//       Effects", DAFx-99, §2 Eqs. 1-2 (AM law) and §5 (three 120-degree
+//       spaced modulators, constant sum - the rotating-LFO trick reused here);
+//       Verfaille, Guastavino & Traube, "An Interdisciplinary Approach to Audio
+//       Effect Classification", DAFx-06 paper 107 (tremolo split into loudness,
+//       rhythm and spectral-timbre components - this effect is the spectral
+//       one);
+//       Pekonen & Valimaki, "Computationally Efficient Hammond Organ
+//       Synthesis", DAFx-11, §1-2 (organ tremolo is stronger on high partials).
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: tracked f0 in Hz (20..1200). 0 or out of range = hold the last valid
+//        value; cold start 55 Hz (A1).
+//   in4: 0..1 one-bar phasor. bar_sync pulls the LFO rate to the nearest
+//        whole number of cycles per bar and phase-locks it to the downbeat;
+//        held at 0 the LFO runs free at rate_hz.
+// Outlets:
+//   out1 / out2: stereo audio (exactly dry at depth = 0)
+//   out3: transient click, 0..1, single-sample detection signal
+// No safety limiter, no metering, no presets.
+// ============================================================================
+
+@param({ min: 0.05, max: 12.0 }) rate_hz = 2.4;        // tremolo rate
+@param({ min: 0.0, max: 1.0 }) depth = 0.8;            // dry/wet
+@param({ min: 0.0, max: 1.0 }) rotation = 0.4;         // phase spread per band
+@param({ enum: ["1/1", "3/2", "2/1", "5/2", "3/1", "4/1"] }) split_ratio = 2; // first split = f0 x
+@param({ min: 0.0, max: 1.0 }) sub_hold = 0.5;         // low band modulation
+@param({ min: 0.0, max: 1.0 }) bar_sync = 0.7;         // downbeat pull
+@param({ min: -24.0, max: 12.0 }) out_gain_db = 0.0;   // output gain
+
+// Two cascaded one-poles per split per channel; the bands are the exact
+// complementary differences of those filtered copies.
+@state loL1 = new onepole(); @state loL2 = new onepole();
+@state midL1 = new onepole(); @state midL2 = new onepole();
+@state loR1 = new onepole(); @state loR2 = new onepole();
+@state midR1 = new onepole(); @state midR2 = new onepole();
+
+@state f0Last = 55.0;
+@state f0Sm = 55.0;
+@state spSm = 110.0;
+
+@state lfoPh = 0.0;
+@state prevBar = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state barHz = 0.5;
+@state barHzSm = 0.5;
+
+@state tFast = 0.0;
+@state tSlow = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+
+// --- in3: hold the last valid f0, then slew it ----------------------------
+let f0In = in3;
+if (f0In > 20.0 && f0In < 1200.0) {
+	f0Last = f0In;
+}
+let f0Slew = 1.0 - exp(0.0 - 1.0 / (0.02 * sr));
+f0Sm = f0Sm + (f0Last - f0Sm) * f0Slew;
+let f0 = clamp(f0Sm, 20.0, 1200.0);
+
+// --- first split as a 5-limit multiple, second split one octave above -----
+let mult = 2.0;
+if (split_ratio == 0) { mult = 1.0; }
+else if (split_ratio == 1) { mult = 1.5; }
+else if (split_ratio == 3) { mult = 2.5; }
+else if (split_ratio == 4) { mult = 3.0; }
+else if (split_ratio == 5) { mult = 4.0; }
+
+let spTarget = clamp(f0 * mult, 25.0, sr * 0.2);
+let spSlew = 1.0 - exp(0.0 - 1.0 / (0.03 * sr));
+spSm = spSm + (spTarget - spSm) * spSlew;
+let fLo = clamp(spSm, 25.0, sr * 0.2);
+let fHi = clamp(spSm * 2.0, 25.0, sr * 0.45);
+
+// --- free-running LFO, pulled onto the bar ---------------------------------
+// bar_sync first blends the rate toward the nearest whole number of cycles per
+// bar, then locks the phase to the downbeat. With the rate already corrected
+// the phase error is constant once settled, so the pull converges once and then
+// has nothing left to do.
+let barIn = in4;
+let barStep = barIn - prevBar;
+if (barStep > 0.0000001) {
+	barLast = barIn;
+	barHz = clamp(barStep * sr, 0.05, 20.0);
+	barHold = 0.1 * sr;
+}
+else if (barStep < -0.5) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+}
+else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBar = barIn;
+
+let hzSlew = 1.0 - exp(0.0 - 1.0 / (0.05 * sr));
+barHzSm = barHzSm + (barHz - barHzSm) * hzSlew;
+
+let bs = clamp(bar_sync, 0.0, 1.0);
+let rate = clamp(rate_hz, 0.05, 12.0);
+let barOK = (barHold > 0.0) ? 1.0 : 0.0;
+let nDiv = maximum(floor(rate / barHzSm + 0.5), 1.0);
+let rateEff = rate;
+if (barOK > 0.5) {
+	rateEff = linearinterp(bs, rate, nDiv * barHzSm);
+}
+lfoPh = wrap(lfoPh + clamp(rateEff, 0.05, 20.0) / sr, 0.0, 1.0);
+
+if (barOK > 0.5 && bs > 0.01) {
+	let target = wrap(barLast * nDiv, 0.0, 1.0);
+	let err = wrap(target - lfoPh, -0.5, 0.5);
+	let kPull = 1.0 - exp(0.0 - 1.0 / (0.2 * sr));
+	lfoPh = wrap(lfoPh + bs * err * kPull, 0.0, 1.0);
+}
+
+// Three phases: at rotation = 1 they are a third of a cycle apart, whose sines
+// sum to zero, so the total gain is constant and only the balance moves.
+let rot = clamp(rotation, 0.0, 1.0) / 3.0;
+let phA = lfoPh;
+let phB = wrap(lfoPh + rot, 0.0, 1.0);
+let phC = wrap(lfoPh + 2.0 * rot, 0.0, 1.0);
+
+let sA = sin(2.0 * pi * phA);
+let sB = sin(2.0 * pi * phB);
+let sC = sin(2.0 * pi * phC);
+
+// --- complementary three-band split ---------------------------------------
+let loL = loL2.next(loL1.next(in1, fLo), fLo);
+let midLpL = midL2.next(midL1.next(in1, fHi), fHi);
+let loR = loR2.next(loR1.next(in2, fLo), fLo);
+let midLpR = midR2.next(midR1.next(in2, fHi), fHi);
+
+let midL = midLpL - loL;
+let hiL = in1 - midLpL;
+let midR = midLpR - loR;
+let hiR = in2 - midLpR;
+
+// --- per-band depths: sub_hold keeps the fundamental steady ---------------
+let d = clamp(depth, 0.0, 1.0);
+let dLo = d * (1.0 - clamp(sub_hold, 0.0, 1.0));
+let gLoL = maximum(1.0 - dLo * sA, 0.0);
+let gMidL = maximum(1.0 - d * sB, 0.0);
+let gHiL = maximum(1.0 - d * sC, 0.0);
+let gLoR = maximum(1.0 - dLo * sA, 0.0);
+let gMidR = maximum(1.0 - d * sB, 0.0);
+let gHiR = maximum(1.0 - d * sC, 0.0);
+
+// --- transient click: fast-vs-slow rectified envelope, 0..1 ---------------
+let rect = abs(0.5 * (in1 + in2));
+let aFast = 1.0 - exp(0.0 - 1.0 / (0.003 * sr));
+let aSlow = 1.0 - exp(0.0 - 1.0 / (0.060 * sr));
+tFast = tFast + (rect - tFast) * aFast;
+tSlow = tSlow + (rect - tSlow) * aSlow;
+out3 = clamp(maximum(tFast - 1.4 * tSlow, 0.0) * 12.0, 0.0, 1.0);
+
+let og = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = (loL * gLoL + midL * gMidL + hiL * gHiL) * og;
+out2 = (loR * gLoR + midR * gMidR + hiR * gHiR) * og;

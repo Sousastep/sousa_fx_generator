@@ -1,0 +1,116 @@
+// ============================================================================
+// enharmonic_sideband_tremolo.txt
+// Enharmonic tremolo: an audio-rate amplitude tremolo whose rate is an integer
+// 5-limit multiple of the tracked note, so every modulation sideband folds back
+// onto the SAME harmonic series as the input. A partial at k*f0 modulated at
+// m*f0 produces (k +/- m)*f0 - both are harmonics of f0 (negative ones fold
+// with an inverted sign), so the tremolo thickens and growls the note without
+// ever introducing a pitch that is not the note. Nothing can go out of tune,
+// even while the tuba bends. At the far end of "carrier" the fundamental is
+// suppressed outright (ring modulation) and only the enharmonic upper/lower
+// partials remain. "depth" is a phase-coherent dry/wet: at 0 the sideband gain
+// is exactly 0 and the output is the input sample for sample.
+// From: Holopainen, "Self-Organised Sounds with a Tremolo Oscillator",
+//       DAFx-10, §2 (a tremolo fast enough to reach the audio range fuses into
+//       one complex tone - the premise of this effect);
+//       Disch & Zoelzer, "Modulation and Delay Line Based Digital Audio
+//       Effects", DAFx-99, §2 Eqs. 1-2 (AM vs. ring modulation, the two ends
+//       of the carrier control);
+//       Werner, Dunkel, Germain et al., "A Computational Model of the Hammond
+//       Organ Vibrato/Chorus using Wave Digital Filters", DAFx-16, §3 (AM+FM
+//       sidebands around a sustained tone);
+//       Tong & Tojo, "Music Temperaments Evaluation Based on Triads", SMC-19,
+//       §2 (5-limit ratios, i.e. ratios built only from 2, 3 and 5).
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: tracked f0 in Hz (20..1200) - the tremolo rate is derived from it.
+//        0 or out of range = hold the last valid value; cold start 55 Hz (A1).
+//   in4: 0..1 one-bar phasor - rotates the added sidebands between L and R
+//        once per bar. Held at 0 the sidebands are centred.
+// Outlets:
+//   out1 / out2: stereo audio (exactly dry at depth = 0)
+//   out3: transient click, 0..1, single-sample detection signal
+// No safety limiter, no metering, no presets.
+// ============================================================================
+
+@param({ enum: ["2/1", "3/1", "4/1", "5/1", "6/1"] }) trem_ratio = 2; // rate = f0 x
+@param({ min: 0.0, max: 1.0 }) depth = 0.7;            // dry/wet
+@param({ min: 0.0, max: 1.0 }) carrier = 0.5;          // fundamental / ring
+@param({ min: 0.0, max: 1.0 }) spin = 0.3;             // bar-locked sideband rotation
+@param({ min: 1.0, max: 200.0 }) glide_ms = 25.0;      // pitch-rate glide
+@param({ min: -24.0, max: 12.0 }) out_gain_db = 0.0;   // output gain
+
+@state f0Last = 55.0;
+@state f0Sm = 55.0;
+@state sbPh = 0.0;
+
+@state prevBar = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+
+@state tFast = 0.0;
+@state tSlow = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+
+// --- in3: hold the last valid f0, then glide to it ------------------------
+let f0In = in3;
+if (f0In > 20.0 && f0In < 1200.0) {
+	f0Last = f0In;
+}
+let glideS = clamp(glide_ms, 1.0, 200.0) * 0.001;
+let kGlide = 1.0 - exp(0.0 - 1.0 / (glideS * sr));
+f0Sm = f0Sm + (f0Last - f0Sm) * kGlide;
+let f0 = clamp(f0Sm, 20.0, 1200.0);
+
+// --- integer 5-limit tremolo rate -----------------------------------------
+let ratio = 4.0;
+if (trem_ratio == 0) { ratio = 2.0; }
+else if (trem_ratio == 1) { ratio = 3.0; }
+else if (trem_ratio == 3) { ratio = 5.0; }
+else if (trem_ratio == 4) { ratio = 6.0; }
+
+// Cap the rate so the highest sideband stays well inside Nyquist; the cap only
+// bites on very high notes and very high ratios.
+let amHz = clamp(f0 * ratio, 1.0, sr * 0.25);
+sbPh = wrap(sbPh + amHz / sr, 0.0, 1.0);
+let mod = cos(2.0 * pi * sbPh);
+
+// --- in4: bar-locked rotation of the added sidebands ----------------------
+let barIn = in4;
+if (abs(barIn - prevBar) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+}
+else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBar = barIn;
+
+// With no moving bar phasor the rotation is 0, so an unpatched in4 leaves the
+// two channels identical instead of freezing an arbitrary balance.
+let spinAmt = 0.0;
+if (barHold > 0.0) {
+	spinAmt = clamp(spin, 0.0, 1.0) * cos(2.0 * pi * barLast);
+}
+
+// --- AM <-> ring: gBase holds the note, gSide adds the enharmonic partials --
+let d = clamp(depth, 0.0, 1.0);
+let c = clamp(carrier, 0.0, 1.0);
+let gBase = 1.0 - d + d * c;
+let gSide = d * mod;
+let gL = gBase + gSide * (1.0 + spinAmt);
+let gR = gBase + gSide * (1.0 - spinAmt);
+
+// --- transient click: fast-vs-slow rectified envelope, 0..1 ---------------
+let rect = abs(0.5 * (in1 + in2));
+let aFast = 1.0 - exp(0.0 - 1.0 / (0.003 * sr));
+let aSlow = 1.0 - exp(0.0 - 1.0 / (0.060 * sr));
+tFast = tFast + (rect - tFast) * aFast;
+tSlow = tSlow + (rect - tSlow) * aSlow;
+out3 = clamp(maximum(tFast - 1.4 * tSlow, 0.0) * 12.0, 0.0, 1.0);
+
+let og = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = in1 * gL * og;
+out2 = in2 * gR * og;
