@@ -114,48 +114,48 @@ let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let c
 
 // Carrier (ac, ad)
 let sC = carSig;
-let yc0 = cRe0 * (sC - cReY[0]) + cReX[0]; cReX[0] = sC; cReY[0] = yc0; sC = yc0;
-let yc1 = cRe1 * (sC - cReY[1]) + cReX[1]; cReX[1] = sC; cReY[1] = yc1; sC = yc1;
-let yc2 = cRe2 * (sC - cReY[2]) + cReX[2]; cReX[2] = sC; cReY[2] = yc2; sC = yc2;
-let yc3 = cRe3 * (sC - cReY[3]) + cReX[3]; cReX[3] = sC; cReY[3] = yc3;
+let yc0 = cRe0 * (sC + cReY[0]) - cReX[0]; cReX[0] = sC; cReY[0] = yc0; sC = yc0;
+let yc1 = cRe1 * (sC + cReY[1]) - cReX[1]; cReX[1] = sC; cReY[1] = yc1; sC = yc1;
+let yc2 = cRe2 * (sC + cReY[2]) - cReX[2]; cReX[2] = sC; cReY[2] = yc2; sC = yc2;
+let yc3 = cRe3 * (sC + cReY[3]) - cReX[3]; cReX[3] = sC; cReY[3] = yc3;
 let ac = cDelRe; cDelRe = yc3;
 
 let sCi = carSig;
-let yci0 = cIm0 * (sCi - cImY[0]) + cImX[0]; cImX[0] = sCi; cImY[0] = yci0; sCi = yci0;
-let yci1 = cIm1 * (sCi - cImY[1]) + cImX[1]; cImX[1] = sCi; cImY[1] = yci1; sCi = yci1;
-let yci2 = cIm2 * (sCi - cImY[2]) + cImX[2]; cImX[2] = sCi; cImY[2] = yci2; sCi = yci2;
-let yci3 = cIm3 * (sCi - cImY[3]) + cImX[3]; cImX[3] = sCi; cImY[3] = yci3;
-let ad = yci3;
+let yci0 = cIm0 * (sCi + cImY[0]) - cImX[0]; cImX[0] = sCi; cImY[0] = yci0; sCi = yci0;
+let yci1 = cIm1 * (sCi + cImY[1]) - cImX[1]; cImX[1] = sCi; cImY[1] = yci1; sCi = yci1;
+let yci2 = cIm2 * (sCi + cImY[2]) - cImX[2]; cImX[2] = sCi; cImY[2] = yci2; sCi = yci2;
+let yci3 = cIm3 * (sCi + cImY[3]) - cImX[3]; cImX[3] = sCi; cImY[3] = yci3;
+let ad = 0.0 - yci3; // negate: this cR/cI order is the negative Hilbert
 
 // Even Modulator (aae, abe)
 let sE = a2_even;
-let ye0 = cRe0 * (sE - eReY[0]) + eReX[0]; eReX[0] = sE; eReY[0] = ye0; sE = ye0;
-let ye1 = cRe1 * (sE - eReY[1]) + eReX[1]; eReX[1] = sE; eReY[1] = ye1; sE = ye1;
-let ye2 = cRe2 * (sE - eReY[2]) + eReX[2]; eReX[2] = sE; eReY[2] = ye2; sE = ye2;
-let ye3 = cRe3 * (sE - eReY[3]) + eReX[3]; eReX[3] = sE; eReY[3] = ye3;
+let ye0 = cRe0 * (sE + eReY[0]) - eReX[0]; eReX[0] = sE; eReY[0] = ye0; sE = ye0;
+let ye1 = cRe1 * (sE + eReY[1]) - eReX[1]; eReX[1] = sE; eReY[1] = ye1; sE = ye1;
+let ye2 = cRe2 * (sE + eReY[2]) - eReX[2]; eReX[2] = sE; eReY[2] = ye2; sE = ye2;
+let ye3 = cRe3 * (sE + eReY[3]) - eReX[3]; eReX[3] = sE; eReY[3] = ye3;
 let aae = eDelRe; eDelRe = ye3;
 
 let sEi = a2_even;
-let yei0 = cIm0 * (sEi - eImY[0]) + eImX[0]; eImX[0] = sEi; eImY[0] = yei0; sEi = yei0;
-let yei1 = cIm1 * (sEi - eImY[1]) + eImX[1]; eImX[1] = sEi; eImY[1] = yei1; sEi = yei1;
-let yei2 = cIm2 * (sEi - eImY[2]) + eImX[2]; eImX[2] = sEi; eImY[2] = yei2; sEi = yei2;
-let yei3 = cIm3 * (sEi - eImY[3]) + eImX[3]; eImX[3] = sEi; eImY[3] = yei3;
-let abe = yei3;
+let yei0 = cIm0 * (sEi + eImY[0]) - eImX[0]; eImX[0] = sEi; eImY[0] = yei0; sEi = yei0;
+let yei1 = cIm1 * (sEi + eImY[1]) - eImX[1]; eImX[1] = sEi; eImY[1] = yei1; sEi = yei1;
+let yei2 = cIm2 * (sEi + eImY[2]) - eImX[2]; eImX[2] = sEi; eImY[2] = yei2; sEi = yei2;
+let yei3 = cIm3 * (sEi + eImY[3]) - eImX[3]; eImX[3] = sEi; eImY[3] = yei3;
+let abe = 0.0 - yei3; // negate: this cR/cI order is the negative Hilbert
 
 // Odd Modulator (aao, abo)
 let sO = a3_odd;
-let yo0 = cRe0 * (sO - oReY[0]) + oReX[0]; oReX[0] = sO; oReY[0] = yo0; sO = yo0;
-let yo1 = cRe1 * (sO - oReY[1]) + oReX[1]; oReX[1] = sO; oReY[1] = yo1; sO = yo1;
-let yo2 = cRe2 * (sO - oReY[2]) + oReX[2]; oReX[2] = sO; oReY[2] = yo2; sO = yo2;
-let yo3 = cRe3 * (sO - oReY[3]) + oReX[3]; oReX[3] = sO; oReY[3] = yo3;
+let yo0 = cRe0 * (sO + oReY[0]) - oReX[0]; oReX[0] = sO; oReY[0] = yo0; sO = yo0;
+let yo1 = cRe1 * (sO + oReY[1]) - oReX[1]; oReX[1] = sO; oReY[1] = yo1; sO = yo1;
+let yo2 = cRe2 * (sO + oReY[2]) - oReX[2]; oReX[2] = sO; oReY[2] = yo2; sO = yo2;
+let yo3 = cRe3 * (sO + oReY[3]) - oReX[3]; oReX[3] = sO; oReY[3] = yo3;
 let aao = oDelRe; oDelRe = yo3;
 
 let sOi = a3_odd;
-let yoi0 = cIm0 * (sOi - oImY[0]) + oImX[0]; oImX[0] = sOi; oImY[0] = yoi0; sOi = yoi0;
-let yoi1 = cIm1 * (sOi - oImY[1]) + oImX[1]; oImX[1] = sOi; oImY[1] = yoi1; sOi = yoi1;
-let yoi2 = cIm2 * (sOi - oImY[2]) + oImX[2]; oImX[2] = sOi; oImY[2] = yoi2; sOi = yoi2;
-let yoi3 = cIm3 * (sOi - oImY[3]) + oImX[3]; oImX[3] = sOi; oImY[3] = yoi3;
-let abo = yoi3;
+let yoi0 = cIm0 * (sOi + oImY[0]) - oImX[0]; oImX[0] = sOi; oImY[0] = yoi0; sOi = yoi0;
+let yoi1 = cIm1 * (sOi + oImY[1]) - oImX[1]; oImX[1] = sOi; oImY[1] = yoi1; sOi = yoi1;
+let yoi2 = cIm2 * (sOi + oImY[2]) - oImX[2]; oImX[2] = sOi; oImY[2] = yoi2; sOi = yoi2;
+let yoi3 = cIm3 * (sOi + oImY[3]) - oImX[3]; oImX[3] = sOi; oImY[3] = yoi3;
+let abo = 0.0 - yoi3; // negate: this cR/cI order is the negative Hilbert
 
 // --- 5. Stereo Bode Micro-Detune on Carrier Quadrature Pair ---
 let bHz = pow(clamp(stereo_bode_hz / 25.0, 0.0, 1.0), 1.6) * 25.0;

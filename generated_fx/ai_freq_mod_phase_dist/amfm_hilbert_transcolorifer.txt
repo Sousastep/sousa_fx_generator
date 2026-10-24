@@ -61,6 +61,8 @@ let xR = (abs(in2) > 0.0000001) ? in2 : xL;
 let pitchHint = (in3 > 20.0 && in3 < 1000.0) ? in3 : 58.27;
 let xHyb = in4;
 
+// Quadrature allpass: y[n] = c*(x[n] + y[n-1]) - x[n-1]; this cR/cI order is the
+// negative Hilbert, so each imaginary branch is negated before atan2 below.
 let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
 let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
 
@@ -78,7 +80,7 @@ t = cI0 * (imL + lImY[0]) - lImX[0]; lImX[0] = imL; lImY[0] = t; imL = t;
 t = cI1 * (imL + lImY[1]) - lImX[1]; lImX[1] = imL; lImY[1] = t; imL = t;
 t = cI2 * (imL + lImY[2]) - lImX[2]; lImX[2] = imL; lImY[2] = t; imL = t;
 t = cI3 * (imL + lImY[3]) - lImX[3]; lImX[3] = imL; lImY[3] = t; imL = t;
-let sImL = imL;
+let sImL = 0.0 - imL;
 
 let iaL = sqrt(sReL * sReL + sImL * sImL);
 let thetaL = atan2(sImL, sReL);
@@ -101,7 +103,7 @@ t = cI0 * (imR + rImY[0]) - rImX[0]; rImX[0] = imR; rImY[0] = t; imR = t;
 t = cI1 * (imR + rImY[1]) - rImX[1]; rImX[1] = imR; rImY[1] = t; imR = t;
 t = cI2 * (imR + rImY[2]) - rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
 t = cI3 * (imR + rImY[3]) - rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
-let sImR = imR;
+let sImR = 0.0 - imR;
 
 let iaR = sqrt(sReR * sReR + sImR * sImR);
 let thetaR = atan2(sImR, sReR);
@@ -123,7 +125,7 @@ t = cI0 * (imH + hImY[0]) - hImX[0]; hImX[0] = imH; hImY[0] = t; imH = t;
 t = cI1 * (imH + hImY[1]) - hImX[1]; hImX[1] = imH; hImY[1] = t; imH = t;
 t = cI2 * (imH + hImY[2]) - hImX[2]; hImX[2] = imH; hImY[2] = t; imH = t;
 t = cI3 * (imH + hImY[3]) - hImX[3]; hImX[3] = imH; hImY[3] = t; imH = t;
-let sImH = imH;
+let sImH = 0.0 - imH;
 
 let iaH = sqrt(sReH * sReH + sImH * sImH);
 let thetaH = atan2(sImH, sReH);

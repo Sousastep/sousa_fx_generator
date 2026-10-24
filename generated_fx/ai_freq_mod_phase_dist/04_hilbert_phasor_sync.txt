@@ -21,7 +21,8 @@
 @param({ min: 0.0, max: 1.0 }) mix = 1.0;
 
 // 4-stage IIR Hilbert transform allpass filter states (0 deg and 90 deg branches)
-// Coefficients designed for 90-degree quadrature across 25 Hz - 18 kHz
+// Coefficients assume 44.1/48 kHz; quadrature is tight through the tuba range
+// (~30 Hz - 2 kHz) and degrades toward Nyquist (about -22 deg at 18 kHz).
 @state hReX = new FixedSampleArray(4);
 @state hReY = new FixedSampleArray(4);
 @state hImX = new FixedSampleArray(4);
@@ -87,20 +88,20 @@ let cIm3 = 0.9905991567;
 
 // Branch 1 (Real / 0 deg)
 let sRe = monoLow;
-let yRe0 = cRe0 * (sRe - hReY[0]) + hReX[0]; hReX[0] = sRe; hReY[0] = yRe0; sRe = yRe0;
-let yRe1 = cRe1 * (sRe - hReY[1]) + hReX[1]; hReX[1] = sRe; hReY[1] = yRe1; sRe = yRe1;
-let yRe2 = cRe2 * (sRe - hReY[2]) + hReX[2]; hReX[2] = sRe; hReY[2] = yRe2; sRe = yRe2;
-let yRe3 = cRe3 * (sRe - hReY[3]) + hReX[3]; hReX[3] = sRe; hReY[3] = yRe3;
+let yRe0 = cRe0 * (sRe + hReY[0]) - hReX[0]; hReX[0] = sRe; hReY[0] = yRe0; sRe = yRe0;
+let yRe1 = cRe1 * (sRe + hReY[1]) - hReX[1]; hReX[1] = sRe; hReY[1] = yRe1; sRe = yRe1;
+let yRe2 = cRe2 * (sRe + hReY[2]) - hReX[2]; hReX[2] = sRe; hReY[2] = yRe2; sRe = yRe2;
+let yRe3 = cRe3 * (sRe + hReY[3]) - hReX[3]; hReX[3] = sRe; hReY[3] = yRe3;
 let outRe = hDelayRe;
 hDelayRe = yRe3;
 
 // Branch 2 (Imag / 90 deg)
 let sIm = monoLow;
-let yIm0 = cIm0 * (sIm - hImY[0]) + hImX[0]; hImX[0] = sIm; hImY[0] = yIm0; sIm = yIm0;
-let yIm1 = cIm1 * (sIm - hImY[1]) + hImX[1]; hImX[1] = sIm; hImY[1] = yIm1; sIm = yIm1;
-let yIm2 = cIm2 * (sIm - hImY[2]) + hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm = yIm2;
-let yIm3 = cIm3 * (sIm - hImY[3]) + hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;
-let outIm = yIm3;
+let yIm0 = cIm0 * (sIm + hImY[0]) - hImX[0]; hImX[0] = sIm; hImY[0] = yIm0; sIm = yIm0;
+let yIm1 = cIm1 * (sIm + hImY[1]) - hImX[1]; hImX[1] = sIm; hImY[1] = yIm1; sIm = yIm1;
+let yIm2 = cIm2 * (sIm + hImY[2]) - hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm = yIm2;
+let yIm3 = cIm3 * (sIm + hImY[3]) - hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;
+let outIm = 0.0 - yIm3; // negate: this cR/cI order is the negative Hilbert (+f analytic phase)
 
 // Instantaneous amplitude A(t) and normalized phasor phBase in [0, 1)
 let pol = cartopol(outRe, outIm);

@@ -102,38 +102,38 @@ let fbAmt = clamp(feedback, 0.0, 0.7);
 // Left channel
 let inL = xL + fbAmt * tanh(fbL) * 0.8;
 let tL = inL;
-let l0 = cRe0 * (tL - lReY[0]) + lReX[0]; lReX[0] = tL; lReY[0] = l0; tL = l0;
-let l1 = cRe1 * (tL - lReY[1]) + lReX[1]; lReX[1] = tL; lReY[1] = l1; tL = l1;
-let l2 = cRe2 * (tL - lReY[2]) + lReX[2]; lReX[2] = tL; lReY[2] = l2; tL = l2;
-let l3 = cRe3 * (tL - lReY[3]) + lReX[3]; lReX[3] = tL; lReY[3] = l3;
+let l0 = cRe0 * (tL + lReY[0]) - lReX[0]; lReX[0] = tL; lReY[0] = l0; tL = l0;
+let l1 = cRe1 * (tL + lReY[1]) - lReX[1]; lReX[1] = tL; lReY[1] = l1; tL = l1;
+let l2 = cRe2 * (tL + lReY[2]) - lReX[2]; lReX[2] = tL; lReY[2] = l2; tL = l2;
+let l3 = cRe3 * (tL + lReY[3]) - lReX[3]; lReX[3] = tL; lReY[3] = l3;
 let reL = lDelRe;
 lDelRe = l3;
 
 let tLi = inL;
-let li0 = cIm0 * (tLi - lImY[0]) + lImX[0]; lImX[0] = tLi; lImY[0] = li0; tLi = li0;
-let li1 = cIm1 * (tLi - lImY[1]) + lImX[1]; lImX[1] = tLi; lImY[1] = li1; tLi = li1;
-let li2 = cIm2 * (tLi - lImY[2]) + lImX[2]; lImX[2] = tLi; lImY[2] = li2; tLi = li2;
-let li3 = cIm3 * (tLi - lImY[3]) + lImX[3]; lImX[3] = tLi; lImY[3] = li3;
-let imL = li3;
+let li0 = cIm0 * (tLi + lImY[0]) - lImX[0]; lImX[0] = tLi; lImY[0] = li0; tLi = li0;
+let li1 = cIm1 * (tLi + lImY[1]) - lImX[1]; lImX[1] = tLi; lImY[1] = li1; tLi = li1;
+let li2 = cIm2 * (tLi + lImY[2]) - lImX[2]; lImX[2] = tLi; lImY[2] = li2; tLi = li2;
+let li3 = cIm3 * (tLi + lImY[3]) - lImX[3]; lImX[3] = tLi; lImY[3] = li3;
+let imL = 0.0 - li3; // negate: this cR/cI order is the negative Hilbert (up-shift for +phase)
 
 let shiftL = (dir > 0.5) ? (reL * shiftCos - imL * shiftSin) : (reL * shiftCos + imL * shiftSin);
 
 // Right channel
 let inR = xR + fbAmt * tanh(fbR) * 0.8;
 let tR = inR;
-let r0 = cRe0 * (tR - rReY[0]) + rReX[0]; rReX[0] = tR; rReY[0] = r0; tR = r0;
-let r1 = cRe1 * (tR - rReY[1]) + rReX[1]; rReX[1] = tR; rReY[1] = r1; tR = r1;
-let r2 = cRe2 * (tR - rReY[2]) + rReX[2]; rReX[2] = tR; rReY[2] = r2; tR = r2;
-let r3 = cRe3 * (tR - rReY[3]) + rReX[3]; rReX[3] = tR; rReY[3] = r3;
+let r0 = cRe0 * (tR + rReY[0]) - rReX[0]; rReX[0] = tR; rReY[0] = r0; tR = r0;
+let r1 = cRe1 * (tR + rReY[1]) - rReX[1]; rReX[1] = tR; rReY[1] = r1; tR = r1;
+let r2 = cRe2 * (tR + rReY[2]) - rReX[2]; rReX[2] = tR; rReY[2] = r2; tR = r2;
+let r3 = cRe3 * (tR + rReY[3]) - rReX[3]; rReX[3] = tR; rReY[3] = r3;
 let reR = rDelRe;
 rDelRe = r3;
 
 let tRi = inR;
-let ri0 = cIm0 * (tRi - rImY[0]) + rImX[0]; rImX[0] = tRi; rImY[0] = ri0; tRi = ri0;
-let ri1 = cIm1 * (tRi - rImY[1]) + rImX[1]; rImX[1] = tRi; rImY[1] = ri1; tRi = ri1;
-let ri2 = cIm2 * (tRi - rImY[2]) + rImX[2]; rImX[2] = tRi; rImY[2] = ri2; tRi = ri2;
-let ri3 = cIm3 * (tRi - rImY[3]) + rImX[3]; rImX[3] = tRi; rImY[3] = ri3;
-let imR = ri3;
+let ri0 = cIm0 * (tRi + rImY[0]) - rImX[0]; rImX[0] = tRi; rImY[0] = ri0; tRi = ri0;
+let ri1 = cIm1 * (tRi + rImY[1]) - rImX[1]; rImX[1] = tRi; rImY[1] = ri1; tRi = ri1;
+let ri2 = cIm2 * (tRi + rImY[2]) - rImX[2]; rImX[2] = tRi; rImY[2] = ri2; tRi = ri2;
+let ri3 = cIm3 * (tRi + rImY[3]) - rImX[3]; rImX[3] = tRi; rImY[3] = ri3;
+let imR = 0.0 - ri3; // negate: this cR/cI order is the negative Hilbert (up-shift for +phase)
 
 let shiftR = (dir > 0.5) ? (reR * shiftCos - imR * shiftSin) : (reR * shiftCos + imR * shiftSin);
 

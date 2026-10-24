@@ -136,20 +136,20 @@ for (let k: Int = 0; k < 4; k++) {
 
 	// Real branch (0 deg)
 	let sRe = sIn;
-	let yr0 = cRe0 * (sRe - hReY[k][0]) + hReX[k][0]; hReX[k][0] = sRe; hReY[k][0] = yr0; sRe = yr0;
-	let yr1 = cRe1 * (sRe - hReY[k][1]) + hReX[k][1]; hReX[k][1] = sRe; hReY[k][1] = yr1; sRe = yr1;
-	let yr2 = cRe2 * (sRe - hReY[k][2]) + hReX[k][2]; hReX[k][2] = sRe; hReY[k][2] = yr2; sRe = yr2;
-	let yr3 = cRe3 * (sRe - hReY[k][3]) + hReX[k][3]; hReX[k][3] = sRe; hReY[k][3] = yr3;
+	let yr0 = cRe0 * (sRe + hReY[k][0]) - hReX[k][0]; hReX[k][0] = sRe; hReY[k][0] = yr0; sRe = yr0;
+	let yr1 = cRe1 * (sRe + hReY[k][1]) - hReX[k][1]; hReX[k][1] = sRe; hReY[k][1] = yr1; sRe = yr1;
+	let yr2 = cRe2 * (sRe + hReY[k][2]) - hReX[k][2]; hReX[k][2] = sRe; hReY[k][2] = yr2; sRe = yr2;
+	let yr3 = cRe3 * (sRe + hReY[k][3]) - hReX[k][3]; hReX[k][3] = sRe; hReY[k][3] = yr3;
 	let outRe = hDelRe[k];
 	hDelRe[k] = yr3;
 
 	// Imaginary branch (90 deg)
 	let sIm = sIn;
-	let yi0 = cIm0 * (sIm - hImY[k][0]) + hImX[k][0]; hImX[k][0] = sIm; hImY[k][0] = yi0; sIm = yi0;
-	let yi1 = cIm1 * (sIm - hImY[k][1]) + hImX[k][1]; hImX[k][1] = sIm; hImY[k][1] = yi1; sIm = yi1;
-	let yi2 = cIm2 * (sIm - hImY[k][2]) + hImX[k][2]; hImX[k][2] = sIm; hImY[k][2] = yi2; sIm = yi2;
-	let yi3 = cIm3 * (sIm - hImY[k][3]) + hImX[k][3]; hImX[k][3] = sIm; hImY[k][3] = yi3;
-	let outIm = yi3;
+	let yi0 = cIm0 * (sIm + hImY[k][0]) - hImX[k][0]; hImX[k][0] = sIm; hImY[k][0] = yi0; sIm = yi0;
+	let yi1 = cIm1 * (sIm + hImY[k][1]) - hImX[k][1]; hImX[k][1] = sIm; hImY[k][1] = yi1; sIm = yi1;
+	let yi2 = cIm2 * (sIm + hImY[k][2]) - hImX[k][2]; hImX[k][2] = sIm; hImY[k][2] = yi2; sIm = yi2;
+	let yi3 = cIm3 * (sIm + hImY[k][3]) - hImX[k][3]; hImX[k][3] = sIm; hImY[k][3] = yi3;
+	let outIm = 0.0 - yi3; // negate: this cR/cI order is the negative Hilbert (+f IF)
 
 	// Polar conversion -> instantaneous envelope A_k(t) and phase theta_k(t)
 	let pol = cartopol(outRe, outIm);

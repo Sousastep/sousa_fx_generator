@@ -5,7 +5,8 @@
 // "Loopback Frequency Modulation Using a Time-Varying Delay Line"
 // (Sections 2.2, 2.4, 3.2 & 3.3, Eq. 10-12, 18-27, 55-58, Fig. 1-5).
 // Applies self-coupled Loopback FM to the arbitrary stereo tuba signal using
-// Smyth's closed-form analytic phase phi(n) = atan2(b0*sin(w0*nT), 1 + b0*cos(w0*nT))
+// Smyth's closed-form phase term phi(n) = atan2(b0*sin(w0*nT), 1 + b0*cos(w0*nT))
+// (the full analytic phase is angle(z0) = w0*nT - 2*phi(n), Eq. 19),
 // where b0 = (sqrt(1 - B^2) - 1) / B and w0 = wc * sqrt(1 - B^2), combined with
 // phase-continuous wrapped delay warping D_hat_b(n) and integer-period offset
 // d0 = fs / fc (Eq. 56-58).

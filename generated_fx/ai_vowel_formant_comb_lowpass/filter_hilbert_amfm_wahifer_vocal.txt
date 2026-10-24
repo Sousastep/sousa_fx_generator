@@ -90,6 +90,8 @@ let targetAudioCut = clamp(audio_wah_cutoff_hz + pHz + mHz, 120.0, 5500.0);
 smoothAudioCut += (targetAudioCut - smoothAudioCut) * slew;
 
 // --- 2. Analytic Signal z(t) = x(t) + j*x_hat(t) via 4-Stage Hilbert Pair (Eq. 4-6) ---
+// Quadrature allpass: y[n] = c*(x[n] + y[n-1]) - x[n-1]; this cR/cI order is the
+// negative Hilbert, so each imaginary branch is negated before cartopol below.
 let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
 let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
 
@@ -105,7 +107,7 @@ t = cI0 * (imL + hImYL[0]) - hImXL[0]; hImXL[0] = imL; hImYL[0] = t; imL = t;
 t = cI1 * (imL + hImYL[1]) - hImXL[1]; hImXL[1] = imL; hImYL[1] = t; imL = t;
 t = cI2 * (imL + hImYL[2]) - hImXL[2]; hImXL[2] = imL; hImYL[2] = t; imL = t;
 t = cI3 * (imL + hImYL[3]) - hImXL[3]; hImXL[3] = imL; hImYL[3] = t; imL = t;
-let aImL = imL;
+let aImL = 0.0 - imL;
 
 let reR = xR;
 t = cR0 * (reR + hReYR[0]) - hReXR[0]; hReXR[0] = reR; hReYR[0] = t; reR = t;
@@ -119,7 +121,7 @@ t = cI0 * (imR + hImYR[0]) - hImXR[0]; hImXR[0] = imR; hImYR[0] = t; imR = t;
 t = cI1 * (imR + hImYR[1]) - hImXR[1]; hImXR[1] = imR; hImYR[1] = t; imR = t;
 t = cI2 * (imR + hImYR[2]) - hImXR[2]; hImXR[2] = imR; hImYR[2] = t; imR = t;
 t = cI3 * (imR + hImYR[3]) - hImXR[3]; hImXR[3] = imR; hImYR[3] = t; imR = t;
-let aImR = imR;
+let aImR = 0.0 - imR;
 
 // Extract Instantaneous Amplitude a(t) (Eq. 5) and Instantaneous Phase derivative f(t) (Eq. 6)
 let polL = cartopol(aReL, aImL);

@@ -70,34 +70,35 @@ let cleanR = 0.75 * preLpR.next(xR, 450.0) + 0.25 * xR;
 let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
 let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
 
-// Correct negative-feedback allpass Hilbert network: y[n] = c * (x[n] - y[n-1]) + x[n-1]
+// Quadrature allpass: y[n] = c * (x[n] + y[n-1]) - x[n-1] (H = (c - z^-1)/(1 - c z^-1))
+// This cR/cI order is the negative Hilbert; the imaginary branch is negated below.
 let reL = cleanL;
-let t = cR0 * (reL - lReY[0]) + lReX[0]; lReX[0] = reL; lReY[0] = t; reL = t;
-t = cR1 * (reL - lReY[1]) + lReX[1]; lReX[1] = reL; lReY[1] = t; reL = t;
-t = cR2 * (reL - lReY[2]) + lReX[2]; lReX[2] = reL; lReY[2] = t; reL = t;
-t = cR3 * (reL - lReY[3]) + lReX[3]; lReX[3] = reL; lReY[3] = t; reL = t;
+let t = cR0 * (reL + lReY[0]) - lReX[0]; lReX[0] = reL; lReY[0] = t; reL = t;
+t = cR1 * (reL + lReY[1]) - lReX[1]; lReX[1] = reL; lReY[1] = t; reL = t;
+t = cR2 * (reL + lReY[2]) - lReX[2]; lReX[2] = reL; lReY[2] = t; reL = t;
+t = cR3 * (reL + lReY[3]) - lReX[3]; lReX[3] = reL; lReY[3] = t; reL = t;
 let rawIL = lDelRe; lDelRe = reL;
 
 let imL = cleanL;
-t = cI0 * (imL - lImY[0]) + lImX[0]; lImX[0] = imL; lImY[0] = t; imL = t;
-t = cI1 * (imL - lImY[1]) + lImX[1]; lImX[1] = imL; lImY[1] = t; imL = t;
-t = cI2 * (imL - lImY[2]) + lImX[2]; lImX[2] = imL; lImY[2] = t; imL = t;
-t = cI3 * (imL - lImY[3]) + lImX[3]; lImX[3] = imL; lImY[3] = t; imL = t;
-let rawQL = imL;
+t = cI0 * (imL + lImY[0]) - lImX[0]; lImX[0] = imL; lImY[0] = t; imL = t;
+t = cI1 * (imL + lImY[1]) - lImX[1]; lImX[1] = imL; lImY[1] = t; imL = t;
+t = cI2 * (imL + lImY[2]) - lImX[2]; lImX[2] = imL; lImY[2] = t; imL = t;
+t = cI3 * (imL + lImY[3]) - lImX[3]; lImX[3] = imL; lImY[3] = t; imL = t;
+let rawQL = 0.0 - imL; // negate: this order is the negative Hilbert
 
 let reR = cleanR;
-t = cR0 * (reR - rReY[0]) + rReX[0]; rReX[0] = reR; rReY[0] = t; reR = t;
-t = cR1 * (reR - rReY[1]) + rReX[1]; rReX[1] = reR; rReY[1] = t; reR = t;
-t = cR2 * (reR - rReY[2]) + rReX[2]; rReX[2] = reR; rReY[2] = t; reR = t;
-t = cR3 * (reR - rReY[3]) + rReX[3]; rReX[3] = reR; rReY[3] = t; reR = t;
+t = cR0 * (reR + rReY[0]) - rReX[0]; rReX[0] = reR; rReY[0] = t; reR = t;
+t = cR1 * (reR + rReY[1]) - rReX[1]; rReX[1] = reR; rReY[1] = t; reR = t;
+t = cR2 * (reR + rReY[2]) - rReX[2]; rReX[2] = reR; rReY[2] = t; reR = t;
+t = cR3 * (reR + rReY[3]) - rReX[3]; rReX[3] = reR; rReY[3] = t; reR = t;
 let rawIR = rDelRe; rDelRe = reR;
 
 let imR = cleanR;
-t = cI0 * (imR - rImY[0]) + rImX[0]; rImX[0] = imR; rImY[0] = t; imR = t;
-t = cI1 * (imR - rImY[1]) + rImX[1]; rImX[1] = imR; rImY[1] = t; imR = t;
-t = cI2 * (imR - rImY[2]) + rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
-t = cI3 * (imR - rImY[3]) + rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
-let rawQR = imR;
+t = cI0 * (imR + rImY[0]) - rImX[0]; rImX[0] = imR; rImY[0] = t; imR = t;
+t = cI1 * (imR + rImY[1]) - rImX[1]; rImX[1] = imR; rImY[1] = t; imR = t;
+t = cI2 * (imR + rImY[2]) - rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
+t = cI3 * (imR + rImY[3]) - rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
+let rawQR = 0.0 - imR; // negate: this order is the negative Hilbert
 
 // Radial unit-disk saturation: preserves exact quadrature angle (cos(theta), sin(theta))
 // while bounding radius r_sat in [0, 1) so Chebyshev T_k and U_k never blow up or clip!

@@ -3,7 +3,7 @@ loopback_fm_tvdl — Parameter Information
 ================================================================================
 
 OVERVIEW
-Implements Loopback Frequency Modulation (LBFM) using a Time-Varying Delay Line (TVDL) from Tamara Smyth (DAFx-26 Paper 36, Sections 2.2, 2.4, 3.2 & 3.3, Eq. 10–12, 18–27, 55–58). Instead of a 1-sample feedback loop that suffers from sample-rate-dependent tuning drift, this effect uses Smyth's exact closed-form representation z0(n) = (b0 + e^(j*w0*nT)) / (1 + b0*e^(j*w0*nT)) where b0 = (sqrt(1 - B^2) - 1) / B, and warps the incoming stereo tuba through a cubic-interpolated delay line driven by the analytic phase 2*phi(n)*(fs/wc) plus an integer-period offset d0 = fs / fc (Eq. 58). Allows you to choose between concert-pitch-locked LBFM timbre distortion or Smyth's natural nonlinear pitch-glide warping w0 = wc * sqrt(1 - B^2).
+Implements Loopback Frequency Modulation (LBFM) using a Time-Varying Delay Line (TVDL) from Tamara Smyth (DAFx-26 Paper 36, Sections 2.2, 2.4, 3.2 & 3.3, Eq. 10–12, 18–27, 55–58). Instead of a 1-sample feedback loop that suffers from sample-rate-dependent tuning drift, this effect uses Smyth's exact closed-form representation z0(n) = (b0 + e^(j*w0*nT)) / (1 + b0*e^(j*w0*nT)) where b0 = (sqrt(1 - B^2) - 1) / B, and warps the incoming stereo tuba through a cubic-interpolated delay line driven by the delay-warping phase term 2*phi(n)*(fs/wc) plus an integer-period offset d0 = fs / fc (Eq. 58). Allows you to choose between concert-pitch-locked LBFM timbre distortion or Smyth's natural nonlinear pitch-glide warping w0 = wc * sqrt(1 - B^2).
 
 INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input (Tuba Carrier)

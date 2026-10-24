@@ -63,33 +63,33 @@ let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let c
 
 // Left Channel Hilbert -> (sL, shatL)
 let tL = xL;
-let yl0 = cRe0 * (tL - lReY[0]) + lReX[0]; lReX[0] = tL; lReY[0] = yl0; tL = yl0;
-let yl1 = cRe1 * (tL - lReY[1]) + lReX[1]; lReX[1] = tL; lReY[1] = yl1; tL = yl1;
-let yl2 = cRe2 * (tL - lReY[2]) + lReX[2]; lReX[2] = tL; lReY[2] = yl2; tL = yl2;
-let yl3 = cRe3 * (tL - lReY[3]) + lReX[3]; lReX[3] = tL; lReY[3] = yl3;
+let yl0 = cRe0 * (tL + lReY[0]) - lReX[0]; lReX[0] = tL; lReY[0] = yl0; tL = yl0;
+let yl1 = cRe1 * (tL + lReY[1]) - lReX[1]; lReX[1] = tL; lReY[1] = yl1; tL = yl1;
+let yl2 = cRe2 * (tL + lReY[2]) - lReX[2]; lReX[2] = tL; lReY[2] = yl2; tL = yl2;
+let yl3 = cRe3 * (tL + lReY[3]) - lReX[3]; lReX[3] = tL; lReY[3] = yl3;
 let sL = lDelRe; lDelRe = yl3;
 
 let tLi = xL;
-let yli0 = cIm0 * (tLi - lImY[0]) + lImX[0]; lImX[0] = tLi; lImY[0] = yli0; tLi = yli0;
-let yli1 = cIm1 * (tLi - lImY[1]) + lImX[1]; lImX[1] = tLi; lImY[1] = yli1; tLi = yli1;
-let yli2 = cIm2 * (tLi - lImY[2]) + lImX[2]; lImX[2] = tLi; lImY[2] = yli2; tLi = yli2;
-let yli3 = cIm3 * (tLi - lImY[3]) + lImX[3]; lImX[3] = tLi; lImY[3] = yli3;
-let shatL = yli3;
+let yli0 = cIm0 * (tLi + lImY[0]) - lImX[0]; lImX[0] = tLi; lImY[0] = yli0; tLi = yli0;
+let yli1 = cIm1 * (tLi + lImY[1]) - lImX[1]; lImX[1] = tLi; lImY[1] = yli1; tLi = yli1;
+let yli2 = cIm2 * (tLi + lImY[2]) - lImX[2]; lImX[2] = tLi; lImY[2] = yli2; tLi = yli2;
+let yli3 = cIm3 * (tLi + lImY[3]) - lImX[3]; lImX[3] = tLi; lImY[3] = yli3;
+let shatL = 0.0 - yli3; // negate: this cR/cI order is the negative Hilbert (up-shift for +phase)
 
 // Right Channel Hilbert -> (sR, shatR)
 let tR = xR;
-let yr0 = cRe0 * (tR - rReY[0]) + rReX[0]; rReX[0] = tR; rReY[0] = yr0; tR = yr0;
-let yr1 = cRe1 * (tR - rReY[1]) + rReX[1]; rReX[1] = tR; rReY[1] = yr1; tR = yr1;
-let yr2 = cRe2 * (tR - rReY[2]) + rReX[2]; rReX[2] = tR; rReY[2] = yr2; tR = yr2;
-let yr3 = cRe3 * (tR - rReY[3]) + rReX[3]; rReX[3] = tR; rReY[3] = yr3;
+let yr0 = cRe0 * (tR + rReY[0]) - rReX[0]; rReX[0] = tR; rReY[0] = yr0; tR = yr0;
+let yr1 = cRe1 * (tR + rReY[1]) - rReX[1]; rReX[1] = tR; rReY[1] = yr1; tR = yr1;
+let yr2 = cRe2 * (tR + rReY[2]) - rReX[2]; rReX[2] = tR; rReY[2] = yr2; tR = yr2;
+let yr3 = cRe3 * (tR + rReY[3]) - rReX[3]; rReX[3] = tR; rReY[3] = yr3;
 let sR = rDelRe; rDelRe = yr3;
 
 let tRi = xR;
-let yri0 = cIm0 * (tRi - rImY[0]) + rImX[0]; rImX[0] = tRi; rImY[0] = yri0; tRi = yri0;
-let yri1 = cIm1 * (tRi - rImY[1]) + rImX[1]; rImX[1] = tRi; rImY[1] = yri1; tRi = yri1;
-let yri2 = cIm2 * (tRi - rImY[2]) + rImX[2]; rImX[2] = tRi; rImY[2] = yri2; tRi = yri2;
-let yri3 = cIm3 * (tRi - rImY[3]) + rImX[3]; rImX[3] = tRi; rImY[3] = yri3;
-let shatR = yri3;
+let yri0 = cIm0 * (tRi + rImY[0]) - rImX[0]; rImX[0] = tRi; rImY[0] = yri0; tRi = yri0;
+let yri1 = cIm1 * (tRi + rImY[1]) - rImX[1]; rImX[1] = tRi; rImY[1] = yri1; tRi = yri1;
+let yri2 = cIm2 * (tRi + rImY[2]) - rImX[2]; rImX[2] = tRi; rImY[2] = yri2; tRi = yri2;
+let yri3 = cIm3 * (tRi + rImY[3]) - rImX[3]; rImX[3] = tRi; rImY[3] = yri3;
+let shatR = 0.0 - yri3; // negate: this cR/cI order is the negative Hilbert (up-shift for +phase)
 
 // --- 3. Quadrature Oscillator & SSB Sideband Selection ---
 let ph = shiftPhasor.next(finalShiftHz);

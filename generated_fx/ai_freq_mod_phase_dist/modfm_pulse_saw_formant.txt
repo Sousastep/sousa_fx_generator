@@ -86,21 +86,22 @@ let isoFund = fundSvf.next(mono, f0, 0.80)[2];
 let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
 let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
 
-// Correct negative-feedback allpass Hilbert network: y[n] = c * (x[n] - y[n-1]) + x[n-1]
+// Quadrature allpass: y[n] = c * (x[n] + y[n-1]) - x[n-1] (H = (c - z^-1)/(1 - c z^-1))
+// This cR/cI order is the negative Hilbert; the imaginary branch is negated below.
 let re = isoFund;
-let t = cR0 * (re - hReY[0]) + hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
-t = cR1 * (re - hReY[1]) + hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
-t = cR2 * (re - hReY[2]) + hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
-t = cR3 * (re - hReY[3]) + hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
+let t = cR0 * (re + hReY[0]) - hReX[0]; hReX[0] = re; hReY[0] = t; re = t;
+t = cR1 * (re + hReY[1]) - hReX[1]; hReX[1] = re; hReY[1] = t; re = t;
+t = cR2 * (re + hReY[2]) - hReX[2]; hReX[2] = re; hReY[2] = t; re = t;
+t = cR3 * (re + hReY[3]) - hReX[3]; hReX[3] = re; hReY[3] = t; re = t;
 let sigRe = hDelRe;
 hDelRe = re;
 
 let im = isoFund;
-t = cI0 * (im - hImY[0]) + hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
-t = cI1 * (im - hImY[1]) + hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
-t = cI2 * (im - hImY[2]) + hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
-t = cI3 * (im - hImY[3]) + hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
-let sigIm = im;
+t = cI0 * (im + hImY[0]) - hImX[0]; hImX[0] = im; hImY[0] = t; im = t;
+t = cI1 * (im + hImY[1]) - hImX[1]; hImX[1] = im; hImY[1] = t; im = t;
+t = cI2 * (im + hImY[2]) - hImX[2]; hImX[2] = im; hImY[2] = t; im = t;
+t = cI3 * (im + hImY[3]) - hImX[3]; hImX[3] = im; hImY[3] = t; im = t;
+let sigIm = 0.0 - im; // negate: this order is the negative Hilbert (+f analytic phase)
 
 // Full-band RMS/peak envelope of the live tuba
 let fullAmp = maximum(abs(xL), abs(xR));

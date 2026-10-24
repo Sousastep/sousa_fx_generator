@@ -145,6 +145,8 @@ let c2R = cubicinterp(rpC2R - iC2R, flgBufR[(iC2R - 1 + 2048) & 2047], flgBufR[i
 let dualCombR = 0.5 * (uR + g1R * c1R + g2R * c2R);
 
 // --- 3. Engine B: SSB + Spectral-Delay Warped Barberpole (Paper Sec 4 & 4.1, Fig. 10) ---
+// Quadrature allpass: y[n] = c*(x[n] + y[n-1]) - x[n-1]; this cR/cI order is the
+// negative Hilbert, so the imaginary branch is negated before the SSB shift below.
 let cR0 = 0.4794008656; let cR1 = 0.8762184935; let cR2 = 0.9765975895; let cR3 = 0.9974992559;
 let cI0 = 0.1617584983; let cI1 = 0.7330289323; let cI2 = 0.9453497003; let cI3 = 0.9905991567;
 
@@ -160,7 +162,7 @@ t = cI0 * (imL + lImY[0]) - lImX[0]; lImX[0] = imL; lImY[0] = t; imL = t;
 t = cI1 * (imL + lImY[1]) - lImX[1]; lImX[1] = imL; lImY[1] = t; imL = t;
 t = cI2 * (imL + lImY[2]) - lImX[2]; lImX[2] = imL; lImY[2] = t; imL = t;
 t = cI3 * (imL + lImY[3]) - lImX[3]; lImX[3] = imL; lImY[3] = t; imL = t;
-let sImL = imL;
+let sImL = 0.0 - imL;
 
 let reR = uR;
 t = cR0 * (reR + rReY[0]) - rReX[0]; rReX[0] = reR; rReY[0] = t; reR = t;
@@ -174,7 +176,7 @@ t = cI0 * (imR + rImY[0]) - rImX[0]; rImX[0] = imR; rImY[0] = t; imR = t;
 t = cI1 * (imR + rImY[1]) - rImX[1]; rImX[1] = imR; rImY[1] = t; imR = t;
 t = cI2 * (imR + rImY[2]) - rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
 t = cI3 * (imR + rImY[3]) - rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
-let sImR = imR;
+let sImR = 0.0 - imR;
 
 // Quadrature SSB shift by phL / phR
 let ssbL = sReL * cos(2.0 * pi * phL) - sImL * sin(2.0 * pi * phL);
