@@ -169,8 +169,15 @@ and route every division through it. Keep that helper and its call sites when
 porting or editing an EEL/JSFX source.
 
 **DSP correctness patterns that were real bugs here** (see `example22`…`example24`):
-one-pole allpass is `y = c*(x - y1) + x1` (the `+ y1, - x1` sign slip turned 7
-Hilbert-based effects into sub-bass resonators); instantaneous frequency comes
+the quadrature one-pole allpass for the repo's `cR`/`cI` pair (also written
+`cRe`/`cIm` in the older files) is
+`y = c*(x + y1) - x1` (`H = (c - z^-1)/(1 - c z^-1)`, unity magnitude, DC
+gain −1). With this coefficient order the raw imaginary branch is the
+*negative* Hilbert, so negate it (`imH = -im`) when the analytic phase must run
+at +f; the magnitude is unaffected. `y = c*(x - y1) + x1` is a different allpass
+(pole at −c) and is not in quadrature with those coefficients; the actual
+sub-bass resonator is `y = c*(x + y1) + x1` (`H = (c + z^-1)/(1 - c z^-1)`,
+DC gain `(1+c)/(1-c)`). Instantaneous frequency comes
 from the cross-product `arg(z[n]·conj(z[n-1]))` weighted by envelope confidence,
 not from a raw `atan2` difference; oscillator phase must be a monotonic
 integrated ramp (`pllPhase = wrap(pllPhase + f0/sr, 0.0, 1.0)`), never `atan2` of
