@@ -1,0 +1,68 @@
+================================================================================
+flanger_ssb_shift — Parameter Information
+================================================================================
+
+WHAT IT IS
+The Bode flanger: instead of sweeping a delay, it shifts the whole spectrum by a
+fixed number of Hz (single-sideband / frequency shifting) and adds that to a
+delayed copy. The result is a set of notches spaced evenly in Hz -- not on a
+harmonic grid -- marching steadily in one direction. It is a barberpole flanger
+that needs no LFO at all.
+
+The side effect is the point: every partial moves by the same number of Hz, so
+the intervals between the partials stop being simple ratios. On a bass the
+harmonics go inharmonic, which is exactly the metallic, "wrong instrument"
+space-bass sound; at a few Hz of shift it is a slow shimmer, at 20–80 Hz it is
+aggressive and detuned.
+
+Source: Esqueda, Välimäki & Parker, DAFx-15 §4, Eq. 10–13, Fig. 10 (M = D/2
+notches from a delay of D samples).
+
+100% wet: the shifted branch is delayed too, so no direct copy of the input
+reaches the output. No dry/wet control, no limiter.
+
+PARAMETERS (6 + output gain)
+
+1. shift_hz — 0.1…80 Hz, default 6 Hz
+   How far the spectrum is shifted, and therefore how fast the notches march.
+   0.1–2 Hz = very slow drift and a subtle inharmonic haze. 5–15 Hz = movement
+   you can hear on a sustained note. 20–80 Hz = the partials clearly no longer
+   belong to the same instrument.
+
+2. direction — down / up, default up
+   Which way the notches travel. Mirror image of the same effect.
+
+3. delay_ms — 1…40 ms, default 8 ms
+   Delay of the reference branch. It sets the notch count (about delay/2 notches
+   across the band): short = few, wide, slow-moving notches; long = many narrow
+   ones and a dense, ringing flutter.
+
+4. feedback — 0…0.85, default 0.3
+   Recirculation. Each pass through the loop shifts again, so feedback stacks the
+   spectrum further and further away from the original pitch — the "bass falling
+   apart" sound. High values are a texture, not a tuning.
+
+5. tone_hz — 600…12000 Hz, default 4500 Hz
+   One-pole damping inside the feedback loop, so the repeated shifts do not turn
+   into hiss.
+
+6. quadrature_trim — 0.9…1.1, default 1.0
+   Trims the amplitude of the quadrature (imaginary) branch. The allpass pair is
+   only approximately 90° apart, so a small trim can cancel a residual image that
+   otherwise shows up as a whine. Leave at 1.0 unless you hear one.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: connected but unused — the shift is a fixed Hz amount, not f0-locked.
+- in4: connected but unused — the march rate is a constant offset, not bar-locked.
+- out1 / out2: stereo, wet only.
+
+NOTES
+- Shift is applied after the delay, so both branches are delayed.
+- The quadrature coefficients are the 4-section one-pole allpass pair from
+  example22, designed for 44.1–48 kHz; at much higher rates the 90° relationship
+  degrades gracefully (the image sits further out, the notches get shallower).
+- Feedback is capped at 0.85 with damping in the loop.

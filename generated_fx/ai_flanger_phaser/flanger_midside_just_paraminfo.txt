@@ -1,0 +1,65 @@
+================================================================================
+flanger_midside_just — Parameter Information
+================================================================================
+
+WHAT IT IS
+A flanger that treats the centre and the sides of the stereo image as two
+separate combs. The mid comb stays tuned to the played note; the side comb is
+tuned a 5-limit interval above it. Because both combs come from one delay and
+one ratio, that interval is exact at every point of the sweep — the width pumps
+and breathes while the mono core stays locked, which is what keeps a sub-heavy
+deep-dubstep bass from wandering when you flange it.
+
+Source: Das, DAFx-24 paper 92 §3 (width from the difference channel);
+Esqueda/Välimäki/Parker, DAFx-15 §3 Fig. 6; 5-limit ratios per Tong & Tojo,
+SMC-19 §2.
+
+100% wet. No dry/wet control, no limiter.
+
+PARAMETERS (6 + output gain)
+
+1. mid_ms — 0.5…12 ms, default 3 ms
+   Mid comb spacing. It snaps to a whole number of the note's harmonics (the
+   nearest one), so this knob selects *which* harmonic multiple the comb lands
+   on rather than an arbitrary delay: the notches sit on the tuba's own grid.
+   0.5 ms ≈ every 36th harmonic of a low A, 12 ms ≈ every 2nd — short is dense
+   and metallic, long is broad and phasey.
+
+2. side_ratio — 1/1, 6/5, 5/4, 4/3, 3/2, 2/1; default 3/2
+   Interval of the side comb above the mid comb. 1/1 = mono-width (no widening,
+   just a second comb), 3/2 = a fifth — the widest and most natural, 2/1 = an
+   octave, which puts the side notches on the mid notches' peaks and cancels the
+   width oddly. All are ratios of small integers, never cent values.
+
+3. rate_hz — 0.02…2 Hz, default 0.11 Hz
+   Sweep speed.
+
+4. depth — 0…1, default 0.7
+   Sweep depth, in octaves of comb spacing (±0.5 octave at 1). Both combs scale
+   together, so the mid/side interval never drifts off the just ratio.
+
+5. feedback — -0.85…+0.85, default +0.35
+   Recirculation on both combs. Positive makes the notches ring; negative hol-
+   lows them out. Applied to mid and side equally, so the width relationship is
+   untouched.
+
+6. side_width — 0…2, default 1.0
+   1.0 = unity side gain (normal width), 0 = mono (mid only), 2 = doubled side
+   (very wide, check mono compatibility).
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: f0 in Hz. 0 or out of range = unknown: the last valid value is held.
+  Cold start 55 Hz (A1), so the comb is tuned with nothing patched.
+- in4: one-bar phasor. While it moves the sweep follows the bar; held at 0 the
+  effect free-runs at rate_hz.
+- out1 / out2: stereo, wet only.
+
+NOTES
+- Because the comb spacing snaps to harmonics of f0, playing a different note
+  re-tunes the combs; the delay glides over ~20 ms rather than jumping.
+- Mid and side each have their own feedback path, so the width does not collapse
+  when the mid is resonating.

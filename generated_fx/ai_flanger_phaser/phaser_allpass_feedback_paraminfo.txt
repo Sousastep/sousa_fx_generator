@@ -1,0 +1,61 @@
+================================================================================
+phaser_allpass_feedback — Parameter Information
+================================================================================
+
+WHAT IT IS
+The straight-ahead phaser, done properly: a chain of identical first-order
+allpass sections mixed against the input, with a feedback loop around the chain
+for the resonance peaks. That is the pedal topology (MXR / Small Stone / Uni-Vibe
+family) rather than a flanger with a phase-shifted face — the notches are
+harmonically spaced (0.2·fb, 0.67·fb, 1.5·fb, 4.4·fb for 8 stages), so the sweep
+widens as it climbs, which is the sound you hear as "liquid".
+
+Source: Kiiski, Esqueda & Välimäki, DAFx-16 paper 42 §2, Eq. 1–2, Fig. 1;
+Huovilainen, DAFx-05 §2–3; Eichas et al., DAFx-14 (MXR Phase 90).
+
+100% wet. No dry/wet control, no limiter.
+
+PARAMETERS (6 + output gain)
+
+1. notches — 2…8, default 4
+   Number of notches (two allpass stages each). 2 = broad, vocal, one moving
+   hollow. 4 = the classic pedal. 8 = dense, metallic, close to a flanger but
+   with harmonically spread notches.
+
+2. center_hz — 100…3000 Hz, default 520 Hz
+   Middle of the sweep. Low (100–250 Hz) puts the notches on the tuba's
+   fundamental and low harmonics — a slow, physical "breathing" of the note.
+   High pulls the sweep into the brass formants.
+
+3. sweep_octaves — 0…4, default 2
+   How far the sweep travels, total, across the note. At 0 the phaser is static
+   (a fixed resonant comb — useful as a formant); at 4 it goes from sub to
+   sizzle.
+
+4. rate_hz — 0.02…3 Hz, default 0.22 Hz
+   Sweep speed. Below ~0.1 Hz on a long note it reads as texture, not tremolo.
+
+5. feedback — 0…0.9, default 0.35
+   Loop gain around the allpass chain. This is what turns the notches into
+   resonant peaks; above ~0.7 the peaks whistle and start to dominate.
+
+6. stereo_phase — 0…1, default 0.25
+   Phase offset between the two channels' sweeps (0.25 = quarter cycle). At 0
+   the phaser is mono.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: connected but unused — this phaser sweeps its own centre, not the note.
+- in4: one-bar phasor. While it moves the sweep follows the bar; held at 0 the
+  effect free-runs at rate_hz.
+- out1 / out2: stereo, wet only.
+
+NOTES
+- The stages are identical, as in the pedal, so one tan() per channel per sample
+  sets the whole cascade.
+- Output is 0.5·(input + chain): the deepest possible notches, unity at DC.
+- Feedback is capped at 0.9 and the coefficients stay inside the unit circle for
+  any break frequency, so the loop cannot run away.

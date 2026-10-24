@@ -1,0 +1,72 @@
+================================================================================
+flanger_enharmonic_diesis — Parameter Information
+================================================================================
+
+WHAT IT IS
+A comb flanger whose notch lattice is placed a *just* interval away from the
+played note's harmonics, instead of an arbitrary detune. The taps that make the
+comb are spaced by a fixed 5-limit ratio, so the nulls land at
+harmonic·f0 / r — the same rungs of the tuning lattice reached by a different
+path. Measured with f0 = 55 Hz and harmonic = 3: nulls at 165.0 Hz (1/1),
+163.0 Hz (81/80) and 158.4 Hz (25/24), i.e. exactly the comma / diesis below the
+3rd harmonic, not "about 20 cents".
+
+On a sustained tuba note every partial ends up just off its null — partly
+notched and phase-rotated — which is the enharmonic equivalent of a reese's
+mistuned unison: one pitch, two spellings, beating. Glide it and the whole
+lattice slides against the note.
+
+Source: Tong & Tojo, SMC-19 (5-limit ratios); Christou, NIME-25 §3.2 (tuning
+lattice); flanger structure Esqueda/Välimäki/Parker, DAFx-15 §3 Fig. 6.
+
+100% wet, no dry/wet control, no limiter.
+
+PARAMETERS (7 + output gain)
+
+1. interval — 1/1, 81/80, 128/125, 25/24, 135/128; default 25/24
+   The enharmonic pair that spaces the comb.
+   1/1 = a plain harmonic comb. 81/80 = syntonic comma, 21.5 cents — the subtlest
+   mistuning, a slow shimmer. 128/125 = lesser diesis, 41.1 cents.
+   25/24 = chromatic semitone ("enharmonic diesis"), 70.7 cents — the obvious
+   one. 135/128 = major chroma, 92.2 cents, close to a semitone of smearing.
+
+2. harmonic — 1…8, default 3
+   Comb period in harmonics of the note: 3 puts a null on every third harmonic,
+   1 on every harmonic (very dense), 8 on every eighth (broad, granular).
+
+3. taps — 3…8, default 6
+   Number of comb rungs. More = sharper, deeper nulls and a more defined comb;
+   fewer = a broad, phasey colour with shallow nulls.
+
+4. detune_sweep — 0…1, default 0.15
+   Depth of the glide, in octaves of the lattice (±1 octave at 1). The whole
+   lattice moves as one, so the just interval between its rungs — and therefore
+   the tuning — is preserved at every point of the sweep.
+
+5. sweep_rate_hz — 0.02…1 Hz, default 0.05 Hz
+   Glide speed. Very slow is right: this is meant to be heard as drift, not as
+   an LFO.
+
+6. feedback — -0.8…+0.8, default +0.25
+   Recirculation around the comb. Positive makes the rungs ring; negative makes
+   the partials just above each null hollow out. This is the control that turns
+   the effect from a colour into a resonance.
+
+7. tone_hz — 600…14000 Hz, default 5000 Hz
+   Damping inside the feedback loop. Low keeps it dark and dubby.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: f0 in Hz. 0 or out of range = unknown: the last valid value is held.
+  Cold start is 55 Hz (A1), so the comb is tuned with nothing patched.
+- in4: one-bar phasor. While it moves it drives the glide; held at 0 the effect
+  free-runs at sweep_rate_hz.
+- out1 / out2: stereo, wet only.
+
+NOTES
+- No detune is ever expressed in cents: every rung spacing is a ratio of small
+  integers (81/80, 128/125, 25/24, 135/128).
+- Taps are 1/nTaps-normalised, so the comb peaks at unity and only the nulls cut.

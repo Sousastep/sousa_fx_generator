@@ -1,0 +1,140 @@
+// ============================================================================
+// flanger_through_zero_jet.txt
+// Through-zero flanger: two taps swept symmetrically through the zero point.
+// From: Antti Huovilainen, "Enhanced Digital Models for Analog Modulation
+//       Effects", DAFx-05, 2005_P_155, §1.1 (fractional-delay flanger as a
+//       time-varying comb, feedback turns the FIR comb into an IIR comb) and
+//       §4 (delay-time warping / loop behaviour); structure after the flanger
+//       block of Esqueda, Välimäki & Parker, "Barberpole Phasing and Flanging
+//       Illusions", DAFx-15, 2015_DAFx-15_submission_67, Fig. 6;
+//       fractional-delay choice after Nam, DAFx-09 paper 72, §2
+//       (cubic Lagrange: flat magnitude, no Thiran allpass dispersion).
+//
+// Two taps sit at c +/- s around a centre delay c, with the half-spread s
+// sweeping 0 .. c. The *relative* delay between the taps is 1c +/- 2s, so it
+// passes through zero once per cycle: the comb notches race to Nyquist and
+// back, which is the through-zero "jet" - a notch sweep that no ordinary
+// single-tap flanger can produce. Neither tap is ever instantaneous (a 0.15 ms
+// floor keeps the output off the dry path), so this file is 100 % wet with no
+// dry term at all.
+// ============================================================================
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only - this sweep is time-based, not pitch-locked
+//        (use flanger_enharmonic_diesis / phaser_harmonic_track for f0 lock)
+//   in4: 0..1 one-bar phasor - locks the sweep to the bar when moving,
+//        free-running LFO at sweep_rate_hz when held at 0
+// Outlets:
+//   out1 / out2: stereo, wet only
+// No dry/wet control, no limiter, no metering.
+// ============================================================================
+
+@param({ min: 0.05, max: 12 }) sweep_ms = 2.2;      // sweep span
+@param({ min: 0.02, max: 2 }) sweep_rate_hz = 0.14; // sweep rate
+@param({ min: -0.95, max: 0.95 }) feedback = -0.55; // feedback
+@param({ min: 0, max: 1 }) stereo_offset = 0.25;    // stereo offset
+@param({ min: 800, max: 14000 }) tone_hz = 7000;    // loop damping
+@param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
+
+@state bufL = new FixedSampleArray(4096);
+@state bufR = new FixedSampleArray(4096);
+@state wi: Int = 0;
+
+@state dampL = 0.0;
+@state dampR = 0.0;
+
+@state phF = 0.0;
+@state phOff = 0.0;
+@state prevBarIn = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3;  // keeps the in3 port present; this sweep is not pitch-locked
+let barIn = in4;
+
+// --- Sweep phase -----------------------------------------------------------
+// The bar phase is carried as an offset against a free-running phase, so a
+// moving phasor takes over exactly and a stopped one hands back with no jump.
+let rate = clamp(sweep_rate_hz, 0.02, 2.0);
+phF = wrap(phF + rate / sr, 0.0, 1.0);
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	phOff = wrap(barIn - phF, 0.0, 1.0);
+}
+prevBarIn = barIn;
+
+let offR = clamp(stereo_offset, 0.0, 1.0) * 0.5;
+let pL = wrap(phF + phOff, 0.0, 1.0);
+let pR = wrap(pL + offR, 0.0, 1.0);
+
+// --- Delay geometry --------------------------------------------------------
+// centre c = dmin + base, half-spread s = base * (0.5 + 0.5 sin) in 0 .. base
+let base = clamp(mstosamps(clamp(sweep_ms, 0.05, 12.0)), 2.0, 1600.0);
+let dminS = maximum(mstosamps(0.15), 1.0);
+let centre = dminS + base;
+
+let spreadL = base * (0.5 + 0.5 * sin(2.0 * pi * pL));
+let dAL = centre - spreadL;
+let dBL = centre + spreadL;
+
+let spreadR = base * (0.5 + 0.5 * sin(2.0 * pi * pR));
+let dAR = centre - spreadR;
+let dBR = centre + spreadR;
+
+let fbAmt = clamp(feedback, -0.95, 0.95);
+let dampF = clamp(tone_hz, 200.0, sr * 0.45);
+let dampC = 1.0 - exp(0.0 - 2.0 * pi * dampF / sr);
+
+// --- Left channel: write input + damped feedback, read the two swept taps ----
+bufL[wi] = xL + fbAmt * dampL;
+
+let rAL = wi - dAL;
+while (rAL < 0.0) { rAL += 4096.0; }
+let qAL: Int = floor(rAL);
+let tapAL = cubicinterp(rAL - qAL,
+	bufL[(qAL - 1 + 4096) & 4095],
+	bufL[qAL & 4095],
+	bufL[(qAL + 1) & 4095],
+	bufL[(qAL + 2) & 4095]);
+
+let rBL = wi - dBL;
+while (rBL < 0.0) { rBL += 4096.0; }
+let qBL: Int = floor(rBL);
+let tapBL = cubicinterp(rBL - qBL,
+	bufL[(qBL - 1 + 4096) & 4095],
+	bufL[qBL & 4095],
+	bufL[(qBL + 1) & 4095],
+	bufL[(qBL + 2) & 4095]);
+
+let yL = 0.5 * (tapAL + tapBL);
+dampL = dampL + dampC * (yL - dampL);
+
+// --- Right channel ---------------------------------------------------------
+bufR[wi] = xR + fbAmt * dampR;
+
+let rAR = wi - dAR;
+while (rAR < 0.0) { rAR += 4096.0; }
+let qAR: Int = floor(rAR);
+let tapAR = cubicinterp(rAR - qAR,
+	bufR[(qAR - 1 + 4096) & 4095],
+	bufR[qAR & 4095],
+	bufR[(qAR + 1) & 4095],
+	bufR[(qAR + 2) & 4095]);
+
+let rBR = wi - dBR;
+while (rBR < 0.0) { rBR += 4096.0; }
+let qBR: Int = floor(rBR);
+let tapBR = cubicinterp(rBR - qBR,
+	bufR[(qBR - 1 + 4096) & 4095],
+	bufR[qBR & 4095],
+	bufR[(qBR + 1) & 4095],
+	bufR[(qBR + 2) & 4095]);
+
+let yR = 0.5 * (tapAR + tapBR);
+dampR = dampR + dampC * (yR - dampR);
+
+wi = (wi + 1) & 4095;
+
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = yL * gain;
+out2 = yR * gain;

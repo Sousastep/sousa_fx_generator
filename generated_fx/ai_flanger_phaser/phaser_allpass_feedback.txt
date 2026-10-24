@@ -1,0 +1,107 @@
+// ============================================================================
+// phaser_allpass_feedback.txt
+// The workhorse phaser: a cascade of first-order allpass sections with resonant
+// feedback, L/R in quadrature. Two notches (four stages) to eight notches
+// (sixteen stages), swept 0..4 octaves.
+// From: Roope Kiiski, Fabián Esqueda & Vesa Välimäki, "Time-Variant Gray-Box
+//       Modeling of a Phaser Pedal", DAFx-16, 2016_05-DAFx-16_paper_42 §2,
+//       Eq. 1-2 (A(z) = (a1 + z^-1)/(1 + a1 z^-1), a1 from the break frequency;
+//       N/2 notches for N even; feedback loop via a unit delay, Fig. 1);
+//       Antti Huovilainen, "Enhanced Digital Models for Analog Modulation
+//       Effects", DAFx-05, 2005_P_155 §2-3 (allpass cascade, 180 deg per
+//       stage, feedback for the resonance peaks);
+//       Eichas et al., "Physical Modeling of the MXR Phase 90", DAFx-14
+//       (identical stages is the pedal behaviour, not an approximation).
+//
+// One tan() per channel per sample covers the whole cascade: the stages are
+// identical (as in the pedal), so they share a1 and only their state differs.
+// ============================================================================
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only - this phaser sweeps its own centre, not the played note
+//   in4: 0..1 one-bar phasor - locks the sweep to the bar when moving,
+//        free-running LFO at rate_hz when held at 0
+// Outlets:
+//   out1 / out2: stereo, wet only
+// No dry/wet control, no limiter, no metering.
+// ============================================================================
+
+@param({ min: 2, max: 8 }) notches = 4;              // notches
+@param({ min: 100, max: 3000 }) center_hz = 520;     // centre frequency
+@param({ min: 0, max: 4 }) sweep_octaves = 2;        // sweep depth
+@param({ min: 0.02, max: 3 }) rate_hz = 0.22;        // sweep rate
+@param({ min: 0, max: 0.9 }) feedback = 0.35;        // feedback
+@param({ min: 0, max: 1 }) stereo_phase = 0.25;      // stereo phase
+@param({ min: -24, max: 12 }) out_gain_db = 0;       // output gain
+
+@state apXL = new FixedSampleArray(16);
+@state apYL = new FixedSampleArray(16);
+@state apXR = new FixedSampleArray(16);
+@state apYR = new FixedSampleArray(16);
+
+@state prevChainL = 0.0;
+@state prevChainR = 0.0;
+
+@state phF = 0.0;
+@state phOff = 0.0;
+@state prevBarIn = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3;  // keeps the in3 port present
+let barIn = in4;
+
+// --- Sweep phase -----------------------------------------------------------
+// The bar phase is carried as an offset against a free-running phase, so a
+// moving phasor takes over exactly and a stopped one hands back with no jump.
+let rate = clamp(rate_hz, 0.02, 3.0);
+phF = wrap(phF + rate / sr, 0.0, 1.0);
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	phOff = wrap(barIn - phF, 0.0, 1.0);
+}
+prevBarIn = barIn;
+
+let sp = clamp(stereo_phase, 0.0, 1.0);
+let phL = wrap(phF + phOff, 0.0, 1.0);
+let phR = wrap(phL + sp, 0.0, 1.0);
+
+// --- Sweep: +/- sweep_octaves/2 around the centre (Kiiski Eq. 2) ------------
+let centre = clamp(center_hz, 100.0, 3000.0);
+let oct = clamp(sweep_octaves, 0.0, 4.0) * 0.5;
+let fbL = clamp(centre * exp2(oct * sin(2.0 * pi * phL)), 40.0, sr * 0.45);
+let fbR = clamp(centre * exp2(oct * sin(2.0 * pi * phR)), 40.0, sr * 0.45);
+
+// --- a1 = (tan(pi fb/sr) - 1) / (tan(pi fb/sr) + 1) -------------------------
+let tL = tan(pi * fbL / sr);
+let aL = (tL - 1.0) / (tL + 1.0);
+let tR = tan(pi * fbR / sr);
+let aR = (tR - 1.0) / (tR + 1.0);
+
+let nAp: Int = 2 * clamp(floor(notches + 0.5), 2, 8);
+let fbAmt = clamp(feedback, 0.0, 0.9);
+
+// --- Left channel: chain of N identical first-order allpasses --------------
+let sigL = xL + fbAmt * prevChainL;
+for (let m: Int = 0; m < nAp; m++) {
+	let yL = aL * sigL + apXL[m] - aL * apYL[m];
+	apXL[m] = sigL;
+	apYL[m] = yL;
+	sigL = yL;
+}
+prevChainL = sigL;
+
+// --- Right channel ---------------------------------------------------------
+let sigR = xR + fbAmt * prevChainR;
+for (let m: Int = 0; m < nAp; m++) {
+	let yR = aR * sigR + apXR[m] - aR * apYR[m];
+	apXR[m] = sigR;
+	apYR[m] = yR;
+	sigR = yR;
+}
+prevChainR = sigR;
+
+// Deepest notches at equal gains (W = G = 0.5), as in the paper's Fig. 1
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = 0.5 * (xL + sigL) * gain;
+out2 = 0.5 * (xR + sigR) * gain;

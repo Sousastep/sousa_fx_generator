@@ -1,0 +1,72 @@
+================================================================================
+phaser_harmonic_track — Parameter Information
+================================================================================
+
+WHAT IT IS
+A phaser whose notches follow the notes you play. The allpass break frequencies
+are placed on the 5-limit ladder measured from the tracked fundamental —
+1/1, 5/4, 3/2, 15/8, then the same triad an octave up — so the notches sit on
+the tuba's own partials, not on a fixed band. Play a different note and the whole
+ladder moves with it.
+
+Because the ratios are exact (3/2, not 2^(7/12)), the notches stay locked to the
+partials as the pitch glides — a scoop or a bend keeps the phasing where it was
+instead of sliding through it. That is the "liquid" part: the effect moves with
+the instrument rather than over it.
+
+Source: Kiiski/Esqueda/Välimäki, DAFx-16 paper 42 §2, Eq. 1–2; 5-limit ladder
+from Tong & Tojo, SMC-19 §2; cascade behaviour after Eichas et al., DAFx-14.
+
+100% wet. No dry/wet control, no limiter.
+
+PARAMETERS (7 + output gain)
+
+1. track_octave — -2…+2 octaves, default 0
+   Transposes the whole ladder relative to the played note. 0 puts it on the
+   fundamental and low partials (breathing sub). +1/+2 lifts it onto the brass
+   formants, where the notches cut the bark. -1/-2 drops it below the note.
+
+2. ladder_span — 1…4, default 3
+   How many octaves of the just ladder the cascade covers. 1 = a tight cluster
+   around the fundamental (one broad notch), 4 = four octaves of the ladder
+   (several notches spread from the fundamental into the formants).
+
+3. stage_count — 2…8, default 6
+   Allpass stages. Two per notch, so 8 stages gives 4 notches. More stages =
+   more notches and a more resonant, vocal sweep; fewer = a single broad hollow.
+
+4. glide_ms — 5…500 ms, default 60 ms
+   How fast the ladder follows a new note. Short is immediate and can chirp on a
+   fast line; long makes the phaser lag the tuba like a slow filter envelope,
+   which is often the more musical choice on a legato bass line.
+
+5. sweep_octaves — 0…2, default 0.5
+   Depth of the slow wobble around the locked positions. 0 = completely locked to
+   the note (static formant), higher = the notches breathe around their just
+   positions without leaving them far.
+
+6. rate_hz — 0.02…2 Hz, default 0.15 Hz
+   Wobble rate.
+
+7. feedback — 0…0.9, default 0.3
+   Loop gain around the allpass chain. Turns the notches into resonant peaks;
+   above ~0.7 they whistle, which on a locked ladder can sound like the note
+   itself ringing.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: f0 in Hz. 0 or out of range = unknown: the last valid value is held.
+  Cold start 55 Hz (A1), so the ladder is placed with nothing patched.
+- in4: one-bar phasor. While it moves the wobble follows the bar; held at 0 the
+  effect free-runs at rate_hz.
+- out1 / out2: stereo, wet only.
+
+NOTES
+- There is no internal pitch detector: f0 comes from in3 only, and 0 is treated
+  as "unknown", never as 1 Hz.
+- Break frequencies are clamped below Nyquist, so a high note or a large
+  track_octave cannot push a stage out of range.
+- Output is 0.5·(input + chain), the deepest-notch phaser sum.

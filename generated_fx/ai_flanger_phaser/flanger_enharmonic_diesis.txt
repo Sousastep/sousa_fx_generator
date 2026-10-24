@@ -1,0 +1,145 @@
+// ============================================================================
+// flanger_enharmonic_diesis.txt
+// Enharmonic flanger: a tuned comb whose rungs are stretched by a 5-limit
+// enharmonic interval, so the notches start on the played note's harmonics and
+// drift off them as they climb - the just-intonation version of a reese's
+// mistuned unison.
+// From: Tong & Tojo, "Music Temperaments Evaluation Based on Triads", SMC-19,
+//       2019_SMC_3249327_Tong_Meihui §2 (5-limit ratios, intervals built only
+//       from 2, 3 and 5);
+//       Christou, "LIMITER: A Gamified Interface for Harnessing Just
+//       Intonation Systems", NIME-25, 2025_nime2025_52 §3.2 (the tuning
+//       lattice - the enharmonic pairs are lattice steps, not cent offsets);
+//       flanger structure after Esqueda, Välimäki & Parker, DAFx-15 §3 Fig. 6,
+//       fractional delay after Nam, DAFx-09 paper 72 §2.
+//
+// A comb whose taps fill one delay period has nulls at multiples of
+// harmonic*f0. Here the tap spacing is multiplied by r, one of the enharmonic
+// pairs of just intonation - 81/80 (syntonic comma), 128/125 (lesser diesis),
+// 25/24 (chromatic semitone) or 135/128 (major chroma) - so the whole notch
+// lattice sits at harmonic*f0/r: the same rungs of the tuning lattice, reached
+// by a different path, and therefore a known just interval away from the note's
+// harmonics instead of an arbitrary cent offset. On a sustained bass every
+// partial ends up just off its null, partly notched and phase-rotated, which is
+// the enharmonic equivalent of a reese's mistuned unison: one pitch, two
+// spellings, beating. At 25/24 the nulls sit 70.7 cents flat of the harmonics.
+// ============================================================================
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: f0 in Hz. 0 (or out of range) = unknown: hold the last valid value.
+//        Cold start is 55 Hz (A1), so the comb is tuned even with nothing patched.
+//   in4: 0..1 one-bar phasor - drives the glide when moving, free-running LFO
+//        at sweep_rate_hz when held at 0
+// Outlets:
+//   out1 / out2: stereo, wet only
+// No dry/wet control, no limiter, no metering.
+// ============================================================================
+
+@param({ enum: ["1/1", "81/80", "128/125", "25/24", "135/128"] }) interval = 3; // stretch interval
+@param({ min: 1, max: 8 }) harmonic = 3;             // comb period
+@param({ min: 3, max: 8 }) taps = 6;                 // comb rungs
+@param({ min: 0, max: 1 }) detune_sweep = 0.15;      // glide depth
+@param({ min: 0.02, max: 1 }) sweep_rate_hz = 0.05;  // glide rate
+@param({ min: -0.8, max: 0.8 }) feedback = 0.25;     // feedback
+@param({ min: 600, max: 14000 }) tone_hz = 5000;     // loop damping
+@param({ min: -24, max: 12 }) out_gain_db = 0;       // output gain
+
+@state bufL = new FixedSampleArray(16384);
+@state bufR = new FixedSampleArray(16384);
+@state wi: Int = 0;
+
+@state dampL = 0.0;
+@state dampR = 0.0;
+
+@state f0Last = 55.0;
+@state f0Sm = 55.0;
+
+@state phF = 0.0;
+@state phOff = 0.0;
+@state prevBarIn = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let f0In = in3;
+let barIn = in4;
+
+// --- in3: 0 = unknown, hold the last valid f0 (cold start 55 Hz) ------------
+if (f0In > 20.0 && f0In < 1200.0) {
+	f0Last = f0In;
+}
+let f0Slew = 1.0 - exp(0.0 - 1.0 / (0.02 * sr));
+f0Sm = f0Sm + (f0Last - f0Sm) * f0Slew;
+let f0 = clamp(f0Sm, 20.0, 1200.0);
+
+// --- Glide phase -----------------------------------------------------------
+// The bar phase is carried as an offset against a free-running phase, so a
+// moving phasor takes over exactly and a stopped one hands back with no jump.
+let rate = clamp(sweep_rate_hz, 0.02, 1.0);
+phF = wrap(phF + rate / sr, 0.0, 1.0);
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	phOff = wrap(barIn - phF, 0.0, 1.0);
+}
+prevBarIn = barIn;
+let ph = wrap(phF + phOff, 0.0, 1.0);
+
+// --- 5-limit enharmonic stretch per rung (a ratio, never a cent value) ------
+let r = 1.0;
+if (interval == 1) { r = 1.0125; }        // 81/80  syntonic comma
+else if (interval == 2) { r = 1.024; }     // 128/125 lesser diesis
+else if (interval == 3) { r = 1.0416667; } // 25/24  chromatic semitone
+else if (interval == 4) { r = 1.0546875; } // 135/128 major chroma
+
+// --- Comb geometry ---------------------------------------------------------
+// One comb period is period/harmonic; the taps fill it, each rung stretched.
+let nTaps: Int = clamp(floor(taps + 0.5), 3, 8);
+let h = clamp(floor(harmonic + 0.5), 1.0, 8.0);
+let period = sr / f0;
+let glide = exp2(clamp(detune_sweep, 0.0, 1.0) * sin(2.0 * pi * ph));
+let step = period / (h * nTaps) * glide;
+
+let fbAmt = clamp(feedback, -0.8, 0.8);
+let dampC = 1.0 - exp(0.0 - 2.0 * pi * clamp(tone_hz, 600.0, sr * 0.45) / sr);
+let norm = 1.0 / nTaps;
+
+// --- Left channel ----------------------------------------------------------
+bufL[wi] = xL + fbAmt * dampL;
+
+let accL = 0.0;
+for (let j: Int = 0; j < nTaps; j++) {
+	let d = clamp(step * (1.0 + j * r), 2.0, 16000.0);
+	let rr = wi - d;
+	while (rr < 0.0) { rr += 16384.0; }
+	let qi: Int = floor(rr);
+	accL = accL + cubicinterp(rr - qi,
+		bufL[(qi - 1 + 16384) & 16383],
+		bufL[qi & 16383],
+		bufL[(qi + 1) & 16383],
+		bufL[(qi + 2) & 16383]);
+}
+let yL = accL * norm;
+dampL = dampL + dampC * (yL - dampL);
+
+// --- Right channel ---------------------------------------------------------
+bufR[wi] = xR + fbAmt * dampR;
+
+let accR = 0.0;
+for (let j: Int = 0; j < nTaps; j++) {
+	let dR = clamp(step * (1.0 + j * r), 2.0, 16000.0);
+	let rs = wi - dR;
+	while (rs < 0.0) { rs += 16384.0; }
+	let qiR: Int = floor(rs);
+	accR = accR + cubicinterp(rs - qiR,
+		bufR[(qiR - 1 + 16384) & 16383],
+		bufR[qiR & 16383],
+		bufR[(qiR + 1) & 16383],
+		bufR[(qiR + 2) & 16383]);
+}
+let yR = accR * norm;
+dampR = dampR + dampC * (yR - dampR);
+
+wi = (wi + 1) & 16383;
+
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = yL * gain;
+out2 = yR * gain;

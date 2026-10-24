@@ -1,0 +1,141 @@
+// ============================================================================
+// flanger_ssb_shift.txt
+// SSB (Bode) flanger: a Hilbert frequency shifter against a delayed copy, so the
+// notches are spread linearly in frequency and march at a constant Hz instead
+// of chasing each other around an LFO.
+// From: Fabián Esqueda, Vesa Välimäki & Julian Parker, "Barberpole Phasing and
+//       Flanging Illusions", DAFx-15, 2015_DAFx-15_submission_67:
+//         §4, Eq. 10-13 (SSB modulation + delay gives notches spread linearly
+//         over frequency and moving constantly in one direction), Fig. 10
+//         (generalised structure: frequency shifter, delay, 1/2, feedback),
+//         and the note that M = D/2 notches come from a delay of D samples;
+//       Antti Huovilainen, DAFx-05, 2005_P_155 §1.1 (modulation effects as
+//       time-varying filters);
+//       quadrature coefficients from docs/rnbo_codebox/example22 (4-section
+//       one-pole allpass pair, designed for 44.1-48 kHz).
+//
+// Because the branch that is shifted is also delayed, the output never carries
+// a direct copy of the input. The shift makes the bass partials inharmonic:
+// every partial moves by the same number of Hz, so the intervals between them
+// stop being simple ratios - the metallic, "wrong instrument" space-bass sound.
+// ============================================================================
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only - the shift is set in Hz by shift_hz, not by f0
+//   in4: bound only - the march rate is a constant Hz offset, not bar-locked
+// Outlets:
+//   out1 / out2: stereo, wet only
+// No dry/wet control, no limiter, no metering.
+// ============================================================================
+
+@param({ min: 0.1, max: 80 }) shift_hz = 6;          // shift
+@param({ enum: ["down", "up"] }) direction = 1;      // direction
+@param({ min: 1, max: 40 }) delay_ms = 8;            // notch spacing
+@param({ min: 0, max: 0.85 }) feedback = 0.3;        // feedback
+@param({ min: 600, max: 12000 }) tone_hz = 4500;     // feedback damping
+@param({ min: 0.9, max: 1.1 }) quadrature_trim = 1;  // quadrature trim
+@param({ min: -24, max: 12 }) out_gain_db = 0;       // output gain
+
+@state bufL = new FixedSampleArray(8192);
+@state bufR = new FixedSampleArray(8192);
+@state wi: Int = 0;
+
+// One-pole allpass state, laid out as [branch * 8 + channel * 4 + stage]
+// branch 0 = real (0..7), branch 1 = imaginary (8..15)
+@state apX = new FixedSampleArray(16);
+@state apY = new FixedSampleArray(16);
+
+@state theta = 0.0;
+@state dampL = 0.0;
+@state dampR = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3;  // keeps the in3 port present
+let unused_in4 = in4;  // keeps the in4 port present
+
+function apS(xin: number, c: number, idx: Int): number {
+	let y = c * (xin - apY[idx]) + apX[idx];
+	apX[idx] = xin;
+	apY[idx] = y;
+	return y;
+}
+
+// Quadrature allpass pairs: y = c*(x - y1) + x1 (unity magnitude, 90 deg apart)
+let cR0 = 0.4794008656;
+let cR1 = 0.8762184935;
+let cR2 = 0.9765975895;
+let cR3 = 0.9974992559;
+let cI0 = 0.1617584983;
+let cI1 = 0.7330289323;
+let cI2 = 0.9453497003;
+let cI3 = 0.9905991567;
+
+// --- Shift phase -----------------------------------------------------------
+let sh = clamp(shift_hz, 0.1, 80.0);
+let dir = (direction > 0.5) ? 1.0 : 0.0 - 1.0;
+theta = wrap(theta + dir * sh / sr, 0.0, 1.0);
+let ct = cos(2.0 * pi * theta);
+let st = sin(2.0 * pi * theta);
+
+let tau = clamp(mstosamps(clamp(delay_ms, 1.0, 40.0)), 8.0, 7000.0);
+let fbAmt = clamp(feedback, 0.0, 0.85);
+let dampC = 1.0 - exp(0.0 - 2.0 * pi * clamp(tone_hz, 600.0, sr * 0.45) / sr);
+let trim = clamp(quadrature_trim, 0.9, 1.1);
+
+// --- Left channel ----------------------------------------------------------
+bufL[wi] = xL + fbAmt * dampL;
+
+let rL = wi - tau;
+while (rL < 0.0) { rL += 8192.0; }
+let qL: Int = floor(rL);
+let tapL = cubicinterp(rL - qL,
+	bufL[(qL - 1 + 8192) & 8191],
+	bufL[qL & 8191],
+	bufL[(qL + 1) & 8191],
+	bufL[(qL + 2) & 8191]);
+
+let reL = apS(tapL, cR0, 0);
+reL = apS(reL, cR1, 1);
+reL = apS(reL, cR2, 2);
+reL = apS(reL, cR3, 3);
+let imL = apS(tapL, cI0, 4);
+imL = apS(imL, cI1, 5);
+imL = apS(imL, cI2, 6);
+imL = apS(imL, cI3, 7);
+let shL = reL * ct - imL * trim * st;
+
+let yL = 0.5 * (tapL + shL);
+dampL = dampL + dampC * (yL - dampL);
+
+// --- Right channel ---------------------------------------------------------
+bufR[wi] = xR + fbAmt * dampR;
+
+let rR = wi - tau;
+while (rR < 0.0) { rR += 8192.0; }
+let qR: Int = floor(rR);
+let tapR = cubicinterp(rR - qR,
+	bufR[(qR - 1 + 8192) & 8191],
+	bufR[qR & 8191],
+	bufR[(qR + 1) & 8191],
+	bufR[(qR + 2) & 8191]);
+
+let reR = apS(tapR, cR0, 8);
+reR = apS(reR, cR1, 9);
+reR = apS(reR, cR2, 10);
+reR = apS(reR, cR3, 11);
+let imR = apS(tapR, cI0, 12);
+imR = apS(imR, cI1, 13);
+imR = apS(imR, cI2, 14);
+imR = apS(imR, cI3, 15);
+let shR = reR * ct - imR * trim * st;
+
+let yR = 0.5 * (tapR + shR);
+dampR = dampR + dampC * (yR - dampR);
+
+wi = (wi + 1) & 8191;
+
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = yL * gain;
+out2 = yR * gain;

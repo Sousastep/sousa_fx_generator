@@ -1,0 +1,132 @@
+// ============================================================================
+// phaser_harmonic_track.txt
+// Just-intonation phaser: the allpass break frequencies are placed on the 5-limit
+// ladder measured from the *played note*, so the notches sit on the tuba's own
+// partials and glide with it instead of sweeping a fixed band.
+// From: Roope Kiiski, Fabián Esqueda & Vesa Välimäki, "Time-Variant Gray-Box
+//       Modeling of a Phaser Pedal", DAFx-16, 2016_05-DAFx-16_paper_42 §2,
+//       Eq. 1-2 (break frequency -> a1, N/2 notches, feedback via unit delay);
+//       Tong & Tojo, "Music Temperaments Evaluation Based on Triads", SMC-19 §2
+//       (5-limit ladder: every break frequency is f0 times a ratio of 2, 3 and 5
+//       - 1/1, 5/4, 3/2, 15/8, then the same triad an octave up);
+//       Eichas et al., DAFx-14 (identical-stage behaviour of the analog pedal);
+//       Carson et al., DAFx-23 paper 38 §2 (time-varying allpass cascade).
+//
+// An equal-tempered version of this would put the break frequencies at
+// f0 * 2^(n/12); here each one is an exact 5-limit ratio, so a note's 3rd
+// partial is the 3/2 of its fundamental rather than 1.9 cents away from it.
+// ============================================================================
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: f0 in Hz. 0 (or out of range) = unknown: hold the last valid value.
+//        Cold start is 55 Hz (A1), so the ladder is placed even with nothing
+//        patched.
+//   in4: 0..1 one-bar phasor - locks the wobble to the bar when moving,
+//        free-running LFO at rate_hz when held at 0
+// Outlets:
+//   out1 / out2: stereo, wet only
+// No dry/wet control, no limiter, no metering.
+// ============================================================================
+
+@param({ min: -2, max: 2 }) track_octave = 0;        // ladder octave
+@param({ min: 1, max: 4 }) ladder_span = 3;          // ladder span
+@param({ min: 2, max: 8 }) stage_count = 6;          // stages
+@param({ min: 5, max: 500 }) glide_ms = 60;          // note glide
+@param({ min: 0, max: 2 }) sweep_octaves = 0.5;      // wobble depth
+@param({ min: 0.02, max: 2 }) rate_hz = 0.15;        // wobble rate
+@param({ min: 0, max: 0.9 }) feedback = 0.3;         // feedback
+@param({ min: -24, max: 12 }) out_gain_db = 0;       // output gain
+
+@state apXL = new FixedSampleArray(8);
+@state apYL = new FixedSampleArray(8);
+@state apXR = new FixedSampleArray(8);
+@state apYR = new FixedSampleArray(8);
+
+@state prevChainL = 0.0;
+@state prevChainR = 0.0;
+
+@state f0Last = 55.0;
+@state f0Sm = 55.0;
+
+@state phF = 0.0;
+@state phOff = 0.0;
+@state prevBarIn = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let f0In = in3;
+let barIn = in4;
+
+// 5-limit ladder: 1/1, 5/4, 3/2, 15/8, then the same triad an octave higher
+function justRatio(k: Int): number {
+	let o = floor(k / 4.0);
+	let i = k - 4.0 * o;
+	let r = 1.0;
+	if (i > 0.5 && i < 1.5) { r = 1.25; }
+	else if (i > 1.5 && i < 2.5) { r = 1.5; }
+	else if (i > 2.5) { r = 1.875; }
+	return exp2(o) * r;
+}
+
+// --- in3: 0 = unknown, hold the last valid f0 (cold start 55 Hz) ------------
+if (f0In > 20.0 && f0In < 1200.0) {
+	f0Last = f0In;
+}
+let glideC = 1.0 - exp(0.0 - 1.0 / (clamp(glide_ms, 5.0, 500.0) * 0.001 * sr));
+f0Sm = f0Sm + (f0Last - f0Sm) * glideC;
+let f0 = clamp(f0Sm, 20.0, 1200.0);
+
+// --- Sweep phase -----------------------------------------------------------
+// The bar phase is carried as an offset against a free-running phase, so a
+// moving phasor takes over exactly and a stopped one hands back with no jump.
+let rate = clamp(rate_hz, 0.02, 2.0);
+phF = wrap(phF + rate / sr, 0.0, 1.0);
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	phOff = wrap(barIn - phF, 0.0, 1.0);
+}
+prevBarIn = barIn;
+let phL = wrap(phF + phOff, 0.0, 1.0);
+let phR = wrap(phL + 0.25, 0.0, 1.0);
+
+let tOct = clamp(track_octave, -2.0, 2.0);
+let spanO = clamp(ladder_span, 1.0, 4.0);
+let nSt: Int = clamp(floor(stage_count + 0.5), 2, 8);
+let wob = clamp(sweep_octaves, 0.0, 2.0) * 0.5;
+let wL = exp2(wob * sin(2.0 * pi * phL));
+let wR = exp2(wob * sin(2.0 * pi * phR));
+let root = clamp(f0 * exp2(tOct), 20.0, 2000.0);
+let fbAmt = clamp(feedback, 0.0, 0.9);
+
+let sigL = xL + fbAmt * prevChainL;
+let sigR = xR + fbAmt * prevChainR;
+
+for (let m: Int = 0; m < nSt; m++) {
+	let k: Int = floor(m * spanO * 4.0 / nSt);
+	let jr = justRatio(k);
+
+	let bL = clamp(root * jr * wL, 20.0, sr * 0.45);
+	let bR = clamp(root * jr * wR, 20.0, sr * 0.45);
+	let tL = tan(pi * bL / sr);
+	let aL = (tL - 1.0) / (tL + 1.0);
+	let tR = tan(pi * bR / sr);
+	let aR = (tR - 1.0) / (tR + 1.0);
+
+	// y = a1*x + x[n-1] - a1*y[n-1]  (Kiiski Eq. 1-2, unity magnitude)
+	let yL = aL * sigL + apXL[m] - aL * apYL[m];
+	apXL[m] = sigL;
+	apYL[m] = yL;
+	sigL = yL;
+
+	let yR = aR * sigR + apXR[m] - aR * apYR[m];
+	apXR[m] = sigR;
+	apYR[m] = yR;
+	sigR = yR;
+}
+
+prevChainL = sigL;
+prevChainR = sigR;
+
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = 0.5 * (xL + sigL) * gain;
+out2 = 0.5 * (xR + sigR) * gain;

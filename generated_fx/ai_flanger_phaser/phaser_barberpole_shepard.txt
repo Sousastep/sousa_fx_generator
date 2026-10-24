@@ -1,0 +1,126 @@
+// ============================================================================
+// phaser_barberpole_shepard.txt
+// Barberpole phaser: indefinitely rising (or falling) spectral notches, built
+// the way Shepard built the endless scale - a ladder of notches one octave
+// apart under a raised-cosine depth envelope, so the notch leaving the top is
+// replaced by the one entering at the bottom.
+// From: Esqueda, Välimäki & Parker, "Barberpole Phasing and Flanging Illusions",
+//       DAFx-15, 2015_DAFx-15_submission_67:
+//         §2, Eq. 1-2 (M cascaded notches, centre frequencies one octave apart),
+//         Eq. 3-4 (raised-cosine depth envelope over the whole ladder),
+//         Eq. 5-8 (constant-Q parametric notch, G2B = (1+G^2)/2),
+//         Fig. 2-5.
+//
+// The paper steps a table of centre frequencies and has to carry the biquad
+// state across each cycle reset to avoid clicks. Because the stages are exactly
+// one octave apart, the ladder is periodic in phase: advancing every stage by
+// one octave reproduces the *same* set of (frequency, depth) pairs on a
+// relabelled set of stages. So the phase can just wrap continuously - no table,
+// no reset, no transient.
+//
+// Each notch is a TPT state-variable bandpass subtracted from the input,
+// y = x - (1 - G) * bp / Q, which gives exactly G at fc for any Q.
+// ============================================================================
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only - the ladder is anchored to ladder_base_hz, not to f0
+//   in4: 0..1 one-bar phasor - advances the ladder when moving,
+//        free-running LFO at notch_rate_hz when held at 0
+// Outlets:
+//   out1 / out2: stereo, wet only
+// No dry/wet control, no limiter, no metering.
+// ============================================================================
+
+@param({ min: 0.01, max: 0.3 }) notch_rate_hz = 0.06; // notch rate
+@param({ min: 20, max: 400 }) ladder_base_hz = 63;    // ladder base
+@param({ min: 4, max: 10 }) stages = 8;               // notch stages
+@param({ min: 2, max: 40 }) notch_q = 12;             // notch width
+@param({ min: 3, max: 36 }) notch_depth_db = 18;      // deepest notch
+@param({ enum: ["falling", "rising"] }) direction = 1; // notch direction
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state ic1L = new FixedSampleArray(10);
+@state ic2L = new FixedSampleArray(10);
+@state ic1R = new FixedSampleArray(10);
+@state ic2R = new FixedSampleArray(10);
+
+@state phF = 0.0;
+@state phOff = 0.0;
+@state prevBarIn = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3;  // keeps the in3 port present
+let barIn = in4;
+
+// --- Ladder phase ----------------------------------------------------------
+// The bar phase is carried as an offset against a free-running phase, so a
+// moving phasor takes over exactly and a stopped one hands back with no jump.
+let rate = clamp(notch_rate_hz, 0.01, 0.3);
+phF = wrap(phF + rate / sr, 0.0, 1.0);
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	phOff = wrap(barIn - phF, 0.0, 1.0);
+}
+prevBarIn = barIn;
+let base = wrap(phF + phOff, 0.0, 1.0);
+
+let rising = direction > 0.5;
+let phL = rising ? base : wrap(1.0 - base, 0.0, 1.0);
+// Half a stage of offset puts the notches a quarter-octave apart L/R
+let phR = wrap(phL + 0.25, 0.0, 1.0);
+
+let nStages: Int = clamp(floor(stages + 0.5), 4, 10);
+let qv = clamp(notch_q, 2.0, 40.0);
+let kq = 1.0 / qv;
+let fBase = clamp(ladder_base_hz, 20.0, 400.0);
+
+// Lmin = -3 dB at the ends of the ladder, Lmax = -notch_depth_db in the middle
+let lmin = -3.0;
+let lmax = 0.0 - clamp(notch_depth_db, 3.0, 36.0);
+
+let sigL = xL;
+let sigR = xR;
+
+for (let m: Int = 0; m < nStages; m++) {
+	let posL = (m + phL) / nStages;
+	let posR = (m + phR) / nStages;
+
+	// Eq. 3-4: raised-cosine depth envelope across the ladder
+	let envL = 0.5 - 0.5 * cos(2.0 * pi * posL);
+	let envR = 0.5 - 0.5 * cos(2.0 * pi * posR);
+	let gL = dbtoa(lmin + (lmax - lmin) * envL);
+	let gR = dbtoa(lmin + (lmax - lmin) * envR);
+
+	// Eq. 2: centre frequencies one octave apart
+	let fcL = clamp(fBase * exp2(m + phL), 20.0, sr * 0.45);
+	let fcR = clamp(fBase * exp2(m + phR), 20.0, sr * 0.45);
+
+	// --- Left: TPT state-variable bandpass + notch ---
+	let tL = tan(pi * fcL / sr);
+	let a1L = 1.0 / (1.0 + tL * (tL + kq));
+	let a2L = tL * a1L;
+	let a3L = tL * a2L;
+	let v3L = sigL - ic2L[m];
+	let v1L = a1L * ic1L[m] + a2L * v3L;
+	let v2L = ic2L[m] + a2L * ic1L[m] + a3L * v3L;
+	ic1L[m] = 2.0 * v1L - ic1L[m];
+	ic2L[m] = 2.0 * v2L - ic2L[m];
+	sigL = sigL - (1.0 - gL) * kq * v1L;
+
+	// --- Right ---
+	let tR = tan(pi * fcR / sr);
+	let a1R = 1.0 / (1.0 + tR * (tR + kq));
+	let a2R = tR * a1R;
+	let a3R = tR * a2R;
+	let v3R = sigR - ic2R[m];
+	let v1R = a1R * ic1R[m] + a2R * v3R;
+	let v2R = ic2R[m] + a2R * ic1R[m] + a3R * v3R;
+	ic1R[m] = 2.0 * v1R - ic1R[m];
+	ic2R[m] = 2.0 * v2R - ic2R[m];
+	sigR = sigR - (1.0 - gR) * kq * v1R;
+}
+
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = sigL * gain;
+out2 = sigR * gain;

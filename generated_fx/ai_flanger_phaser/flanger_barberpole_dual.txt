@@ -1,0 +1,155 @@
+// ============================================================================
+// flanger_barberpole_dual.txt
+// Barberpole flanger: notches that climb (or fall) forever, with no reset.
+// From: Fabián Esqueda, Vesa Välimäki & Julian Parker, "Barberpole Phasing and
+//       Flanging Illusions", DAFx-15, 2015_DAFx-15_submission_67:
+//         §3, Fig. 6 (basic flanger y = x + g*z^-D x), Eq. 9 (sawtooth delay
+//         ramp), Fig. 7 (synchronized dual flanger: two lines, two delay LFOs,
+//         two crossfade gains) and Fig. 8 (the LFO pairs).
+//
+// Two delay lines are swept by sawtooth ramps one half-cycle apart. Each line's
+// triangular crossfade gain is exactly zero at the instant its own ramp resets,
+// and because the offset is 1/2 the two gains sum to 1 for every phase, so the
+// hard reset is never heard: the notches appear to rise without end. (The
+// paper describes the pair as 90 deg apart; with sawtooth ramps only the
+// half-cycle offset makes g1 + g2 = 1 exactly, which is what hides the reset -
+// a quarter-cycle offset leaves both lines near a reset at the same time.)
+// The paper also notes Dmin should stay above Dmax/2, hence min_ratio > 0.5.
+// ============================================================================
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only - the sweep is time-based, not pitch-locked
+//   in4: 0..1 one-bar phasor - advances the sweep cycle when moving,
+//        free-running LFO at sweep_rate_hz when held at 0
+// Outlets:
+//   out1 / out2: stereo, wet only
+// No dry/wet control, no limiter, no metering.
+// ============================================================================
+
+@param({ min: 0.02, max: 1.5 }) sweep_rate_hz = 0.09; // sweep rate
+@param({ min: 2, max: 14 }) max_delay_ms = 7;         // longest delay
+@param({ min: 0.5, max: 0.95 }) min_ratio = 0.72;     // shortest / longest
+@param({ enum: ["falling", "rising"] }) direction = 1; // sweep direction
+@param({ min: 0, max: 1 }) comb_depth = 0.85;         // flanger depth
+@param({ min: -0.9, max: 0.9 }) feedback = 0.4;       // feedback
+@param({ min: 0, max: 1 }) stereo_spread = 0.3;       // stereo spread
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state bufL = new FixedSampleArray(2048);
+@state bufR = new FixedSampleArray(2048);
+@state wi: Int = 0;
+
+@state dampL = 0.0;
+@state dampR = 0.0;
+
+@state phF = 0.0;
+@state phOff = 0.0;
+@state prevBarIn = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3;  // keeps the in3 port present
+let barIn = in4;
+
+// --- Sweep phase -----------------------------------------------------------
+// The bar phase is carried as an offset against a free-running phase, so a
+// moving phasor takes over exactly and a stopped one hands back with no jump.
+let rate = clamp(sweep_rate_hz, 0.02, 1.5);
+phF = wrap(phF + rate / sr, 0.0, 1.0);
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	phOff = wrap(barIn - phF, 0.0, 1.0);
+}
+prevBarIn = barIn;
+
+let spr = clamp(stereo_spread, 0.0, 1.0) * 0.5;
+let pL = wrap(phF + phOff, 0.0, 1.0);
+let pR = wrap(pL + spr, 0.0, 1.0);
+
+// --- Two sawtooth ramps, half a cycle apart (Eq. 9) -------------------------
+let pA = wrap(pL, 0.0, 1.0);
+let pB = wrap(pL + 0.5, 0.0, 1.0);
+let pAr = wrap(pR, 0.0, 1.0);
+let pBr = wrap(pR + 0.5, 0.0, 1.0);
+
+// --- Complementary triangular crossfade gains: g1 + g2 = 1 (Fig. 8b) -------
+let gA = 1.0 - abs(2.0 * pA - 1.0);
+let gB = 1.0 - abs(2.0 * pB - 1.0);
+let gAr = 1.0 - abs(2.0 * pAr - 1.0);
+let gBr = 1.0 - abs(2.0 * pBr - 1.0);
+
+// --- Delay span ------------------------------------------------------------
+let dMax = clamp(mstosamps(clamp(max_delay_ms, 2.0, 14.0)), 32.0, 1400.0);
+let mr = clamp(min_ratio, 0.5, 0.95);
+let dMin = dMax * mr;
+let span = dMax - dMin;
+
+// rising notches = delay running down; falling = delay running up (Eq. 9 note)
+let rising = direction > 0.5;
+let posA = rising ? 1.0 - pA : pA;
+let posB = rising ? 1.0 - pB : pB;
+let posAr = rising ? 1.0 - pAr : pAr;
+let posBr = rising ? 1.0 - pBr : pBr;
+
+let dA = dMin + span * posA;
+let dB = dMin + span * posB;
+let dAr = dMin + span * posAr;
+let dBr = dMin + span * posBr;
+
+let depth = clamp(comb_depth, 0.0, 1.0);
+let fbAmt = clamp(feedback, -0.9, 0.9);
+let dampC = 1.0 - exp(0.0 - 2.0 * pi * 6000.0 / sr);
+
+// --- Left channel ----------------------------------------------------------
+bufL[wi] = xL + fbAmt * dampL;
+
+let rA = wi - dA;
+while (rA < 0.0) { rA += 2048.0; }
+let qA: Int = floor(rA);
+let tA = cubicinterp(rA - qA,
+	bufL[(qA - 1 + 2048) & 2047],
+	bufL[qA & 2047],
+	bufL[(qA + 1) & 2047],
+	bufL[(qA + 2) & 2047]);
+
+let rB = wi - dB;
+while (rB < 0.0) { rB += 2048.0; }
+let qB: Int = floor(rB);
+let tB = cubicinterp(rB - qB,
+	bufL[(qB - 1 + 2048) & 2047],
+	bufL[qB & 2047],
+	bufL[(qB + 1) & 2047],
+	bufL[(qB + 2) & 2047]);
+
+let yL = xL + depth * (gA * tA + gB * tB);
+dampL = dampL + dampC * (yL - dampL);
+
+// --- Right channel ---------------------------------------------------------
+bufR[wi] = xR + fbAmt * dampR;
+
+let rAr = wi - dAr;
+while (rAr < 0.0) { rAr += 2048.0; }
+let qAr: Int = floor(rAr);
+let tAr = cubicinterp(rAr - qAr,
+	bufR[(qAr - 1 + 2048) & 2047],
+	bufR[qAr & 2047],
+	bufR[(qAr + 1) & 2047],
+	bufR[(qAr + 2) & 2047]);
+
+let rBr = wi - dBr;
+while (rBr < 0.0) { rBr += 2048.0; }
+let qBr: Int = floor(rBr);
+let tBr = cubicinterp(rBr - qBr,
+	bufR[(qBr - 1 + 2048) & 2047],
+	bufR[qBr & 2047],
+	bufR[(qBr + 1) & 2047],
+	bufR[(qBr + 2) & 2047]);
+
+let yR = xR + depth * (gAr * tAr + gBr * tBr);
+dampR = dampR + dampC * (yR - dampR);
+
+wi = (wi + 1) & 2047;
+
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = yL * gain;
+out2 = yR * gain;
