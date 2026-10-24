@@ -1,13 +1,25 @@
 // ============================================================================
-// harmonic_triband_tremolo.txt
+// harmonic_triband_tremolo.txt   (rev 2: Linkwitz-Riley bands, tuba defaults)
 // Rotating harmonic tremolo: the input is split into three bands at 5-limit
 // multiples of the tracked note, and each band's gain is breathed at its own
 // LFO phase, so the tremolo travels up the harmonic series instead of pumping
 // the whole note. With the phases a third of a cycle apart the three gains sum
 // to a constant, so the note does not change level while its colour rotates.
-// "depth" is a phase-coherent dry/wet: the split is complementary
-// (low + mid + high = input exactly), so at depth 0 every band gain is 1 and
-// the output is the input sample for sample.
+//
+// Crossover: two 4th-order Linkwitz-Riley splits (24 dB/oct), built from
+// cascaded 2nd-order Butterworth state-variable filters. The low band is
+// passed through the second crossover's allpass, so all three bands have the
+// SAME phase response at every frequency and their magnitudes sum to exactly
+// 1. Modulating a band gain is therefore pure amplitude modulation: no
+// vibrato or phaser colour from bands that are out of phase with each other.
+// At depth 0 the output equals the input through a flat-magnitude allpass
+// (phase-shifted, not sample-exact; use depth, not a parallel dry path, to go
+// dry).
+//
+// "sub_hold" exempts the low band from modulation, and the two upper bands
+// are compensated so the gain sum stays constant at rotation = 1 for ANY
+// sub_hold. Net gain sum = 3 - (1 - rotation) x depth x (weighted LFO sum).
+//
 // From: Disch & Zoelzer, "Modulation and Delay Line Based Digital Audio
 //       Effects", DAFx-99, §2 Eqs. 1-2 (AM law) and §5 (three 120-degree
 //       spaced modulators, constant sum - the rotating-LFO trick reused here);
@@ -16,7 +28,10 @@
 //       rhythm and spectral-timbre components - this effect is the spectral
 //       one);
 //       Pekonen & Valimaki, "Computationally Efficient Hammond Organ
-//       Synthesis", DAFx-11, §1-2 (organ tremolo is stronger on high partials).
+//       Synthesis", DAFx-11, §1-2 (organ tremolo is stronger on high partials);
+//       Linkwitz & Riley, "Active Crossover Networks for Noncoincident
+//       Drivers", JAES 24(1), 1976 (LR4 crossover);
+//       Zavalishin, "The Art of VA Filter Design" (TPT state-variable filter).
 //
 // Inlets:
 //   in1 / in2: stereo audio
@@ -26,29 +41,41 @@
 //        whole number of cycles per bar and phase-locks it to the downbeat;
 //        held at 0 the LFO runs free at rate_hz.
 // Outlets:
-//   out1 / out2: stereo audio (exactly dry at depth = 0)
+//   out1 / out2: stereo audio (flat-magnitude allpass of the input at depth 0)
 //   out3: transient click, 0..1, single-sample detection signal
 // No safety limiter, no metering, no presets.
 // ============================================================================
 
-@param({ min: 0.05, max: 12.0 }) rate_hz = 2.4;        // tremolo rate
-@param({ min: 0.0, max: 1.0 }) depth = 0.8;            // dry/wet
-@param({ min: 0.0, max: 1.0 }) rotation = 0.4;         // phase spread per band
-@param({ enum: ["1/1", "3/2", "2/1", "5/2", "3/1", "4/1"] }) split_ratio = 2; // first split = f0 x
-@param({ min: 0.0, max: 1.0 }) sub_hold = 0.5;         // low band modulation
+@param({ min: 0.05, max: 12.0 }) rate_hz = 1.0;        // rotation rate
+@param({ min: 0.0, max: 1.0 }) depth = 0.75;           // modulation depth
+@param({ min: 0.0, max: 1.0 }) rotation = 0.85;        // phase spread per band
+@param({ enum: ["1/1", "3/2", "2/1", "5/2", "3/1", "4/1"] }) split_ratio = 1; // first split = f0 x
+@param({ min: 0.0, max: 1.0 }) sub_hold = 0.7;         // low band modulation
 @param({ min: 0.0, max: 1.0 }) bar_sync = 0.7;         // downbeat pull
 @param({ min: -24.0, max: 12.0 }) out_gain_db = 0.0;   // output gain
 
-// Two cascaded one-poles per split per channel; the bands are the exact
-// complementary differences of those filtered copies.
-@state loL1 = new onepole(); @state loL2 = new onepole();
-@state midL1 = new onepole(); @state midL2 = new onepole();
-@state loR1 = new onepole(); @state loR2 = new onepole();
-@state midR1 = new onepole(); @state midR2 = new onepole();
+// Seven TPT state-variable filters per channel (two states each):
+//   A,B,C: first crossover (A = split, B = low LP2, C = high HP2)
+//   D,E,F: second crossover on the upper part (D = split, E = mid, F = high)
+//   G    : allpass of the second crossover, applied to the low band
+@state sA1L = 0.0; @state sA2L = 0.0;
+@state sB1L = 0.0; @state sB2L = 0.0;
+@state sC1L = 0.0; @state sC2L = 0.0;
+@state sD1L = 0.0; @state sD2L = 0.0;
+@state sE1L = 0.0; @state sE2L = 0.0;
+@state sF1L = 0.0; @state sF2L = 0.0;
+@state sG1L = 0.0; @state sG2L = 0.0;
+@state sA1R = 0.0; @state sA2R = 0.0;
+@state sB1R = 0.0; @state sB2R = 0.0;
+@state sC1R = 0.0; @state sC2R = 0.0;
+@state sD1R = 0.0; @state sD2R = 0.0;
+@state sE1R = 0.0; @state sE2R = 0.0;
+@state sF1R = 0.0; @state sF2R = 0.0;
+@state sG1R = 0.0; @state sG2R = 0.0;
 
 @state f0Last = 55.0;
 @state f0Sm = 55.0;
-@state spSm = 110.0;
+@state spSm = 82.5;
 
 @state lfoPh = 0.0;
 @state prevBar = 0.0;
@@ -61,6 +88,7 @@
 @state tSlow = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
+let kSv = 1.41421356;   // sqrt(2): Butterworth damping, 1/Q
 
 // --- in3: hold the last valid f0, then slew it ----------------------------
 let f0In = in3;
@@ -72,9 +100,9 @@ f0Sm = f0Sm + (f0Last - f0Sm) * f0Slew;
 let f0 = clamp(f0Sm, 20.0, 1200.0);
 
 // --- first split as a 5-limit multiple, second split one octave above -----
-let mult = 2.0;
+let mult = 1.5;
 if (split_ratio == 0) { mult = 1.0; }
-else if (split_ratio == 1) { mult = 1.5; }
+else if (split_ratio == 2) { mult = 2.0; }
 else if (split_ratio == 3) { mult = 2.5; }
 else if (split_ratio == 4) { mult = 3.0; }
 else if (split_ratio == 5) { mult = 4.0; }
@@ -84,6 +112,16 @@ let spSlew = 1.0 - exp(0.0 - 1.0 / (0.03 * sr));
 spSm = spSm + (spTarget - spSm) * spSlew;
 let fLo = clamp(spSm, 25.0, sr * 0.2);
 let fHi = clamp(spSm * 2.0, 25.0, sr * 0.45);
+
+// --- SVF coefficients, shared by both channels -----------------------------
+let gLoTan = sin(pi * fLo / sr) / cos(pi * fLo / sr);
+let cLo1 = 1.0 / (1.0 + gLoTan * (gLoTan + kSv));
+let cLo2 = gLoTan * cLo1;
+let cLo3 = gLoTan * cLo2;
+let gHiTan = sin(pi * fHi / sr) / cos(pi * fHi / sr);
+let cHi1 = 1.0 / (1.0 + gHiTan * (gHiTan + kSv));
+let cHi2 = gHiTan * cHi1;
+let cHi3 = gHiTan * cHi2;
 
 // --- free-running LFO, pulled onto the bar ---------------------------------
 // bar_sync first blends the rate toward the nearest whole number of cycles per
@@ -128,7 +166,8 @@ if (barOK > 0.5 && bs > 0.01) {
 
 // Three phases: at rotation = 1 they are a third of a cycle apart, whose sines
 // sum to zero, so the total gain is constant and only the balance moves.
-let rot = clamp(rotation, 0.0, 1.0) / 3.0;
+let rotAmt = clamp(rotation, 0.0, 1.0);
+let rot = rotAmt / 3.0;
 let phA = lfoPh;
 let phB = wrap(lfoPh + rot, 0.0, 1.0);
 let phC = wrap(lfoPh + 2.0 * rot, 0.0, 1.0);
@@ -137,26 +176,109 @@ let sA = sin(2.0 * pi * phA);
 let sB = sin(2.0 * pi * phB);
 let sC = sin(2.0 * pi * phC);
 
-// --- complementary three-band split ---------------------------------------
-let loL = loL2.next(loL1.next(in1, fLo), fLo);
-let midLpL = midL2.next(midL1.next(in1, fHi), fHi);
-let loR = loR2.next(loR1.next(in2, fLo), fLo);
-let midLpR = midR2.next(midR1.next(in2, fHi), fHi);
-
-let midL = midLpL - loL;
-let hiL = in1 - midLpL;
-let midR = midLpR - loR;
-let hiR = in2 - midLpR;
-
-// --- per-band depths: sub_hold keeps the fundamental steady ---------------
+// --- band gains ------------------------------------------------------------
+// sub_hold shrinks the low band's depth. Because that breaks the zero-sum of
+// the three sines, the two upper bands take up the difference: the net
+// weighted modulation eNet is shared between them, scaled by rotation, so the
+// gain sum is 3 - (1 - rotation) * depth * eNet. At rotation = 1 it is exactly
+// 3 for any sub_hold; at rotation = 0 there is no compensation (plain tremolo).
 let d = clamp(depth, 0.0, 1.0);
-let dLo = d * (1.0 - clamp(sub_hold, 0.0, 1.0));
-let gLoL = maximum(1.0 - dLo * sA, 0.0);
-let gMidL = maximum(1.0 - d * sB, 0.0);
-let gHiL = maximum(1.0 - d * sC, 0.0);
-let gLoR = maximum(1.0 - dLo * sA, 0.0);
-let gMidR = maximum(1.0 - d * sB, 0.0);
-let gHiR = maximum(1.0 - d * sC, 0.0);
+let hold = clamp(sub_hold, 0.0, 1.0);
+let dLo = d * (1.0 - hold);
+let eNet = (1.0 - hold) * sA + sB + sC;
+let comp = 0.5 * rotAmt * d * eNet;
+let gLo = maximum(1.0 - dLo * sA, 0.0);
+let gMid = maximum(1.0 - d * sB + comp, 0.0);
+let gHi = maximum(1.0 - d * sC + comp, 0.0);
+
+// --- phase-coherent three-band split (LR4 x2, low band allpass-matched) ----
+// ---- left channel ----
+let wA3L = in1 - sA2L;
+let wA1L = cLo1 * sA1L + cLo2 * wA3L;
+let wA2L = sA2L + cLo2 * sA1L + cLo3 * wA3L;
+sA1L = 2.0 * wA1L - sA1L;
+sA2L = 2.0 * wA2L - sA2L;
+let hpAL = in1 - kSv * wA1L - wA2L;
+let wB3L = wA2L - sB2L;
+let wB1L = cLo1 * sB1L + cLo2 * wB3L;
+let wB2L = sB2L + cLo2 * sB1L + cLo3 * wB3L;
+sB1L = 2.0 * wB1L - sB1L;
+sB2L = 2.0 * wB2L - sB2L;
+let lowL = wB2L;
+let wC3L = hpAL - sC2L;
+let wC1L = cLo1 * sC1L + cLo2 * wC3L;
+let wC2L = sC2L + cLo2 * sC1L + cLo3 * wC3L;
+sC1L = 2.0 * wC1L - sC1L;
+sC2L = 2.0 * wC2L - sC2L;
+let restL = hpAL - kSv * wC1L - wC2L;
+let wD3L = restL - sD2L;
+let wD1L = cHi1 * sD1L + cHi2 * wD3L;
+let wD2L = sD2L + cHi2 * sD1L + cHi3 * wD3L;
+sD1L = 2.0 * wD1L - sD1L;
+sD2L = 2.0 * wD2L - sD2L;
+let hpDL = restL - kSv * wD1L - wD2L;
+let wE3L = wD2L - sE2L;
+let wE1L = cHi1 * sE1L + cHi2 * wE3L;
+let wE2L = sE2L + cHi2 * sE1L + cHi3 * wE3L;
+sE1L = 2.0 * wE1L - sE1L;
+sE2L = 2.0 * wE2L - sE2L;
+let midL = wE2L;
+let wF3L = hpDL - sF2L;
+let wF1L = cHi1 * sF1L + cHi2 * wF3L;
+let wF2L = sF2L + cHi2 * sF1L + cHi3 * wF3L;
+sF1L = 2.0 * wF1L - sF1L;
+sF2L = 2.0 * wF2L - sF2L;
+let hiL = hpDL - kSv * wF1L - wF2L;
+let wG3L = lowL - sG2L;
+let wG1L = cHi1 * sG1L + cHi2 * wG3L;
+let wG2L = sG2L + cHi2 * sG1L + cHi3 * wG3L;
+sG1L = 2.0 * wG1L - sG1L;
+sG2L = 2.0 * wG2L - sG2L;
+let lowCL = lowL - 2.0 * kSv * wG1L;
+
+// ---- right channel ----
+let wA3R = in2 - sA2R;
+let wA1R = cLo1 * sA1R + cLo2 * wA3R;
+let wA2R = sA2R + cLo2 * sA1R + cLo3 * wA3R;
+sA1R = 2.0 * wA1R - sA1R;
+sA2R = 2.0 * wA2R - sA2R;
+let hpAR = in2 - kSv * wA1R - wA2R;
+let wB3R = wA2R - sB2R;
+let wB1R = cLo1 * sB1R + cLo2 * wB3R;
+let wB2R = sB2R + cLo2 * sB1R + cLo3 * wB3R;
+sB1R = 2.0 * wB1R - sB1R;
+sB2R = 2.0 * wB2R - sB2R;
+let lowR = wB2R;
+let wC3R = hpAR - sC2R;
+let wC1R = cLo1 * sC1R + cLo2 * wC3R;
+let wC2R = sC2R + cLo2 * sC1R + cLo3 * wC3R;
+sC1R = 2.0 * wC1R - sC1R;
+sC2R = 2.0 * wC2R - sC2R;
+let restR = hpAR - kSv * wC1R - wC2R;
+let wD3R = restR - sD2R;
+let wD1R = cHi1 * sD1R + cHi2 * wD3R;
+let wD2R = sD2R + cHi2 * sD1R + cHi3 * wD3R;
+sD1R = 2.0 * wD1R - sD1R;
+sD2R = 2.0 * wD2R - sD2R;
+let hpDR = restR - kSv * wD1R - wD2R;
+let wE3R = wD2R - sE2R;
+let wE1R = cHi1 * sE1R + cHi2 * wE3R;
+let wE2R = sE2R + cHi2 * sE1R + cHi3 * wE3R;
+sE1R = 2.0 * wE1R - sE1R;
+sE2R = 2.0 * wE2R - sE2R;
+let midR = wE2R;
+let wF3R = hpDR - sF2R;
+let wF1R = cHi1 * sF1R + cHi2 * wF3R;
+let wF2R = sF2R + cHi2 * sF1R + cHi3 * wF3R;
+sF1R = 2.0 * wF1R - sF1R;
+sF2R = 2.0 * wF2R - sF2R;
+let hiR = hpDR - kSv * wF1R - wF2R;
+let wG3R = lowR - sG2R;
+let wG1R = cHi1 * sG1R + cHi2 * wG3R;
+let wG2R = sG2R + cHi2 * sG1R + cHi3 * wG3R;
+sG1R = 2.0 * wG1R - sG1R;
+sG2R = 2.0 * wG2R - sG2R;
+let lowCR = lowR - 2.0 * kSv * wG1R;
 
 // --- transient click: fast-vs-slow rectified envelope, 0..1 ---------------
 let rect = abs(0.5 * (in1 + in2));
@@ -167,5 +289,5 @@ tSlow = tSlow + (rect - tSlow) * aSlow;
 out3 = clamp(maximum(tFast - 1.4 * tSlow, 0.0) * 12.0, 0.0, 1.0);
 
 let og = dbtoa(clamp(out_gain_db, -24.0, 12.0));
-out1 = (loL * gLoL + midL * gMidL + hiL * gHiL) * og;
-out2 = (loR * gLoR + midR * gMidR + hiR * gHiR) * og;
+out1 = (lowCL * gLo + midL * gMid + hiL * gHi) * og;
+out2 = (lowCR * gLo + midR * gMid + hiR * gHi) * og;
