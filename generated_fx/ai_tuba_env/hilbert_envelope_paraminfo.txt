@@ -1,0 +1,47 @@
+================================================================================
+hilbert_envelope — Parameter Information
+================================================================================
+
+WHAT IT IS
+The amplitude of the analytic signal: a quadrature allpass pair makes the real
+and 90-degree-shifted copies of the tuba, and sqrt(re^2 + im^2) is the
+instantaneous amplitude. There is no rectifier, no threshold and no release —
+the reading follows the waveform's own amplitude, so it is the fastest and most
+transient-accurate envelope in the batch. A short one-pole after the magnitude
+smooths the reading.
+
+Important: this is the exact envelope of a narrowband signal, not a loudness
+meter. A tuba is a harmonic stack, so |analytic| also contains the waveform's
+intra-cycle shape; on a 30-60 Hz note it will visibly follow that shape. That
+is the algorithm working as defined, not a bug. Raise smooth_ms (30-50 ms) for
+a loudness-like contour, or use peak_ar_follower / rms_true_follower /
+cascade_env_follower when you want a smooth loudness envelope.
+
+Source: Dutilleux, DAFx-98, §5.1 (instantaneous envelope detector as the
+magnitude of the analytic signal), §5.4 (no averager = finest resolution).
+
+PARAMETERS (2)
+
+1. smooth_ms — 0.5…50 ms, default 10 ms
+   Smoothing after the analytic magnitude. For a pure sine, 10 ms leaves about
+   3.2% ripple at 30 Hz and under 0.1% above 55 Hz. On a real tuba the harmonic
+   stack dominates the low-note ripple: 10 ms still shows the waveform shape at
+   30 Hz, 30-50 ms gives a loudness-like contour, and 2-5 ms keeps the most
+   transient detail at the cost of a visibly waveform-shaped envelope.
+
+2. out_db — -24…+24 dB, default 0 dB
+   Level of the control signal on out1. The analytic amplitude of a sine is its
+   peak amplitude, not its RMS.
+
+INLETS / OUTLETS
+- in1: tuba audio (mono).
+- out1: analytic amplitude, 0..1 before out_db, at audio rate.
+
+NOTES
+- The allpass recursion is y = c*(x + y1) - x1, H(z) = (c - z^-1)/(1 - c z^-1).
+  That is the pole-at-c form the cR/cI coefficients were fitted for; the other
+  allpass sign convention is not in quadrature with them.
+- The coefficients assume 44.1/48 kHz. At 96 kHz the quadrature drifts at the
+  bottom of the tuba range, so run this at 44.1 or 48 kHz.
+- The output is a control signal, not a monitor signal.
+- No safety limiter, no metering, no gate.

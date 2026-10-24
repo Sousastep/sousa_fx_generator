@@ -1,0 +1,51 @@
+// ============================================================================
+// vu_ppm_meter_env.txt — moving-coil meter ballistics envelope
+//
+// From: P. Dutilleux, DAFx-98, §5.3-5.4 (VU meter = AM detector; PPM =
+//       full-wave rectifier + AR-averager, 10 ms integration / 1500 ms release,
+//       DIN 45406).
+//       esskov, "Real-time Visualisation of Loudness along Different Time
+//       Scales", DAFx-07, §2.1 (VU full-wave rectified with a slow, symmetric
+//       time constant and a mechanical needle; PPM peak with a long decay).
+//
+// Full-wave rectification feeds an attack/release averager, and the averaged
+// level drives a damped second-order needle model (a Chamberlin state-variable
+// lowpass at the needle resonance). The needle is the analog part: it has mass,
+// so it overshoots and rings briefly on a hard tuba attack instead of stopping
+// dead. At the defaults (300/300 ms) this is a slow VU-style body envelope; set
+// 10/1500 ms for the PPM attack/decay, or lower needle_hz for a heavier needle.
+//
+// Inlets:
+//   in1: tuba audio (mono)
+// Outlets:
+//   out1: needle deflection, 0..1 (audio-rate), scaled by out_db
+// ============================================================================
+
+@param({ min: 5.0, max: 500.0 }) attack_ms = 300.0;   // meter integration (rise)
+@param({ min: 5.0, max: 3000.0 }) release_ms = 300.0; // meter decay
+@param({ min: 5.0, max: 30.0 }) needle_hz = 12.0;     // needle resonance
+@param({ min: 0.3, max: 1.5 }) damping = 0.7;         // needle damping (zeta)
+@param({ min: -24.0, max: 24.0 }) out_db = 0.0;       // output level
+
+@state avgLevel = 0.0;
+@state needleLp = 0.0;
+@state needleBp = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let tAtt = maximum(attack_ms, 5.0) * 0.001;
+let tRel = maximum(release_ms, 5.0) * 0.001;
+let cAtt = exp(0.0 - 1.0 / (tAtt * sr));
+let cRel = exp(0.0 - 1.0 / (tRel * sr));
+
+let x = abs(in1);
+let coef = (x > avgLevel) ? cAtt : cRel;
+avgLevel = x + coef * (avgLevel - x);
+
+// Chamberlin SVF lowpass: needle mass-spring-damper, Q = 1/(2*zeta)
+let fNeedle = 2.0 * sin(pi * clamp(needle_hz, 5.0, 30.0) / sr);
+let qNeedle = 2.0 * maximum(damping, 0.3);
+needleLp = needleLp + fNeedle * needleBp;
+let needleHp = avgLevel - needleLp - qNeedle * needleBp;
+needleBp = needleBp + fNeedle * needleHp;
+
+out1 = needleLp * dbtoa(clamp(out_db, -24.0, 24.0));

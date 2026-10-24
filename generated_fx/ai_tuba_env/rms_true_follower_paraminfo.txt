@@ -1,0 +1,45 @@
+================================================================================
+rms_true_follower — Parameter Information
+================================================================================
+
+WHAT IT IS
+A true-RMS envelope: the signal is squared, the power is averaged with a
+symmetric window, and the square root gives a waveform-independent level. A
+second attack/release stage shapes how quickly the reading may move, so it
+still has musical ballistics. The split matters: averaging the square with
+attack/release directly biases the result upward on low notes (a 100 Hz sine
+reads about +2.7 dB high with 10/500 ms), while a symmetric RMS window reads
+the same sine at 0.707 of its peak.
+
+Source: Floru, AES 1998, preprint 4703, §1-2 (true RMS detector); Dutilleux,
+DAFx-98, §5.1-5.4 (squarer + averager amplitude follower; RMS + AR-averager).
+
+PARAMETERS (4)
+
+1. rms_ms — 5…500 ms, default 50 ms
+   Symmetric RMS measurement window. Longer windows give a steadier reading
+   and more lag; 40-60 ms covers one to three cycles of a low tuba note and is
+   the useful default. Very short windows start to follow the waveform itself.
+
+2. attack_ms — 0.5…200 ms, default 5 ms
+   How fast the output reading may rise after the RMS window has moved. Short
+   values keep the tuba's articulation; this stage does not change the RMS
+   calibration.
+
+3. release_ms — 10…4000 ms, default 500 ms
+   How fast the output reading may fall. Long values hold the body through the
+   gaps between valve notes; short values breathe with them.
+
+4. out_db — -24…+24 dB, default 0 dB
+   Level of the control signal on out1. The RMS of a sine sits about 3 dB below
+   its peak, which is correct and intentional.
+
+INLETS / OUTLETS
+- in1: tuba audio (mono).
+- out1: RMS envelope control signal, 0..1 linear before out_db, at audio rate.
+
+NOTES
+- Square -> symmetric average -> root is the RMS order; do not move the root
+  inside the power loop.
+- The output is a control signal, not a monitor signal.
+- No safety limiter, no metering, no gate.

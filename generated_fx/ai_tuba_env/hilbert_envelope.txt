@@ -1,0 +1,75 @@
+// ============================================================================
+// hilbert_envelope.txt — analytic-signal (Hilbert) amplitude envelope
+//
+// From: P. Dutilleux, "Filters, Delays, Modulations and Demodulations:
+//       A Tutorial", DAFx-98, §5.1 (instantaneous envelope detector
+//       d_i2(t) = sqrt(x^2 + x_hat^2), the magnitude of the analytic signal)
+//       and §5.4 (the instantaneous detector without an averager follows the
+//       amplitude with the finest resolution, at the cost of audio-band ripple).
+//
+// Four one-pole allpass sections per branch form a quadrature pair; the
+// magnitude sqrt(re^2 + im^2) is the instantaneous amplitude, with no rectifier
+// and no threshold. This is the lowest-latency envelope in the batch and the
+// only one that is polarity-independent by construction, which makes it the
+// best choice for transient-accurate modulation of pitch or cutoff.
+//
+// Caveat: |analytic| is exactly the envelope of a narrowband (sine-like)
+// signal. A tuba is a harmonic stack, so its analytic magnitude also contains
+// the waveform's intra-cycle shape, especially at 30-60 Hz; raise smooth_ms to
+// 30-50 ms for a loudness-like contour, or use the peak/RMS/cascade followers
+// for that job. At 5 ms a pure 30 Hz sine ripples 5.8%; a three-harmonic 30 Hz
+// tone ripples far more because the ripple is the waveform, not quadrature
+// error.
+//
+// The allpass is the pole-at-c form
+//     y[n] = c*(x[n] + y[n-1]) - x[n-1]     H(z) = (c - z^-1)/(1 - c z^-1)
+// which is the recursion the cR/cI coefficient sets below were fitted for.
+// The `c*(x[n] - y[n-1]) + x[n-1]` form is a different allpass (pole at -c)
+// and is not in quadrature with these coefficients.
+// The coefficients assume 44.1-48 kHz; at 96 kHz the quadrature drifts at the
+// bottom of the tuba range.
+//
+// Inlets:
+//   in1: tuba audio (mono)
+// Outlets:
+//   out1: analytic amplitude, 0..1 (audio-rate), scaled by out_db
+// ============================================================================
+
+@param({ min: 0.5, max: 50.0 }) smooth_ms = 10.0;  // de-ripple time
+@param({ min: -24.0, max: 24.0 }) out_db = 0.0;    // output level
+
+// Per-section x[n-1] and y[n-1] for each of four allpass stages
+@state reX = new FixedSampleArray(4);
+@state reY = new FixedSampleArray(4);
+@state imX = new FixedSampleArray(4);
+@state imY = new FixedSampleArray(4);
+@state envSm = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+
+// Quadrature allpass coefficients (one set per branch)
+let cR0 = 0.4794008656; let cR1 = 0.8762184935;
+let cR2 = 0.9765975895; let cR3 = 0.9974992559;
+let cI0 = 0.1617584983; let cI1 = 0.7330289323;
+let cI2 = 0.9453497003; let cI3 = 0.9905991567;
+
+// Real branch
+let re = in1;
+let t = cR0 * (re + reY[0]) - reX[0]; reX[0] = re; reY[0] = t; re = t;
+t = cR1 * (re + reY[1]) - reX[1]; reX[1] = re; reY[1] = t; re = t;
+t = cR2 * (re + reY[2]) - reX[2]; reX[2] = re; reY[2] = t; re = t;
+t = cR3 * (re + reY[3]) - reX[3]; reX[3] = re; reY[3] = t; re = t;
+
+// Imaginary (Hilbert) branch
+let im = in1;
+t = cI0 * (im + imY[0]) - imX[0]; imX[0] = im; imY[0] = t; im = t;
+t = cI1 * (im + imY[1]) - imX[1]; imX[1] = im; imY[1] = t; im = t;
+t = cI2 * (im + imY[2]) - imX[2]; imX[2] = im; imY[2] = t; im = t;
+t = cI3 * (im + imY[3]) - imX[3]; imX[3] = im; imY[3] = t; im = t;
+
+// Analytic magnitude, then a short de-ripple (the 2f residue of quadrature)
+let analytic = sqrt(re * re + im * im);
+let cSm = exp(0.0 - 1.0 / (maximum(smooth_ms, 0.5) * 0.001 * sr));
+envSm = analytic + cSm * (envSm - analytic);
+
+out1 = envSm * dbtoa(clamp(out_db, -24.0, 24.0));

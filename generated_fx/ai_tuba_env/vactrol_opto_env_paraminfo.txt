@@ -1,0 +1,50 @@
+================================================================================
+vactrol_opto_env — Parameter Information
+================================================================================
+
+WHAT IT IS
+The envelope of a vactrol: rectified tuba drives a LED, the light falls on a CdS
+photoresistor, and the cell's conductance is the output. It attacks faster as
+the LED gets brighter and releases slowly; after a sustained note the cell is
+still "charged", so the release stretches further. That program dependence is
+what makes an opto compressor breathe instead of clamp, and it is the point of
+this follower.
+
+Source: Najnudel, Müller, Hélie & Roze, DAFx-23, paper 50, §1, §3 Eqs. 3-4,
+§5 (VTL5C3/2). This is a reduced signal-level model of the published physical
+model, chosen to run per-sample in codebox~.
+
+PARAMETERS (5)
+
+1. sensitivity_db — -24…+24 dB, default 0 dB
+   Trim into the LED. Higher values light the cell earlier and make the attack
+   faster; it also changes where the gamma curve sits, so it is a drive control,
+   not just a volume trim.
+
+2. release_ms — 20…2000 ms, default 300 ms
+   Dark decay of the photoresistor at low exposure. The classic opto tail is a
+   few hundred ms; 1-2 s is a slow, sustained breathing envelope.
+
+3. program — 0…1, default 0.6
+   How strongly recent light stretches the release (0 = fixed release, 1 = up
+   to 5x longer after a sustained bright note). This is the memory that makes
+   the cell lag a repeated riff differently on the first and later notes.
+
+4. curve — 0.5…1.5, default 0.8
+   LDR gamma: output = light^gamma. Below 1 the cell is more sensitive at low
+   levels (more output for a quiet note); above 1 it stays darker longer and
+   then opens quickly.
+
+5. out_db — -24…+24 dB, default 0 dB
+   Level of the control signal on out1.
+
+INLETS / OUTLETS
+- in1: tuba audio (mono).
+- out1: normalized LDR conductance, 0..1 before out_db, at audio rate.
+
+NOTES
+- 0 is the dark cell and 1 is full light; it is conductance, not resistance, so
+  a brighter note gives a larger output (a raw R_LDR would move the other way).
+- The attack is intentionally not brick-wall smooth: the cell follows the
+  waveform a little, which is part of the opto character.
+- No safety limiter, no metering, no gate.

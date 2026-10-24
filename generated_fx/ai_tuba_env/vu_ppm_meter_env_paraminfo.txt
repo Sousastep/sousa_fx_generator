@@ -1,0 +1,46 @@
+================================================================================
+vu_ppm_meter_env — Parameter Information
+================================================================================
+
+WHAT IT IS
+A level-meter movement, not a fast detector: the rectified tuba is averaged
+with an attack/release time constant and that averaged level drives a damped
+second-order needle. The needle overshoots slightly and settles, which is the
+mechanical part a digital one-pole cannot give. At 300/300 ms it is a slow
+VU-like body reading; at 10/1500 ms it is the PPM attack/decay.
+
+Source: Dutilleux, DAFx-98, §5.3-5.4 (VU = AM detector; PPM = full-wave
+rectifier + 10 ms/1500 ms AR-averager, DIN 45406); esskov, DAFx-07, §2.1
+(VU vs PPM ballistics, mechanical needle).
+
+PARAMETERS (5)
+
+1. attack_ms — 5…500 ms, default 300 ms
+   Integration time for a rising level (63% point). 300 ms is the slow VU
+   body; 10 ms is the PPM rise.
+
+2. release_ms — 5…3000 ms, default 300 ms
+   Decay time. Keep it equal to attack_ms for VU-style symmetric ballistics;
+   1500 ms with a 10 ms attack is the PPM.
+
+3. needle_hz — 5…30 Hz, default 12 Hz
+   Resonance of the needle movement. Low values give a heavy, slow meter that
+   lags and overshoots; high values approach a plain smoothed envelope.
+
+4. damping — 0.3…1.5, default 0.7
+   Needle damping (zeta). Below 1 the needle overshoots and rings briefly on an
+   attack; 1 is critically damped; above 1 is sluggish.
+
+5. out_db — -24…+24 dB, default 0 dB
+   Level of the control signal on out1.
+
+INLETS / OUTLETS
+- in1: tuba audio (mono).
+- out1: needle deflection, 0..1 before out_db, at audio rate.
+
+NOTES
+- attack_ms/release_ms here are 63% times, not the standards' 99% pointer
+  response, so 300 ms is a musical VU-like weight rather than a calibration.
+- A resonant needle can overshoot slightly above 1 on a hard attack; that is
+  the movement, not a limiter fault.
+- No safety limiter, no metering, no gate.

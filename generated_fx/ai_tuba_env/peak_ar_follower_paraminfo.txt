@@ -1,0 +1,37 @@
+================================================================================
+peak_ar_follower — Parameter Information
+================================================================================
+
+WHAT IT IS
+A full-wave peak follower with separate attack and release times: the plainest
+way to turn the tuba's instantaneous amplitude into a control signal. It reacts
+to every rectified sample, so it is the most articulate and the most "literal"
+of the batch — good for transient-shaped modulation (filter blips, envelope
+accents), less good for a smooth loudness reading.
+
+Source: Floru, AES 104th Convention 1998, preprint 4703, §1-2 (peak detector);
+Dutilleux, DAFx-98, §5.1-5.2 (full-wave detector + AR-averager).
+
+PARAMETERS (3)
+
+1. attack_ms — 0.1…100 ms, default 5 ms
+   Time for the envelope to reach 63% of a rising step. Short values (0.5-2 ms)
+   keep the valve tongue and the lip transient; long values soften the onset.
+
+2. release_ms — 5…2000 ms, default 250 ms
+   Time for the envelope to fall 63% after the input drops. Short is punchy and
+   lets the follower chatter on a decaying note; long holds the body through
+   gaps between notes.
+
+3. out_db — -24…+24 dB, default 0 dB
+   Level of the control signal on out1. 0 dB keeps the envelope in its natural
+   0..1 range; raise it only when feeding something that expects a hotter signal.
+
+INLETS / OUTLETS
+- in1: tuba audio (mono).
+- out1: envelope control signal, 0..1 linear before out_db, at audio rate.
+
+NOTES
+- The output is a control signal, not a monitor signal. Patch it into a
+  modulation input, or listen to it through a VCA.
+- No safety limiter, no metering, no gate.

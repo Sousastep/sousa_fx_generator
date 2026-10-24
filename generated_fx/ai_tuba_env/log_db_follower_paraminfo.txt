@@ -1,0 +1,42 @@
+================================================================================
+log_db_follower — Parameter Information
+================================================================================
+
+WHAT IT IS
+A level follower that smooths in decibels instead of in amplitude: rectify,
+take 20*log10, run the attack/release one-pole on the dB value, convert back.
+The release therefore falls at a constant dB/s, which is the "fader" or opto
+feel — a long note fades evenly instead of dropping fast at first and then
+crawling. The floor control keeps log(0) out of the math and defines silence.
+
+Source: Floru, AES 1998, preprint 4703, §2.2.1-2.2.2 (log-domain RMS detector,
+dB-linear integrator), §4.3 (diode log filter); Dutilleux, DAFx-98, §5.2
+(one-pole averager).
+
+PARAMETERS (4)
+
+1. attack_ms — 0.5…500 ms, default 5 ms
+   Time to cover 63% of a rising dB step. Short values snap to the attack;
+   longer values make the envelope lean in behind the note.
+
+2. release_ms — 10…5000 ms, default 500 ms
+   Time to cover 63% of a falling dB step, i.e. most of the audible fade is
+   spread over this time. Long values (2-5 s) give a slow, sustained body.
+
+3. floor_db — -90…-20 dB, default -60 dB
+   Silence floor and noise gate level. Below this the output is exactly zero;
+   raising it cleans up a noisy stage but also shortens the usable tail.
+
+4. out_db — -24…+24 dB, default 0 dB
+   Level of the control signal on out1.
+
+INLETS / OUTLETS
+- in1: tuba audio (mono).
+- out1: envelope control signal, 0..1 linear before out_db, at audio rate.
+
+NOTES
+- The dB domain is why the release is linear in dB, not in amplitude; that is
+  the whole point of this follower, so do not move the smoothing before the log.
+- The floor is subtracted from the linear output, so a signal at the floor reads
+  0 rather than a small DC offset.
+- No safety limiter, no metering, no gate beyond the floor clamp.

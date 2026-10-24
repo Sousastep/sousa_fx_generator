@@ -1,0 +1,46 @@
+================================================================================
+cascade_env_follower — Parameter Information
+================================================================================
+
+WHAT IT IS
+A peak envelope smoothed by several attack/release one-poles in series instead
+of one. Each stage starts from the previous stage's output, so the envelope's
+slope is continuous at the attack-to-release switch: the control signal sounds
+smooth rather than steppy when it drives gain, cutoff or pitch. The stage
+coefficients are normalized by the composite step time, so attack_ms and
+release_ms mean the same thing they do on the single-stage follower even when
+you change the order.
+
+Source: Sanfilippo, SMC-22, §2.2 Eqs. 2-4 (cascaded exponential smoothers),
+§2.4 (overshoot/THD).
+
+PARAMETERS (4)
+
+1. attack_ms — 0.1…100 ms, default 5 ms
+   Composite 63% attack time of the whole cascade. Individual stages run faster
+   by q_M (4.35 at 4 stages, 8.64 at 8 stages) so the sum still lands here.
+
+2. release_ms — 5…2000 ms, default 300 ms
+   Composite 63% release time. Long values give a sustained body; short values
+   let the envelope breathe with the valve rhythm.
+
+3. stages — 2…8, default 4
+   Cascade order. 2 is close to a plain AR follower; 8 is the smoothest and
+   costs the most (one extra one-pole per stage per sample). 4 is the useful
+   middle for audio-rate modulation.
+
+4. out_db — -24…+24 dB, default 0 dB
+   Level of the control signal on out1. 0 dB leaves the natural 0..1 range.
+
+INLETS / OUTLETS
+- in1: tuba audio (mono).
+- out1: envelope control signal, 0..1 linear before out_db, at audio rate.
+
+NOTES
+- More stages soften the attack corner and add a little group delay, but the
+  63% timing stays at attack_ms/release_ms by construction.
+- The paper's C_M cutoff normalization is replaced here by a step-time
+  normalization q_M, because this effect is a control-signal follower where
+  timing, not the -3 dB corner, is what the knobs promise.
+- The output is a control signal, not a monitor signal.
+- No safety limiter, no metering, no gate.
