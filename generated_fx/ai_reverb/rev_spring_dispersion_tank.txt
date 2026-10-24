@@ -1,0 +1,157 @@
+// ============================================================================
+// rev_spring_dispersion_tank.txt
+// A single-spring tank: dispersive echoes that chirp downward like a drip.
+// From: Julian Parker & Stefan Bilbao, "Spring Reverberation: A Physical
+//       Perspective", DAFx-09 Paper 84, §3 (echo spacing TD, dispersion
+//       transition frequency FC), and Hannes Gamper, Julian Parker & Vesa
+//       Välimäki, "Automated Calibration of a Parametric Spring Reverb Model",
+//       DAFx-11 Paper 39, §2 (first-order allpass dispersion inside a delay
+//       loop with a multitap read) — the parametric model those sections fit.
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only (this tank has no pitch-relative parameter)
+//   in4: 0..1 one-bar phasor, bound only (no tempo-locked time in a spring)
+// Outlets:
+//   out1 / out2: stereo spring tank, wet only
+// ============================================================================
+
+@param({ min: 0, max: 150 }) predelay_ms = 10;      // predelay
+@param({ min: 15, max: 90 }) spring_ms = 45;        // spring length
+@param({ min: 0, max: 1 }) disperse = 0.6;          // dispersion
+@param({ min: 0.4, max: 8 }) decay_s = 2.5;         // decay
+@param({ min: 800, max: 12000 }) damp_hz = 3500;    // damping
+@param({ min: 0, max: 1 }) width = 0.7;             // width
+@param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
+
+@state preBufL = new FixedSampleArray(8192);
+@state preBufR = new FixedSampleArray(8192);
+@state preIdx: Int = 0;
+
+@state springBufL = new FixedSampleArray(8192);
+@state springBufR = new FixedSampleArray(8192);
+@state spIdx: Int = 0;
+
+// Dispersion: 12 first-order allpasses per channel, x[n-1] / y[n-1] state
+@state dspXL = new FixedSampleArray(12);
+@state dspYL = new FixedSampleArray(12);
+@state dspXR = new FixedSampleArray(12);
+@state dspYR = new FixedSampleArray(12);
+
+@state lpL = 0.0;
+@state lpR = 0.0;
+@state loopL = 0.0;
+@state loopR = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3; // keeps the in3 port present
+let barIn = in4;      // accepted for the batch contract; no tempo-locked time here
+
+// --- Predelay (ms) ---------------------------------------------------------
+preBufL[preIdx] = xL;
+preBufR[preIdx] = xR;
+
+let preSamps = clamp(mstosamps(predelay_ms), 1.0, 8180.0);
+
+let preReadL = preIdx - preSamps;
+while (preReadL < 0.0) { preReadL += 8192.0; }
+let preIntL: Int = floor(preReadL);
+let feedL = cubicinterp(preReadL - preIntL,
+	preBufL[(preIntL - 1 + 8192) & 8191],
+	preBufL[preIntL & 8191],
+	preBufL[(preIntL + 1) & 8191],
+	preBufL[(preIntL + 2) & 8191]);
+
+let preReadR = preIdx - preSamps;
+while (preReadR < 0.0) { preReadR += 8192.0; }
+let preIntR: Int = floor(preReadR);
+let feedR = cubicinterp(preReadR - preIntR,
+	preBufR[(preIntR - 1 + 8192) & 8191],
+	preBufR[preIntR & 8191],
+	preBufR[(preIntR + 1) & 8191],
+	preBufR[(preIntR + 2) & 8191]);
+
+preIdx = (preIdx + 1) & 8191;
+
+// --- Loop gain and damping (DAFx-09 §3: TD sets the echo spacing) ----------
+let springLen = clamp(spring_ms, 15.0, 90.0);
+let springSec = springLen * 0.001;
+let rt60 = clamp(decay_s, 0.4, 8.0);
+let gLoop = clamp(exp(0.0 - 6.907755 * springSec / rt60), 0.0, 0.975);
+
+let dampF = clamp(damp_hz, 200.0, sr * 0.45);
+let dampC = 1.0 - exp(0.0 - 2.0 * pi * dampF / sr);
+
+// Negative allpass coefficient: group delay is longest at DC and collapses at
+// Nyquist, which is the downward chirp of a real spring.
+let gd = 0.0 - (0.25 + 0.55 * clamp(disperse, 0.0, 1.0));
+
+// --- Dispersion chain on the recirculating signal (12 stages) --------------
+let inDispL = loopL * gLoop;
+let dL = inDispL;
+for (let i: Int = 0; i < 12; i++) {
+	let vL = gd * (dL - dspYL[i]) + dspXL[i];
+	dspXL[i] = dL;
+	dspYL[i] = vL;
+	dL = vL;
+}
+
+let inDispR = loopR * gLoop;
+let dR = inDispR;
+for (let i: Int = 0; i < 12; i++) {
+	let vR = gd * (dR - dspYR[i]) + dspXR[i];
+	dspXR[i] = dR;
+	dspYR[i] = vR;
+	dR = vR;
+}
+
+// --- Spring delay line (two slightly different lengths for stereo) ---------
+springBufL[spIdx] = feedL + dL;
+springBufR[spIdx] = feedR + dR;
+
+let dSampsL = clamp(mstosamps(springLen), 8.0, 8170.0);
+let dSampsR = clamp(dSampsL * 1.037, 8.0, 8170.0);
+
+let readL = spIdx - dSampsL;
+while (readL < 0.0) { readL += 8192.0; }
+let riL: Int = floor(readL);
+let tapL = cubicinterp(readL - riL,
+	springBufL[(riL - 1 + 8192) & 8191],
+	springBufL[riL & 8191],
+	springBufL[(riL + 1) & 8191],
+	springBufL[(riL + 2) & 8191]);
+
+let readR = spIdx - dSampsR;
+while (readR < 0.0) { readR += 8192.0; }
+let riR: Int = floor(readR);
+let tapR = cubicinterp(readR - riR,
+	springBufR[(riR - 1 + 8192) & 8191],
+	springBufR[riR & 8191],
+	springBufR[(riR + 1) & 8191],
+	springBufR[(riR + 2) & 8191]);
+
+spIdx = (spIdx + 1) & 8191;
+
+// Damping inside the loop, then the recirculating sample
+lpL = lpL + dampC * (tapL - lpL);
+lpR = lpR + dampC * (tapR - lpR);
+loopL = lpL;
+loopR = lpR;
+
+// Energy normalisation: a comb of feedback g carries 1/(1-g^2) of the input
+// energy, so scale by its inverse root to keep the wet level steady.
+let norm = sqrt(maximum(1.0 - gLoop * gLoop, 0.0001));
+let wetL = tapL * norm;
+let wetR = tapR * norm;
+
+// --- Width (mid/side) ------------------------------------------------------
+let mid = 0.5 * (wetL + wetR);
+let side = 0.5 * (wetL - wetR) * clamp(width, 0.0, 1.0);
+let oL = mid + side;
+let oR = mid - side;
+
+let g = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * g;
+out2 = oR * g;

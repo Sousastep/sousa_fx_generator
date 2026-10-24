@@ -1,0 +1,68 @@
+================================================================================
+dly_tape_echo — Parameter Information
+================================================================================
+
+WHAT IT IS
+A tape echo: tempo-locked repeats through a machine with wow, flutter,
+saturation, play-head loss and a head bump. Where dly_dub_echo is a mixing
+echo (filtering and diffusion), this one is the transport: the repeats drift in
+pitch, compress when they get loud, and lose their top end.
+
+Source: Jatin Chowdhury, "Real-time Physical Modelling for Analog Tape
+Machines", DAFx-19 Paper 3 §4.4 (wow and flutter are a periodic timing
+imperfection, implemented as a modulating delay line) and §3 (play-head loss
+and magnetisation saturation).
+
+100% wet: only the repeats come out.
+
+PARAMETERS (7 + output gain)
+
+1. echo_div — 1/16, 1/8T, 1/8, 1/4, 1/2, 1 bar; default 1/8
+   Repeat time as a subdivision of the bar on in4. 1/8 is the half-beat
+   slapback; 1/8T pushes slightly ahead of the grid, 1/4 and up are long
+   trailing repeats.
+
+2. feedback — 0…0.9, default 0.5
+   Number of repeats. The saturation and the head-loss filter sit in the loop,
+   so high settings self-compress rather than run away.
+
+3. wow_flutter — 0…1, default 0.35
+   Depth of the transport drift: 0.7 Hz wow (up to ~2.2 ms) plus 6.3 Hz flutter
+   (up to ~0.8 ms). At 0 the machine runs perfectly; 0.3–0.5 is a well-used
+   deck; above 0.7 it is seasick on purpose. The right head drifts the opposite
+   way for a tape-azimuth effect.
+
+4. saturate — 0…1, default 0.4
+   Drive into the loop's soft clipper. Unity small-signal gain at any setting,
+   so this changes tone and compression rather than level. High settings make
+   the repeats thicken and then flatten.
+
+5. tone_hz — 800…12000 Hz, default 5000 Hz
+   One-pole play-head loss. 2–3 kHz is a worn head on a slow machine; 8 kHz+
+   keeps the repeats bright.
+
+6. head_bump — 0…1, default 0.4
+   Amount of the 90 Hz playback-coil resonance added back. This is the low
+   "thump" that makes tape echo feel bigger than the dry signal; on a sub-heavy
+   rig keep it under 0.5.
+
+7. width — 0…1, default 0.6
+   Mid/side spread. The two channels also run slightly different delay lengths
+   (right is 0.15% longer), so at 1 the repeats are fully separate.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: connected but unused (batch inlet layout).
+- in4: one-bar phasor. Bar period is measured wrap-to-wrap and held; with in4
+  static the echo keeps the last measured time, or 2.000 s (120 BPM) if in4 was
+  never seen.
+- out1 / out2: stereo repeats only.
+
+NOTES
+- Delay time is slewed (~40 ms), so a subdivision change glides like a tape
+  speed change instead of clicking.
+- Maximum delay is one bar at 60 BPM (4 s at 48 kHz); slower bars clamp.
+- No bias/hiss modelling, no pitch tracking, no limiter, no dry path.

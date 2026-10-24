@@ -1,0 +1,66 @@
+================================================================================
+rev_modal_tuned — Parameter Information
+================================================================================
+
+WHAT IT IS
+A modal reverb: eight parallel two-pole resonators standing in for eight room
+modes, with the mode frequencies tuned to 5-limit ratios of the tuba's own f0
+instead of to a fixed room. Play a note and the "room" rings in tune with it;
+change note and the modes follow.
+
+Source: Abel & Werner, "Distortion and Pitch Processing Using a Modal
+Reverberator Architecture", DAFx-15 Paper 72 §2 (parallel resonant filters,
+per-mode decay h_m(t) = e^{(jω_m−α_m)t}) and §3.3 (mode-frequency scaling for
+pitch). The paper's 2^{σ/12} semitone ratio is replaced by 5-limit ratios.
+
+The mode set is 1/2, 1/1, 6/5, 5/4, 3/2, 5/3, 2/1, 5/2 — a just-intonation
+overtone chord, no equal-tempered interval anywhere.
+
+100% wet, no dry/wet.
+
+PARAMETERS (7 + output gain)
+
+1. predelay_ms — 0…100 ms, default 15 ms
+   Gap before the mode bank. 0–15 ms makes the ring feel like part of the
+   instrument; 40–100 ms puts it behind the note.
+
+2. decay_s — 0.5…20 s, default 5 s
+   RT60 of the lowest mode; each higher mode decays up to ~1.5x faster through
+   the mode index. This is the "how long the room sings" control.
+
+3. tilt — 0…1, default 0.45
+   Gain tilt across the modes: 0 = only the low modes speak (dark, subby),
+   1 = upper modes as loud as the fundamental (bright, metallic).
+
+4. detune_cents — 0…25 cents, default 8 cents
+   The left channel's modes sit this far flat, the right channel this far sharp.
+   At 0 both channels are identical and the ring is static; 8–15 cents gives
+   slow beating and a wide image.
+
+5. sub_weight — 0…1, default 0.35
+   Level of the extra 1/2 mode (an octave below f0). This is the deep-dubstep
+   end: at 0 the tail is root-and-up, at 1 the sub octave is as loud as the
+   root.
+
+6. width — 0…1, default 0.8
+   Mid/side spread of the two detuned banks. 0 = mono.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+   (That is the 8th parameter slot; this effect uses 6 behind it.)
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio, summed to excite the mode bank.
+- in3: f0 in Hz. Values of 20…1200 Hz are taken; 0 (or anything outside) means
+  "unknown" and the last value is held. If in3 is never valid the bank runs at
+  a fixed 55 Hz. There is no zero-crossing fallback and 0 is never read as 1 Hz.
+- in4: one-bar phasor, connected but unused — the modes follow f0, not the bar.
+- out1 / out2: stereo wet only.
+
+NOTES
+- Resonator coefficients are recomputed every 32 samples, so an f0 jump is
+  heard as a fast glide rather than a per-sample click. A tracker octave error
+  will still move the whole mode set by that octave.
+- Each mode is gain-normalised to unity at its own resonance, then scaled; the
+  bank cannot self-oscillate (r < 1 always).
+- No limiter, no dry path, no internal pitch detector.

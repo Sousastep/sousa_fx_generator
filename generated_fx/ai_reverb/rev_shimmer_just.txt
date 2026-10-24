@@ -1,0 +1,193 @@
+// ============================================================================
+// rev_shimmer_just.txt
+// Shimmer: every feedback pass climbs one 5-limit interval.
+// From: Jonathan S. Abel & Kurt James Werner, "Distortion and Pitch Processing
+//       Using a Modal Reverberator Architecture", DAFx-15 Paper 72, §3.3 —
+//       pitch manipulation by scaling the ringing frequencies (the paper's
+//       equal-tempered 2^(sigma/12) is replaced here by 5-limit ratios) —
+//       inside the feedback of a diffused delay loop, as in Beltrán et al.,
+//       DAFx-99, §2.5 (nested allpass diffusion).
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only (this effect shifts by a fixed 5-limit interval, not by f0)
+//   in4: 0..1 one-bar phasor, bound only (shimmer time is in seconds)
+// Outlets:
+//   out1 / out2: stereo shimmer, wet only
+// ============================================================================
+
+@param({ min: 0, max: 200 }) predelay_ms = 25;      // predelay
+@param({ min: 1, max: 30 }) decay_s = 8;            // decay
+@param({ enum: ["5/4", "4/3", "3/2", "5/3", "2/1", "5/2", "3/1"] }) interval = 4; // interval
+@param({ min: 0, max: 1 }) shift_mix = 0.55;        // shimmer amount
+@param({ min: 500, max: 12000 }) tone_hz = 4000;    // damping
+@param({ min: 40, max: 200 }) window_ms = 90;       // grain window
+@param({ min: 0, max: 1 }) width = 0.9;             // width
+@param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
+
+@state preL = new FixedSampleArray(16384);
+@state preR = new FixedSampleArray(16384);
+@state preIdx: Int = 0;
+
+// Loop line: written with input + feedback, read by the two grain heads
+@state shL = new FixedSampleArray(32768);
+@state shR = new FixedSampleArray(32768);
+@state wIdx: Int = 0;
+
+// Two input diffusion allpasses per channel: rows 0,1 = left, 2,3 = right
+@state apBuf = new FixedSampleArray(4, 2048);
+@state apIdx: Int = 0;
+
+@state phL = 0.0;
+@state phR = 0.37;
+@state dmpL = 0.0;
+@state dmpR = 0.0;
+
+function apStep(row: Int, xin: number, len: number): number {
+	let rp = apIdx - len;
+	while (rp < 0.0) { rp += 2048.0; }
+	let i0: Int = floor(rp);
+	let xd = apBuf[row][i0 & 2047];
+	let v = xin + 0.65 * xd;
+	apBuf[row][apIdx] = v;
+	return xd - 0.65 * v;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3; // keeps the in3 port present
+let barIn = in4;      // accepted for the batch contract; shimmer time is seconds
+
+// --- 5-limit interval ------------------------------------------------------
+let ratio = 1.25;
+if (interval == 1) { ratio = 1.3333333; }
+else if (interval == 2) { ratio = 1.5; }
+else if (interval == 3) { ratio = 1.6666667; }
+else if (interval == 4) { ratio = 2.0; }
+else if (interval == 5) { ratio = 2.5; }
+else if (interval == 6) { ratio = 3.0; }
+
+// --- Predelay (ms) ---------------------------------------------------------
+preL[preIdx] = xL;
+preR[preIdx] = xR;
+
+let preSamps = clamp(mstosamps(predelay_ms), 1.0, 16300.0);
+
+let rpL = preIdx - preSamps;
+while (rpL < 0.0) { rpL += 16384.0; }
+let piL: Int = floor(rpL);
+let pL = cubicinterp(rpL - piL,
+	preL[(piL - 1 + 16384) & 16383],
+	preL[piL & 16383],
+	preL[(piL + 1) & 16383],
+	preL[(piL + 2) & 16383]);
+
+let rpR = preIdx - preSamps;
+while (rpR < 0.0) { rpR += 16384.0; }
+let piR: Int = floor(rpR);
+let pR = cubicinterp(rpR - piR,
+	preR[(piR - 1 + 16384) & 16383],
+	preR[piR & 16383],
+	preR[(piR + 1) & 16383],
+	preR[(piR + 2) & 16383]);
+
+preIdx = (preIdx + 1) & 16383;
+
+// --- Diffusion before the loop --------------------------------------------
+let diffL = apStep(0, pL, clamp(mstosamps(7.1), 4.0, 2000.0));
+diffL = apStep(1, diffL, clamp(mstosamps(3.3), 4.0, 2000.0));
+let diffR = apStep(2, pR, clamp(mstosamps(8.3), 4.0, 2000.0));
+diffR = apStep(3, diffR, clamp(mstosamps(4.1), 4.0, 2000.0));
+apIdx = (apIdx + 1) & 2047;
+
+// --- Grain window and decay -----------------------------------------------
+let wSamps = clamp(mstosamps(window_ms), 64.0, 9000.0);
+let baseSamps = 1.5 * wSamps;
+
+let loopSec = (2.0 * wSamps) / sr;
+let rt60 = clamp(decay_s, 1.0, 30.0);
+let decay = clamp(exp(0.0 - 6.907755 * loopSec / rt60), 0.0, 0.99);
+
+let toneF = clamp(tone_hz, 200.0, sr * 0.45);
+let toneC = 1.0 - exp(0.0 - 2.0 * pi * toneF / sr);
+
+// One grain step per sample. The delay shrinks by (ratio-1) samples per sample,
+// so the read runs ratio times faster than the write -> pitch up by `ratio`.
+let phInc = (ratio - 1.0) / wSamps;
+phL = wrap(phL - phInc, 0.0, 1.0);
+phR = wrap(phR - phInc, 0.0, 1.0);
+
+// --- Left channel: two heads, Hann crossfade, static tap for shift_mix=0 ---
+let d1L = baseSamps + phL * wSamps;
+let ph2L = wrap(phL + 0.5, 0.0, 1.0);
+let d2L = baseSamps + ph2L * wSamps;
+
+let r1L = wIdx - d1L;
+while (r1L < 0.0) { r1L += 32768.0; }
+let q1L: Int = floor(r1L);
+let h1L = linearinterp(r1L - q1L, shL[q1L & 32767], shL[(q1L + 1) & 32767]);
+
+let r2L = wIdx - d2L;
+while (r2L < 0.0) { r2L += 32768.0; }
+let q2L: Int = floor(r2L);
+let h2L = linearinterp(r2L - q2L, shL[q2L & 32767], shL[(q2L + 1) & 32767]);
+
+let xfL = 0.5 - 0.5 * cos(2.0 * pi * phL);
+let shiftL = xfL * h1L + (1.0 - xfL) * h2L;
+
+let rsL = wIdx - baseSamps;
+while (rsL < 0.0) { rsL += 32768.0; }
+let qsL: Int = floor(rsL);
+let statL = linearinterp(rsL - qsL, shL[qsL & 32767], shL[(qsL + 1) & 32767]);
+
+let fbLraw = linearinterp(clamp(shift_mix, 0.0, 1.0), statL, shiftL);
+dmpL = dmpL + toneC * (fbLraw - dmpL);
+
+// --- Right channel --------------------------------------------------------
+let d1R = baseSamps + phR * wSamps;
+let ph2R = wrap(phR + 0.5, 0.0, 1.0);
+let d2R = baseSamps + ph2R * wSamps;
+
+let r1R = wIdx - d1R;
+while (r1R < 0.0) { r1R += 32768.0; }
+let q1R: Int = floor(r1R);
+let h1R = linearinterp(r1R - q1R, shR[q1R & 32767], shR[(q1R + 1) & 32767]);
+
+let r2R = wIdx - d2R;
+while (r2R < 0.0) { r2R += 32768.0; }
+let q2R: Int = floor(r2R);
+let h2R = linearinterp(r2R - q2R, shR[q2R & 32767], shR[(q2R + 1) & 32767]);
+
+let xfR = 0.5 - 0.5 * cos(2.0 * pi * phR);
+let shiftR = xfR * h1R + (1.0 - xfR) * h2R;
+
+let rsR = wIdx - baseSamps;
+while (rsR < 0.0) { rsR += 32768.0; }
+let qsR: Int = floor(rsR);
+let statR = linearinterp(rsR - qsR, shR[qsR & 32767], shR[(qsR + 1) & 32767]);
+
+let fbRraw = linearinterp(clamp(shift_mix, 0.0, 1.0), statR, shiftR);
+dmpR = dmpR + toneC * (fbRraw - dmpR);
+
+// --- Close the loop -------------------------------------------------------
+shL[wIdx] = diffL + dmpL * decay;
+shR[wIdx] = diffR + dmpR * decay;
+wIdx = (wIdx + 1) & 32767;
+
+// Output is the shifted material; the unshifted body only appears when the
+// shimmer amount is turned down, so shift_mix = 1 really is all shifted
+let bodyW = 0.30 * (1.0 - clamp(shift_mix, 0.0, 1.0));
+let norm = 1.6 * sqrt(maximum(1.0 - decay * decay, 0.0001));
+let wetL = (dmpL * (1.0 - bodyW) + statL * bodyW) * norm;
+let wetR = (dmpR * (1.0 - bodyW) + statR * bodyW) * norm;
+
+// --- Width (mid/side) -----------------------------------------------------
+let mid = 0.5 * (wetL + wetR);
+let side = 0.5 * (wetL - wetR) * clamp(width, 0.0, 1.0);
+let oL = mid + side;
+let oR = mid - side;
+
+let g = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * g;
+out2 = oR * g;

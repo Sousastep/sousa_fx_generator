@@ -1,0 +1,63 @@
+================================================================================
+rev_fdn4_dark_hall — Parameter Information
+================================================================================
+
+WHAT IT IS
+A four-line feedback delay network. The lines (1.00 : 1.31 : 1.71 : 2.13 times
+the room size) are mixed every sample by a 4x4 Hadamard matrix scaled by 1/2,
+which is unitary, so the loop itself loses no energy — the tail length comes
+only from the per-line decay gains, one lowpass and one DC blocker.
+
+Source: Beltrán et al., DAFx-99 §5.1 (Jot's reverberator: delay bank + unitary
+matrix A + absorptive filter); Dahl & Jot, DAFx-00 §2.1 (unitary-feedback delay
+networks).
+
+The point of this one is the bottom end: a long, smooth hall whose tail has no
+sub-bass and rolls off fast in the top. On tuba it gives size without mud.
+100% wet, no dry/wet.
+
+PARAMETERS (7 + output gain)
+
+1. predelay_ms — 0…250 ms, default 30 ms
+   Gap before the hall. 0–20 ms is an intimate room; 80–250 ms is a big hall
+   where the tuba sits in front of the space.
+
+2. size_ms — 15…120 ms, default 45 ms
+   Length of the shortest line; the others are 1.31, 1.71 and 2.13 times it.
+   Short = small dense room, long = sparse modal hall (audible individual
+   echoes at the extreme).
+
+3. decay_s — 1…20 s, default 6 s
+   RT60. Each line gets its own gain solved from its own length, so the four
+   lines decay together instead of the short ones dying first.
+
+4. damp_hz — 250…8000 Hz, default 1500 Hz
+   Lowpass in every line. This is the main "dark" control; 800 Hz–1.5 kHz gives
+   the dubplate tail, 4 kHz+ a brighter hall.
+
+5. lowcut_hz — 20…500 Hz, default 80 Hz
+   DC blocker in every line. Raise it to 150–300 Hz to keep the sub completely
+   out of the tail so the dry sub-bass stays the only low end.
+
+6. mod_depth — 0…1, default 0.3
+   Depth of the slow, mutually offset line-length modulation (up to 6 samples).
+   At 0 the hall is static and can ring on steady tones; at 1 the tail is
+   slightly detuned and never metallic.
+
+7. width — 0…1, default 1.0
+   Mid/side spread of the two tap pairs. 0 = mono, 1 = full width.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: connected but unused (batch inlet layout).
+- in4: one-bar phasor, connected but unused — a hall's time is in seconds.
+- out1 / out2: stereo wet only.
+
+NOTES
+- Hadamard mixing is normalised by 1/2, so the loop is lossless apart from the
+  filters and the decay gains; the network is stable at any setting.
+- Level is normalised against the mean decay gain.
+- No limiter, no dry path, no pitch tracking.

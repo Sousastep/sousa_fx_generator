@@ -1,0 +1,150 @@
+// ============================================================================
+// dly_tape_echo.txt
+// A tape echo: wow, flutter and saturation on bar-locked repeats.
+// From: Jatin Chowdhury, "Real-time Physical Modelling for Analog Tape
+//       Machines", DAFx-19 Paper 3, §4.4 (wow and flutter as a periodic timing
+//       imperfection feeding a modulating delay line) and §3 (play-head loss
+//       and magnetisation saturation), reduced to the parts a tape echo needs.
+// 100% wet: only the repeats come out.
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only (no pitch-relative parameter)
+//   in4: 0..1 one-bar phasor — the repeat time is a subdivision of it
+// Outlets:
+//   out1 / out2: stereo repeats, wet only
+// ============================================================================
+
+@param({ enum: ["1/16", "1/8T", "1/8", "1/4", "1/2", "1 bar"] }) echo_div = 2; // repeat time
+@param({ min: 0, max: 0.9 }) feedback = 0.5;        // feedback
+@param({ min: 0, max: 1 }) wow_flutter = 0.35;      // wow & flutter
+@param({ min: 0, max: 1 }) saturate = 0.4;          // saturation
+@param({ min: 800, max: 12000 }) tone_hz = 5000;    // head loss
+@param({ min: 0, max: 1 }) head_bump = 0.4;         // head bump
+@param({ min: 0, max: 1 }) width = 0.6;             // width
+@param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
+
+@state dlyL = new FixedSampleArray(262144);
+@state dlyR = new FixedSampleArray(262144);
+@state wIdx: Int = 0;
+
+@state lpL = 0.0;
+@state lpR = 0.0;
+@state bumL = 0.0;
+@state bumR = 0.0;
+@state b1L = 0.0;
+@state b1R = 0.0;
+@state b2L = 0.0;
+@state b2R = 0.0;
+
+@state wowPh = 0.0;
+@state flutPh = 0.0;
+@state barSec = 2.0;      // held bar period; 2 s = 120 BPM until in4 is seen
+@state barCnt = 0.0;
+@state prevBarIn = 0.0;
+@state dSlew = 96000.0;   // current delay in samples, slewed toward the target
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3; // keeps the in3 port present
+
+// --- Bar clock ------------------------------------------------------------
+let barIn = clamp(in4, 0.0, 1.0);
+let barMoved = (abs(barIn - prevBarIn) > 0.0000005) ? 1.0 : 0.0;
+
+if (barIn < prevBarIn - 0.5) {
+	if (barCnt > sr * 0.25 && barCnt < sr * 12.0) { barSec = barCnt / sr; }
+	barCnt = 0.0;
+} else if (barMoved > 0.5) {
+	barCnt += 1.0;
+}
+prevBarIn = barIn;
+
+// --- Repeat time as a bar subdivision -------------------------------------
+let divFrac = 0.0625;
+if (echo_div == 1) { divFrac = 0.0833333; }
+else if (echo_div == 2) { divFrac = 0.125; }
+else if (echo_div == 3) { divFrac = 0.25; }
+else if (echo_div == 4) { divFrac = 0.5; }
+else if (echo_div == 5) { divFrac = 1.0; }
+
+let dTarget = clamp(divFrac * barSec * sr, 4.0, 262100.0);
+dSlew = dSlew + 0.0004 * (dTarget - dSlew);
+let dSamps = clamp(dSlew, 4.0, 262100.0);
+
+// --- Transport: wow (0.7 Hz) and flutter (6.3 Hz) move the read point -----
+let wf = clamp(wow_flutter, 0.0, 1.0);
+wowPh = wrap(wowPh + 0.7 / sr, 0.0, 1.0);
+flutPh = wrap(flutPh + 6.3 / sr, 0.0, 1.0);
+let wobble = wf * (2.2 * sin(2.0 * pi * wowPh) + 0.8 * sin(2.0 * pi * flutPh));
+let wobSamps = wobble * 0.001 * sr;
+
+// --- Read the two heads (right runs slightly off for tape azimuth) --------
+let rdL = wIdx - clamp(dSamps + wobSamps, 4.0, 262100.0);
+while (rdL < 0.0) { rdL += 262144.0; }
+let iL: Int = floor(rdL);
+let tapL = cubicinterp(rdL - iL,
+	dlyL[(iL - 1 + 262144) & 262143],
+	dlyL[iL & 262143],
+	dlyL[(iL + 1) & 262143],
+	dlyL[(iL + 2) & 262143]);
+
+let rdR = wIdx - clamp(dSamps * 1.0015 - wobSamps, 4.0, 262100.0);
+while (rdR < 0.0) { rdR += 262144.0; }
+let iR: Int = floor(rdR);
+let tapR = cubicinterp(rdR - iR,
+	dlyR[(iR - 1 + 262144) & 262143],
+	dlyR[iR & 262143],
+	dlyR[(iR + 1) & 262143],
+	dlyR[(iR + 2) & 262143]);
+
+// --- Playback: saturation, head loss, head bump --------------------------
+// Unity small-signal gain, softer as `saturate` raises the drive into the clip
+let drive = 12.0 * clamp(saturate, 0.0, 1.0);
+let satLraw = tapL * drive;
+let satRraw = tapR * drive;
+let satL = tapL / sqrt(1.0 + satLraw * satLraw);
+let satR = tapR / sqrt(1.0 + satRraw * satRraw);
+
+let toneF = clamp(tone_hz, 300.0, sr * 0.45);
+let toneC = 1.0 - exp(0.0 - 2.0 * pi * toneF / sr);
+lpL = lpL + toneC * (satL - lpL);
+lpR = lpR + toneC * (satR - lpR);
+
+// Low resonance around 90 Hz: the head bump of a playback coil
+let bumpW = 2.0 * pi * 90.0 / sr;
+let bumpPole = 0.995;
+let bumpA1 = 2.0 * bumpPole * cos(bumpW);
+let bumpA2 = bumpPole * bumpPole;
+let bumpG = 2.0 * sin(bumpW) * (1.0 - bumpPole);
+
+bumL = bumpG * lpL + bumpA1 * b1L - bumpA2 * b2L;
+b2L = b1L;
+b1L = bumL;
+bumR = bumpG * lpR + bumpA1 * b1R - bumpA2 * b2R;
+b2R = b1R;
+b1R = bumR;
+
+let hb = clamp(head_bump, 0.0, 1.0) * 2.0;
+let pbL = lpL + hb * bumL;
+let pbR = lpR + hb * bumR;
+
+// --- Feedback and write --------------------------------------------------
+let fb = clamp(feedback, 0.0, 0.9);
+dlyL[wIdx] = xL + pbL * fb;
+dlyR[wIdx] = xR + pbR * fb;
+wIdx = (wIdx + 1) & 262143;
+
+let norm = 2.0 * sqrt(maximum(1.0 - fb * fb, 0.0025));
+let wetL = pbL * norm;
+let wetR = pbR * norm;
+
+// --- Width (mid/side) -----------------------------------------------------
+let mid = 0.5 * (wetL + wetR);
+let side = 0.5 * (wetL - wetR) * clamp(width, 0.0, 1.0);
+let oL = mid + side;
+let oR = mid - side;
+
+let g = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * g;
+out2 = oR * g;

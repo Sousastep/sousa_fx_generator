@@ -1,0 +1,203 @@
+// ============================================================================
+// rev_gated_comb.txt
+// A gated tail: each hit opens the tail and it cuts dead a bar-division later.
+// From: "Digital Signal Processing Techniques for Non-exponentially Decaying
+//       Reverberation", DAFx-98 Paper 20, §2.4 — the modified comb filter: an
+//       FIR envelope synchronised to the comb's delay length changes the
+//       amplitude of the recirculating impulse, so the decay is piecewise
+//       (here: flat, then cut) instead of exponential.
+// The envelope is triggered by the input (an attack detector), and its length
+// is a subdivision of the one-bar phasor on in4.
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio (also the gate's sidechain; summed for the combs)
+//   in3: bound only (no pitch-relative parameter)
+//   in4: 0..1 one-bar phasor — sets the bar that the gate hold is measured in
+// Outlets:
+//   out1 / out2: stereo gated tail, wet only
+// ============================================================================
+
+@param({ enum: ["1/16", "1/8T", "1/8", "1/4", "1/2", "1 bar"] }) gate_div = 2; // gate length
+@param({ min: 0, max: 120 }) predelay_ms = 10;      // predelay
+@param({ min: 0, max: 1 }) gate_shape = 0.85;       // gate shape
+@param({ min: 500, max: 12000 }) tone_hz = 3500;    // tone
+@param({ min: 0, max: 1 }) diffuse = 0.5;           // diffusion
+@param({ min: 0, max: 1 }) width = 0.9;             // width
+@param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
+
+@state preL = new FixedSampleArray(8192);
+@state preR = new FixedSampleArray(8192);
+@state preIdx: Int = 0;
+
+// Six parallel combs (irregular lengths), one mono bank
+@state comb = new FixedSampleArray(6, 8192);
+@state cIdx: Int = 0;
+@state clp = new FixedSampleArray(6);
+
+// Two allpasses per output channel: rows 0,1 = left, 2,3 = right
+@state apBuf = new FixedSampleArray(4, 2048);
+@state apIdx: Int = 0;
+
+@state barSec = 2.0;      // held bar period; 2 s = 120 BPM until in4 is seen
+@state barCnt = 0.0;      // samples since the last phasor wrap
+@state prevBarIn = 0.0;
+
+@state envF = 0.0;        // fast sidechain envelope (~2 ms attack, ~60 ms release)
+@state envS = 0.0;        // slow sidechain envelope (~150 ms), attack reference
+@state trigLatch = 0.0;   // set while an attack is in progress, re-arms when the
+                          // fast and slow envelopes meet again
+@state gateT = 0.0;       // samples left in the current gate
+@state gateSm = 0.0;
+
+// One Schroeder allpass stage, static length
+function apStep(row: Int, xin: number, len: number, gAp: number): number {
+	let rp = apIdx - len;
+	while (rp < 0.0) { rp += 2048.0; }
+	let i0: Int = floor(rp);
+	let xd = apBuf[row][i0 & 2047];
+	let v = xin + gAp * xd;
+	apBuf[row][apIdx] = v;
+	return xd - gAp * v;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3; // keeps the in3 port present
+
+// --- Bar clock: measure the bar from in4, hold the last value -------------
+let barIn = clamp(in4, 0.0, 1.0);
+let barMoved = (abs(barIn - prevBarIn) > 0.0000005) ? 1.0 : 0.0;
+
+if (barIn < prevBarIn - 0.5) {
+	// phasor wrapped: the samples since the previous wrap are one bar
+	if (barCnt > sr * 0.25 && barCnt < sr * 12.0) { barSec = barCnt / sr; }
+	barCnt = 0.0;
+} else if (barMoved > 0.5) {
+	barCnt += 1.0;
+}
+prevBarIn = barIn;
+
+// --- Predelay (ms) ---------------------------------------------------------
+preL[preIdx] = xL;
+preR[preIdx] = xR;
+
+let preSamps = clamp(mstosamps(predelay_ms), 1.0, 8180.0);
+
+let rpL = preIdx - preSamps;
+while (rpL < 0.0) { rpL += 8192.0; }
+let piL: Int = floor(rpL);
+let pL = cubicinterp(rpL - piL,
+	preL[(piL - 1 + 8192) & 8191],
+	preL[piL & 8191],
+	preL[(piL + 1) & 8191],
+	preL[(piL + 2) & 8191]);
+
+let rpR = preIdx - preSamps;
+while (rpR < 0.0) { rpR += 8192.0; }
+let piR: Int = floor(rpR);
+let pR = cubicinterp(rpR - piR,
+	preR[(piR - 1 + 8192) & 8191],
+	preR[piR & 8191],
+	preR[(piR + 1) & 8191],
+	preR[(piR + 2) & 8191]);
+
+preIdx = (preIdx + 1) & 8191;
+
+// --- Gate length: a subdivision of the measured bar ----------------------
+let divFrac = 0.0625;
+if (gate_div == 1) { divFrac = 0.0833333; }
+else if (gate_div == 2) { divFrac = 0.125; }
+else if (gate_div == 3) { divFrac = 0.25; }
+else if (gate_div == 4) { divFrac = 0.5; }
+else if (gate_div == 5) { divFrac = 1.0; }
+
+let holdSamps = clamp(divFrac * barSec * sr, 16.0, 262144.0);
+
+// --- Sidechain: open the gate on each attack ------------------------------
+// The fast envelope jumps at a note's onset while the slow one is still at the
+// previous level; when they meet again the trigger re-arms. A sustained note
+// does not retrigger, so the gate really does close over it.
+let din = abs(pL) + abs(pR);
+envF = envF + ((din > envF) ? 0.0125 : 0.0004) * (din - envF);
+envS = envS + 0.00015 * (din - envS);
+
+if (envF > envS * 2.0 && din > 0.004) {
+	if (trigLatch < 0.5) {
+		gateT = holdSamps;
+		trigLatch = 1.0;
+	}
+} else if (envF < envS * 1.25) {
+	trigLatch = 0.0;
+}
+
+if (gateT > 0.0) { gateT = maximum(gateT - 1.0, 0.0); }
+
+// --- Gate envelope over the hold time ------------------------------------
+let uPhase = clamp(1.0 - gateT / holdSamps, 0.0, 1.0);
+let inWin = (gateT > 0.0) ? 1.0 : 0.0;
+
+// Shape 1 = flat then hard cut; shape 0 = -60 dB fade across the whole hold
+let fadeCurve = exp(0.0 - 6.907755 * uPhase);
+let gShape = linearinterp(clamp(gate_shape, 0.0, 1.0), fadeCurve, 1.0);
+let relSamps = clamp(holdSamps * 0.02, 8.0, 0.003 * sr);
+let relRamp = clamp(((1.0 - uPhase) * holdSamps) / relSamps, 0.0, 1.0);
+let gTarget = gShape * inWin * relRamp;
+// The output uses a plain window (no shape curve): the shape belongs in the
+// loop, the window keeps the cut itself click-free
+let outGate = inWin * relRamp;
+
+// Smooth the gate gain so the switch itself cannot click
+gateSm = gateSm + 0.02 * (gTarget - gateSm);
+let gEnv = gateSm;
+// The loop keeps a small leak when closed, so the combs empty instead of
+// bursting back when the next gate opens
+let fbGate = maximum(gEnv, 0.0004);
+
+// --- Six parallel combs, each damped and gated in its own loop ------------
+let toneF = clamp(tone_hz, 200.0, sr * 0.45);
+let toneC = 1.0 - exp(0.0 - 2.0 * pi * toneF / sr);
+// The body is tuned to outlast its own gate (twice the hold), so a long gate
+// is still full when it cuts; gate_shape is what makes it fade instead
+let rt60 = clamp(2.0 * divFrac * barSec, 0.4, 12.0);
+
+let xin = 0.5 * (pL + pR);
+let combSum = 0.0;
+
+for (let k: Int = 0; k < 6; k++) {
+	let lenMs = 19.3 + 2.6 * k + 0.75 * k * k;
+	let lenS = clamp(mstosamps(lenMs), 8.0, 8180.0);
+	let gDecay = clamp(exp(0.0 - 6.907755 * (lenS / sr) / rt60), 0.0, 0.98);
+	let rp = cIdx - lenS;
+	while (rp < 0.0) { rp += 8192.0; }
+	let i0: Int = floor(rp);
+	let y = comb[k][i0 & 8191];
+	combSum += y;
+	clp[k] = clp[k] + toneC * (y - clp[k]);
+	comb[k][cIdx] = xin + clp[k] * gDecay * fbGate;
+}
+cIdx = (cIdx + 1) & 8191;
+
+// --- Diffusion and stereo: different allpass pairs per channel -------------
+let gAp = 0.5 + 0.35 * clamp(diffuse, 0.0, 1.0);
+let dL1 = apStep(0, combSum, clamp(mstosamps(5.3), 4.0, 2000.0), gAp);
+let wetLraw = apStep(1, dL1, clamp(mstosamps(1.9), 4.0, 2000.0), gAp);
+let dR1 = apStep(2, combSum, clamp(mstosamps(6.1), 4.0, 2000.0), gAp);
+let wetRraw = apStep(3, dR1, clamp(mstosamps(2.3), 4.0, 2000.0), gAp);
+let wetL = wetLraw * outGate;
+let wetR = wetRraw * outGate;
+apIdx = (apIdx + 1) & 2047;
+
+let norm = 0.38;
+let sL = wetL * norm;
+let sR = wetR * norm;
+
+// --- Width (mid/side) -----------------------------------------------------
+let mid = 0.5 * (sL + sR);
+let side = 0.5 * (sL - sR) * clamp(width, 0.0, 1.0);
+let oL = mid + side;
+let oR = mid - side;
+
+let g = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * g;
+out2 = oR * g;

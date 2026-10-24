@@ -1,0 +1,66 @@
+================================================================================
+rev_shimmer_just — Parameter Information
+================================================================================
+
+WHAT IT IS
+A shimmer reverb: the tail is fed back through a grain pitch shifter, so every
+pass climbs by one fixed interval. Because the interval is 5-limit and the loop
+is closed, the stacked tail builds a just-intonation chord (root, octave,
+twelfth, double octave …) instead of the drifting equal-tempered stack a
+semitone-based shifter produces.
+
+Source: Abel & Werner, DAFx-15 Paper 72 §3.3 (pitch by scaling the ringing
+frequencies — the paper's 2^{σ/12} is replaced here by 5-limit ratios) inside a
+diffused delay loop after Beltrán et al., DAFx-99 §2.5.
+
+100% wet, no dry/wet. Classic for "space bass" pads and for making a single
+tuba note into a chord.
+
+PARAMETERS (7 + output gain)
+
+1. predelay_ms — 0…200 ms, default 25 ms
+   Gap before the shimmer. Short keeps it attached to the note; long lets the
+   note speak before the octave stack arrives.
+
+2. decay_s — 1…30 s, default 8 s
+   RT60 of the loop (which is about twice the grain window long). Long values
+   let several upward passes accumulate into a full chord.
+
+3. interval — 5/4, 4/3, 3/2, 5/3, 2/1, 5/2, 3/1; default 2/1
+   The 5-limit interval added per pass. 2/1 gives the classic octave shimmer;
+   3/2 and 5/3 make a narrower, more chordal stack; 3/1 gets huge fast.
+
+4. shift_mix — 0…1, default 0.55
+   How much of the feedback is pitch-shifted (the rest is the plain loop).
+   At 0 the effect is an ordinary diffused reverb; at 1 every pass is shifted
+   and the output is the shifted signal only. Intermediate values mix a
+   straight reverb body under the octave layer, which is what keeps the tuba's
+   fundamental present under the shimmer.
+
+5. tone_hz — 500…12000 Hz, default 4000 Hz
+   One-pole lowpass in the loop. Shifting up adds brightness on every pass, so
+   this is the control that keeps a long shimmer from turning into hiss.
+
+6. window_ms — 40…200 ms, default 90 ms
+   Grain length of the shifter. Short = grainy, audible flutter; long = smooth,
+   but the grain repeats become audible as a slow warble.
+
+7. width — 0…1, default 0.9
+   Mid/side spread. The two channels run the shifter with a 0.37 grain-phase
+   offset, so at 1 they are fully decorrelated.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: connected but unused — the interval is fixed by the parameter, not by f0.
+- in4: one-bar phasor, connected but unused — shimmer time is in seconds.
+- out1 / out2: stereo wet only.
+
+NOTES
+- The shifter is a two-head Hann-crossfaded grain shifter reading a single
+  loop line; there is no internal pitch detector and no f0 dependence.
+- Feedback is capped at 0.99 and the lowpass sits inside the loop, so the
+  upward stack cannot run away.
+- Interval choices are 5-limit only: 5/4, 4/3, 3/2, 5/3, 2/1, 5/2, 3/1.

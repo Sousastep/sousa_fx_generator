@@ -1,0 +1,59 @@
+================================================================================
+rev_plate_dattorro — Parameter Information
+================================================================================
+
+WHAT IT IS
+A plate reverb built on the Dattorro (JAES 1997) topology as implemented in
+Beltrán et al., "Matlab Implementation of Reverberation Algorithms", DAFx-99 §3
+and Table 1: predelay → bandwidth lowpass → four input allpasses → two
+cross-coupled delay lines of 4453/1800 and 4217/2656 samples (at 29.76 kHz,
+scaled to your sample rate), each with a decay-diffusion allpass, a damping
+lowpass, a decay gain and four alternating output taps.
+
+Dense, bright and fast to build up — the classic plate for snare and vocal
+throws. 100% wet, no dry/wet: put it on an aux send or replace the dry outside.
+
+PARAMETERS (7 + output gain)
+
+1. predelay_ms — 0…200 ms, default 20 ms
+   Gap before the plate. 0–15 ms welds the plate to the transient; 40–200 ms
+   pushes it behind the note for a bigger perceived room.
+
+2. decay_s — 0.3…12 s, default 2.0 s
+   RT60 of the tank. The decay gain is solved from the tank's half-loop length,
+   so the dialled time stays roughly true at any sample rate.
+
+3. damp_hz — 500…16000 Hz, default 6000 Hz
+   One-pole lowpass in each tank half. 2–4 kHz makes a dark, old plate;
+   10 kHz+ keeps the metal bright.
+
+4. diffuse — 0…1, default 0.65
+   Gain of the four input allpasses (0.40…0.75). Low = discrete early echoes
+   before the tail; high = the tail starts immediately with no flutter.
+
+5. wobble_ms — 0…3 ms, default 0.8 ms
+   Depth of the slow modulation on the tank's decay-diffusion allpasses.
+   This is what stops a plate from ringing metallically on sustained notes.
+
+6. wobble_hz — 0.05…2 Hz, default 0.35 Hz
+   Rate of that modulation. Below 0.2 Hz it reads as drift, above 1 Hz as a
+   subtle chorus on the tail.
+
+7. width — 0…1, default 1.0
+   Mid/side spread of the two tank halves. 0 collapses to mono, 1 is the full
+   cross-coupled stereo image.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim, after everything. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: connected but unused (keeps the batch inlet layout identical).
+- in4: one-bar phasor, connected but unused — a plate has no tempo-locked time.
+- out1 / out2: stereo wet only.
+
+NOTES
+- Decay diffusion allpass gains are fixed at 0.5, as in Dattorro's tank.
+- Level is normalised against the decay gain, so long tails do not get louder.
+- Delay lengths are scaled from the paper's 29.76 kHz table; at 96 kHz and above
+  the longest line saturates the buffer and the plate gets shorter.

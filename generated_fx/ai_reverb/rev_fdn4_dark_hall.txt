@@ -1,0 +1,194 @@
+// ============================================================================
+// rev_fdn4_dark_hall.txt
+// A four-line FDN hall whose tail is dark and sub-free.
+// From: Beltrán et al., DAFx-99, §5.1 — Jot's reverberator: a bank of delay
+//       lines with a unitary matrix A (A·A^T = I) in the feedback loop, plus a
+//       global absorptive filter; the 4x4 Hadamard matrix used here is the
+//       smallest unitary mixing matrix. Also Dahl & Jot, "A Reverberator Based
+//       on Absorbent All-Pass Filters", DAFx-00, §2.1 (unitary-feedback delay
+//       networks), for the losses-in-the-loop form.
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only (no pitch-relative parameter)
+//   in4: 0..1 one-bar phasor, bound only (hall time is in seconds, not bars)
+// Outlets:
+//   out1 / out2: stereo hall, wet only
+// ============================================================================
+
+@param({ min: 0, max: 250 }) predelay_ms = 30;      // predelay
+@param({ min: 15, max: 120 }) size_ms = 45;         // room size
+@param({ min: 1, max: 20 }) decay_s = 6.0;          // decay
+@param({ min: 250, max: 8000 }) damp_hz = 1500;     // damping
+@param({ min: 20, max: 500 }) lowcut_hz = 80;       // low cut
+@param({ min: 0, max: 1 }) mod_depth = 0.3;         // modulation
+@param({ min: 0, max: 1 }) width = 1.0;             // width
+@param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
+
+@state preL = new FixedSampleArray(16384);
+@state preR = new FixedSampleArray(16384);
+@state preIdx: Int = 0;
+
+@state line0 = new FixedSampleArray(16384);
+@state line1 = new FixedSampleArray(16384);
+@state line2 = new FixedSampleArray(16384);
+@state line3 = new FixedSampleArray(16384);
+@state wIdx: Int = 0;
+
+@state lp0 = 0.0;
+@state lp1 = 0.0;
+@state lp2 = 0.0;
+@state lp3 = 0.0;
+@state hx0 = 0.0;
+@state hx1 = 0.0;
+@state hx2 = 0.0;
+@state hx3 = 0.0;
+@state hy0 = 0.0;
+@state hy1 = 0.0;
+@state hy2 = 0.0;
+@state hy3 = 0.0;
+@state modPh = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3; // keeps the in3 port present
+let barIn = in4;      // accepted for the batch contract; hall time is seconds
+
+// --- Predelay (ms) ---------------------------------------------------------
+preL[preIdx] = xL;
+preR[preIdx] = xR;
+
+let preSamps = clamp(mstosamps(predelay_ms), 1.0, 16300.0);
+
+let rpL = preIdx - preSamps;
+while (rpL < 0.0) { rpL += 16384.0; }
+let piL: Int = floor(rpL);
+let pL = cubicinterp(rpL - piL,
+	preL[(piL - 1 + 16384) & 16383],
+	preL[piL & 16383],
+	preL[(piL + 1) & 16383],
+	preL[(piL + 2) & 16383]);
+
+let rpR = preIdx - preSamps;
+while (rpR < 0.0) { rpR += 16384.0; }
+let piR: Int = floor(rpR);
+let pR = cubicinterp(rpR - piR,
+	preR[(piR - 1 + 16384) & 16383],
+	preR[piR & 16383],
+	preR[(piR + 1) & 16383],
+	preR[(piR + 2) & 16383]);
+
+preIdx = (preIdx + 1) & 16383;
+
+// --- Line lengths: mutually prime-ish ratios of the room size -------------
+let baseSamps = clamp(mstosamps(size_ms), 8.0, 7000.0);
+let modPhInc = 0.37 / sr;
+modPh = wrap(modPh + modPhInc, 0.0, 1.0);
+let modAmt = clamp(mod_depth, 0.0, 1.0) * 6.0;
+
+let len0 = clamp(baseSamps * 1.00 + modAmt * sin(2.0 * pi * modPh), 8.0, 16300.0);
+let len1 = clamp(baseSamps * 1.31 + modAmt * sin(2.0 * pi * modPh + 1.5707963), 8.0, 16300.0);
+let len2 = clamp(baseSamps * 1.71 + modAmt * sin(2.0 * pi * modPh + 3.1415927), 8.0, 16300.0);
+let len3 = clamp(baseSamps * 2.13 + modAmt * sin(2.0 * pi * modPh + 4.7123890), 8.0, 16300.0);
+
+// --- Read the four lines --------------------------------------------------
+let rd0 = wIdx - len0;
+while (rd0 < 0.0) { rd0 += 16384.0; }
+let i0: Int = floor(rd0);
+let y0 = cubicinterp(rd0 - i0,
+	line0[(i0 - 1 + 16384) & 16383],
+	line0[i0 & 16383],
+	line0[(i0 + 1) & 16383],
+	line0[(i0 + 2) & 16383]);
+
+let rd1 = wIdx - len1;
+while (rd1 < 0.0) { rd1 += 16384.0; }
+let i1: Int = floor(rd1);
+let y1 = cubicinterp(rd1 - i1,
+	line1[(i1 - 1 + 16384) & 16383],
+	line1[i1 & 16383],
+	line1[(i1 + 1) & 16383],
+	line1[(i1 + 2) & 16383]);
+
+let rd2 = wIdx - len2;
+while (rd2 < 0.0) { rd2 += 16384.0; }
+let i2: Int = floor(rd2);
+let y2 = cubicinterp(rd2 - i2,
+	line2[(i2 - 1 + 16384) & 16383],
+	line2[i2 & 16383],
+	line2[(i2 + 1) & 16383],
+	line2[(i2 + 2) & 16383]);
+
+let rd3 = wIdx - len3;
+while (rd3 < 0.0) { rd3 += 16384.0; }
+let i3: Int = floor(rd3);
+let y3 = cubicinterp(rd3 - i3,
+	line3[(i3 - 1 + 16384) & 16383],
+	line3[i3 & 16383],
+	line3[(i3 + 1) & 16383],
+	line3[(i3 + 2) & 16383]);
+
+// --- Absorptive losses in the loop: one-pole lowpass + DC blocker ----------
+let dampF = clamp(damp_hz, 50.0, sr * 0.45);
+let dampC = 1.0 - exp(0.0 - 2.0 * pi * dampF / sr);
+let cutF = clamp(lowcut_hz, 10.0, sr * 0.45);
+let cutR = 1.0 - 2.0 * pi * cutF / sr;
+
+lp0 = lp0 + dampC * (y0 - lp0);
+lp1 = lp1 + dampC * (y1 - lp1);
+lp2 = lp2 + dampC * (y2 - lp2);
+lp3 = lp3 + dampC * (y3 - lp3);
+
+let h0 = lp0 - hx0 + cutR * hy0;
+let h1 = lp1 - hx1 + cutR * hy1;
+let h2 = lp2 - hx2 + cutR * hy2;
+let h3 = lp3 - hx3 + cutR * hy3;
+hx0 = lp0; hy0 = h0;
+hx1 = lp1; hy1 = h1;
+hx2 = lp2; hy2 = h2;
+hx3 = lp3; hy3 = h3;
+
+// --- Per-line decay gain (each line is its own loop length) ---------------
+let rt60 = clamp(decay_s, 1.0, 20.0);
+let g0 = clamp(exp(0.0 - 6.907755 * (len0 / sr) / rt60), 0.0, 0.985);
+let g1 = clamp(exp(0.0 - 6.907755 * (len1 / sr) / rt60), 0.0, 0.985);
+let g2 = clamp(exp(0.0 - 6.907755 * (len2 / sr) / rt60), 0.0, 0.985);
+let g3 = clamp(exp(0.0 - 6.907755 * (len3 / sr) / rt60), 0.0, 0.985);
+
+let f0 = h0 * g0;
+let f1 = h1 * g1;
+let f2 = h2 * g2;
+let f3 = h3 * g3;
+
+// --- Unitary mixing: 4x4 Hadamard / 2 -------------------------------------
+let m0 = 0.5 * (f0 + f1 + f2 + f3);
+let m1 = 0.5 * (f0 - f1 + f2 - f3);
+let m2 = 0.5 * (f0 + f1 - f2 - f3);
+let m3 = 0.5 * (f0 - f1 - f2 + f3);
+
+// --- Inject the (pre-delayed) input and advance ---------------------------
+line0[wIdx] = m0 + 0.5 * pL;
+line1[wIdx] = m1 + 0.5 * pR;
+line2[wIdx] = m2 + 0.5 * pL;
+line3[wIdx] = m3 + 0.5 * pR;
+wIdx = (wIdx + 1) & 16383;
+
+// --- Output: two orthogonal tap pairs ------------------------------------
+let wetL = 0.55 * (y0 + y2) - 0.35 * y1;
+let wetR = 0.55 * (y1 + y3) - 0.35 * y0;
+
+let gMean = 0.25 * (g0 + g1 + g2 + g3);
+let norm = 2.1 * sqrt(maximum(1.0 - gMean * gMean, 0.0001));
+let sL = wetL * norm;
+let sR = wetR * norm;
+
+// --- Width (mid/side) -----------------------------------------------------
+let mid = 0.5 * (sL + sR);
+let side = 0.5 * (sL - sR) * clamp(width, 0.0, 1.0);
+let oL = mid + side;
+let oR = mid - side;
+
+let g = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * g;
+out2 = oR * g;

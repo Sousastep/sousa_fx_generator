@@ -1,0 +1,152 @@
+// ============================================================================
+// dly_dub_echo.txt
+// A dub echo: bar-locked repeats that darken and smear as they fade.
+// From: Martin de Boer, "Tapiir, A Software Multitap Delay", DAFx-01 Paper 6,
+//       §2.1 — delay lines whose outputs are cross-fed into each other's input
+//       mixers, which is how a ping-pong repeat pattern is built; the loop
+//       filters and the diffusion allpass are the dub-mixer additions.
+// 100% wet: only the repeats come out, the dry tuba stays outside.
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only (no pitch-relative parameter)
+//   in4: 0..1 one-bar phasor — the repeat time is a subdivision of it
+// Outlets:
+//   out1 / out2: stereo echoes, wet only
+// ============================================================================
+
+@param({ enum: ["1/16", "1/8T", "1/8", "1/4", "1/2", "1 bar"] }) echo_div = 3; // repeat time
+@param({ min: 0, max: 0.95 }) feedback = 0.6;       // feedback
+@param({ min: 300, max: 12000 }) tone_hz = 2200;    // damping
+@param({ min: 20, max: 400 }) lowcut_hz = 120;      // low cut
+@param({ min: 0, max: 1 }) smear = 0.25;            // smear
+@param({ min: 0, max: 1 }) pingpong = 0.5;          // ping-pong
+@param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
+
+@state dlyL = new FixedSampleArray(262144);
+@state dlyR = new FixedSampleArray(262144);
+@state wIdx: Int = 0;
+
+// One diffusion allpass per channel
+@state apL = new FixedSampleArray(4096);
+@state apR = new FixedSampleArray(4096);
+@state apIdx: Int = 0;
+
+@state lpL = 0.0;
+@state lpR = 0.0;
+@state hxL = 0.0;
+@state hxR = 0.0;
+@state hyL = 0.0;
+@state hyR = 0.0;
+
+@state barSec = 2.0;      // held bar period; 2 s = 120 BPM until in4 is seen
+@state barCnt = 0.0;
+@state prevBarIn = 0.0;
+@state dSlew = 96000.0;   // current delay in samples, slewed toward the target
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3; // keeps the in3 port present
+
+// --- Bar clock: follow in4, otherwise free-run at the last measured bar ----
+let barIn = clamp(in4, 0.0, 1.0);
+let barMoved = (abs(barIn - prevBarIn) > 0.0000005) ? 1.0 : 0.0;
+
+if (barIn < prevBarIn - 0.5) {
+	if (barCnt > sr * 0.25 && barCnt < sr * 12.0) { barSec = barCnt / sr; }
+	barCnt = 0.0;
+} else if (barMoved > 0.5) {
+	barCnt += 1.0;
+}
+prevBarIn = barIn;
+
+// --- Repeat time as a bar subdivision -------------------------------------
+let divFrac = 0.0625;
+if (echo_div == 1) { divFrac = 0.0833333; }
+else if (echo_div == 2) { divFrac = 0.125; }
+else if (echo_div == 3) { divFrac = 0.25; }
+else if (echo_div == 4) { divFrac = 0.5; }
+else if (echo_div == 5) { divFrac = 1.0; }
+
+let dTarget = clamp(divFrac * barSec * sr, 4.0, 262100.0);
+
+// Slew the read point: changing the subdivision glides like tape instead of
+// clicking, and the phasor briefly dropping out never jumps the delay
+dSlew = dSlew + 0.0004 * (dTarget - dSlew);
+let dSamps = clamp(dSlew, 4.0, 262100.0);
+
+// --- Read the line --------------------------------------------------------
+let rdL = wIdx - dSamps;
+while (rdL < 0.0) { rdL += 262144.0; }
+let iL: Int = floor(rdL);
+let tapL = cubicinterp(rdL - iL,
+	dlyL[(iL - 1 + 262144) & 262143],
+	dlyL[iL & 262143],
+	dlyL[(iL + 1) & 262143],
+	dlyL[(iL + 2) & 262143]);
+
+let rdR = wIdx - dSamps;
+while (rdR < 0.0) { rdR += 262144.0; }
+let iR: Int = floor(rdR);
+let tapR = cubicinterp(rdR - iR,
+	dlyR[(iR - 1 + 262144) & 262143],
+	dlyR[iR & 262143],
+	dlyR[(iR + 1) & 262143],
+	dlyR[(iR + 2) & 262143]);
+
+// --- Feedback filters: darkening lowpass + sub-removing DC blocker --------
+let toneF = clamp(tone_hz, 100.0, sr * 0.45);
+let toneC = 1.0 - exp(0.0 - 2.0 * pi * toneF / sr);
+let cutF = clamp(lowcut_hz, 10.0, sr * 0.45);
+let cutR = 1.0 - 2.0 * pi * cutF / sr;
+
+lpL = lpL + toneC * (tapL - lpL);
+lpR = lpR + toneC * (tapR - lpR);
+
+let fL = lpL - hxL + cutR * hyL;
+let fR = lpR - hxR + cutR * hyR;
+hxL = lpL; hyL = fL;
+hxR = lpR; hyR = fR;
+
+// --- Diffusion (smear) on the way back into the line ---------------------
+let apLenL = clamp(mstosamps(11.3), 4.0, 4000.0);
+let apLenR = clamp(mstosamps(13.1), 4.0, 4000.0);
+let gAp = 0.72 * clamp(smear, 0.0, 1.0);
+
+let rpL = apIdx - apLenL;
+while (rpL < 0.0) { rpL += 4096.0; }
+let aL: Int = floor(rpL);
+let xdL = apL[aL & 4095];
+let vL = fL + gAp * xdL;
+apL[apIdx] = vL;
+let sL = xdL - gAp * vL;
+
+let rpR = apIdx - apLenR;
+while (rpR < 0.0) { rpR += 4096.0; }
+let aR: Int = floor(rpR);
+let xdR = apR[aR & 4095];
+let vR = fR + gAp * xdR;
+apR[apIdx] = vR;
+let sR = xdR - gAp * vR;
+apIdx = (apIdx + 1) & 4095;
+
+// --- Cross-feed (ping-pong) and write ------------------------------------
+let fb = clamp(feedback, 0.0, 0.95);
+let ping = clamp(pingpong, 0.0, 1.0);
+let backL = linearinterp(ping, sL, sR) * fb;
+let backR = linearinterp(ping, sR, sL) * fb;
+
+// At full ping-pong the right line takes no direct input, so a mono source
+// alternates sides instead of echoing identically in both
+dlyL[wIdx] = xL + backL;
+dlyR[wIdx] = xR * (1.0 - ping) + backR;
+wIdx = (wIdx + 1) & 262143;
+
+// --- Output: the repeats only -------------------------------------------
+let norm = 0.72 * sqrt(maximum(1.0 - fb * fb, 0.0025));
+let wetL = tapL * norm;
+let wetR = tapR * norm;
+
+let g = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = wetL * g;
+out2 = wetR * g;
