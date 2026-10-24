@@ -1,0 +1,115 @@
+// ============================================================================
+// phase_dist_cz_bass.txt — CZ-style phase-distortion bass locked to the tuba
+//
+// From: M. Smart, "Wave Pulse Phase Modulation: Hybridising Phase Modulation
+//       and Phase Distortion", DAFx-25 paper 48 (phase distortion as a
+//       variable phase map into a fixed carrier, the Casio CZ approach);
+//       "Adaptive Phase Distortion Synthesis", DAFx-09 paper 12 (PD as a
+//       time-varying phase warp driven by a control signal).
+//
+// A breakpoint phase map compresses the first part of each tuba cycle and
+// stretches the rest, so a sine carrier gains the CZ brass/reed edge without
+// any nonlinearity in the amplitude domain. dcw moves the breakpoint (the CZ
+// DCW); the bar phasor sweeps it for the liquid "talking" motion. A carrier
+// morph adds a saw for a harder synth tone.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. 0 = unknown -> hold last valid f0 (init 55 Hz).
+//        No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor for the DCW sweep; held 0 -> free 0.14 Hz LFO.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+@param({ min: 0, max: 1 }) dcw = 0.45;                // phase distortion
+@param({ min: 0, max: 1 }) shape = 0.3;               // sine → saw carrier
+@param({ min: 0, max: 1 }) bar_depth = 0.3;           // bar sweep depth
+@param({ min: 300, max: 12000 }) tone_hz = 4000;      // tone
+@param({ min: 0, max: 1 }) mix = 0.85;                // dry/wet
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state phBase = 0.0;
+@state f0Hold = 55.0;
+@state f0Smooth = 55.0;
+@state env = 0.0;
+
+@state lp1L = new onepole();
+@state lp2L = new onepole();
+@state lp1R = new onepole();
+@state lp2R = new onepole();
+
+@state freeLfo = new phasor();
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+
+// Breakpoint phase map: compress [0, d) into the first half of the cycle and
+// stretch [d, 1) over the second half. d = 0.5 is the identity (pure sine).
+function pdPhase(p: number, d: number): number {
+	if (p < d) {
+		return 0.5 * p / d;
+	}
+	return 0.5 + 0.5 * (p - d) / (1.0 - d);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- Pitch: hold last valid -------------------------------------------------
+if (pitchIn > 15.0 && pitchIn < 1200.0) {
+	f0Hold = pitchIn;
+}
+let slew = 1.0 - exp(0.0 - 1.0 / (0.010 * sr));
+f0Smooth += (clamp(f0Hold, 15.0, 1200.0) - f0Smooth) * slew;
+let f0 = clamp(f0Smooth, 15.0, 900.0);
+
+// --- Bar phasor: sample-and-hold the last valid value ----------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+let lfoPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeLfo.next(0.14);
+let lfo = 0.5 + 0.5 * sin(2.0 * pi * lfoPh);
+
+// --- Phase ramp and DCW -----------------------------------------------------
+phBase = wrap(phBase + f0 / sr, 0.0, 1.0);
+
+let depth = clamp(bar_depth, 0.0, 1.0);
+let dcwEff = clamp(dcw, 0.0, 1.0) * (1.0 - 0.65 * depth * (1.0 - lfo));
+let breakpoint = clamp(0.5 - 0.44 * dcwEff, 0.03, 0.5);
+
+let q = pdPhase(phBase, breakpoint);
+let sineCarrier = sin(2.0 * pi * q);
+let sawCarrier = 2.0 * q - 1.0;
+let shp = clamp(shape, 0.0, 1.0);
+let voice = linearinterp(shp, sineCarrier, 0.7 * sawCarrier);
+voice *= 0.9 - 0.2 * shp;
+
+// --- Tone, gate -------------------------------------------------------------
+let cut = clamp(tone_hz, 300.0, 12000.0) * (0.75 + 0.25 * lfo);
+let cutSafe = clamp(cut, 120.0, sr * 0.42);
+let yL = lp2L.next(lp1L.next(voice, cutSafe), cutSafe);
+let yR = lp2R.next(lp1R.next(voice, cutSafe), cutSafe);
+
+let absMono = abs(0.5 * (xL + xR));
+let atk = 1.0 - exp(0.0 - 1.0 / (0.003 * sr));
+let rel = 1.0 - exp(0.0 - 1.0 / (0.080 * sr));
+if (absMono > env) {
+	env += (absMono - env) * atk;
+} else {
+	env += (absMono - env) * rel;
+}
+let gate = clamp(sqrt(maximum(env, 0.0)) * 1.7, 0.0, 1.0);
+
+let w = clamp(mix, 0.0, 1.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, yL * gate * 0.85) * gain;
+out2 = linearinterp(w, xR, yR * gate * 0.85) * gain;

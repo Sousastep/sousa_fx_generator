@@ -1,0 +1,108 @@
+// ============================================================================
+// sub_octave_lock.txt — phase-locked 5-limit sub-divider voice for the tuba
+//
+// From: F. Esqueda, O. Lähdeoja & V. Välimäki, "Algorithms for Guitar-Driven
+//       Synthesis: Application to an Augmented Guitar", SMC-18, §2
+//       (sub-octave generator: estimate the fundamental, divide the clock, and
+//       use the divided clock as a coherent sub-oscillator). The division here
+//       is derived from the tracked f0 rather than a Schmitt trigger, so it is
+//       exactly phase-locked and never octave-jumps.
+//
+// The sub phase advances at f0 times an exact 5-limit division (1/2, 2/3, 3/4,
+// 4/5) from the same tracked f0 as the horn, so after each tuba cycle it has
+// advanced by exactly the ratio and no reset is ever needed: the sub stays in
+// phase with the horn and cannot click at the period boundary. Upper divider
+// harmonics make the sub audible on small speakers without a second voice.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. 0 = unknown -> hold last valid f0 (init 55 Hz).
+//        No zero-crossing fallback.
+//   in4: bound only. This is a sustained sub; there is no bar motion.
+//   in5: optional smoothed tuba envelope 0..1. Static / unpatched -> internal
+//        peak follower with gate_ms smoothing.
+// Outlets:
+//   out1 / out2: stereo (sub is mono, dry keeps its stereo image)
+// No safety limiter, no metering.
+// ============================================================================
+
+@param({ min: 0, max: 3, steps: 4 }) sub_ratio = 0;   // division (1/2…4/5)
+@param({ min: 0, max: 1 }) harmonics = 0.25;          // divider harmonics
+@param({ min: 0, max: 1 }) drive = 0.2;               // drive
+@param({ min: 2, max: 100 }) gate_ms = 15;            // gate smoothing
+@param({ min: 0, max: 1 }) mix = 0.7;                 // dry/wet
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state phSub = 0.0;
+@state f0Hold = 55.0;
+@state f0Smooth = 55.0;
+
+@state envFoll = 0.0;
+@state envSmooth = 0.0;
+@state prevEnvIn = 0.0;
+@state envInLast = 0.0;
+@state envInHold = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let unused_in4 = in4;
+let envIn = in5;
+
+// --- Pitch: hold last valid, never map 0 Hz to a real note ------------------
+if (pitchIn > 15.0 && pitchIn < 1200.0) {
+	f0Hold = pitchIn;
+}
+let slew = 1.0 - exp(0.0 - 1.0 / (0.008 * sr));
+f0Smooth += (clamp(f0Hold, 15.0, 1200.0) - f0Smooth) * slew;
+let f0 = clamp(f0Smooth, 15.0, 900.0);
+
+// --- 5-limit division: exactly ratio cycles of sub per tuba cycle -----------
+let ratioIndex = clamp(sub_ratio, 0.0, 3.0);
+let subRatio = 0.5;
+if (ratioIndex >= 0.5 && ratioIndex < 1.5) {
+	subRatio = 2.0 / 3.0;
+} else if (ratioIndex >= 1.5 && ratioIndex < 2.5) {
+	subRatio = 3.0 / 4.0;
+} else if (ratioIndex >= 2.5) {
+	subRatio = 4.0 / 5.0;
+}
+phSub = wrap(phSub + (f0 * subRatio) / sr, 0.0, 1.0);
+let subPhase = phSub;
+
+// --- Sub voice: sine plus optional odd divider harmonics --------------------
+let h = clamp(harmonics, 0.0, 1.0);
+let sub = sin(2.0 * pi * subPhase)
+	+ h * 0.35 * sin(6.0 * pi * subPhase)
+	+ h * 0.18 * sin(10.0 * pi * subPhase);
+let norm = 1.0 / (1.0 + 0.45 * h);
+sub *= norm;
+
+// --- Envelope: in5 when patched and moving, follower otherwise --------------
+let absMono = abs(0.5 * (xL + xR));
+let envRel = 1.0 - exp(0.0 - 1.0 / (0.060 * sr));
+envFoll += (absMono - envFoll) * envRel;
+
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envInLast = envIn;
+	envInHold = 0.1 * sr;
+} else if (envInHold > 0.0) {
+	envInHold -= 1.0;
+}
+prevEnvIn = envIn;
+let envSrc = (envInHold > 0.0) ? clamp(envInLast, 0.0, 1.0) : clamp(envFoll * 4.0, 0.0, 1.0);
+
+let gateS = maximum(clamp(gate_ms, 2.0, 100.0) * 0.001, 0.001);
+envSmooth += (envSrc - envSmooth) * (1.0 - exp(0.0 - 1.0 / (gateS * sr)));
+let gate = clamp(envSmooth, 0.0, 1.0);
+
+// --- Drive, mix, output trim -----------------------------------------------
+let dr = clamp(drive, 0.0, 1.0);
+let driven = tanh(sub * (1.0 + 3.5 * dr)) / (1.0 + 0.6 * dr);
+let wet = driven * gate;
+
+let w = clamp(mix, 0.0, 1.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, wet) * gain;
+out2 = linearinterp(w, xR, wet) * gain;

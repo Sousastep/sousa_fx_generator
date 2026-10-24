@@ -1,0 +1,168 @@
+// ============================================================================
+// hard_sync_5limit.txt — tuba-locked hard-sync bass voice with 5-limit ratios
+//
+// From: J. Timoney, "Virtual Analog Oscillator Hard Synchronisation: Fourier
+//       Series and an Efficient Implementation", DAFx-12 (the slave oscillator
+//       is reset at every master period; slave/master frequency ratio sets the
+//       formant of the sync sound).
+//
+// The master ramp is the tuba's f0; the slave runs at a 5-limit ratio of it
+// (3/2, 2/1, 3/1, 5/2) and is reset on every master cycle. Because the reset
+// is at the master period, the result is exactly periodic at f0 — a synth
+// voice in tune with the horn, with the classic sync "formant" that sweeps
+// with the ratio. Saw and pulse shapes are polyBLEP-corrected and the voice
+// runs 2x oversampled to keep the sync edge out of the sub.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. 0 = unknown -> hold last valid f0 (init 55 Hz).
+//        No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor for the accent; held 0 -> free 0.15 Hz LFO.
+//   in5: optional phase-locked tuba phasor. Moves -> the master ramp is gently
+//        pulled into phase with the horn; static -> f0 integration alone.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+@param({ min: 0, max: 3, steps: 4 }) ratio = 1;        // slave ratio (3/2…5/2)
+@param({ min: 0, max: 1 }) sync_shape = 0.3;           // saw → pulse
+@param({ min: 200, max: 12000 }) tone_hz = 5000;      // tone
+@param({ min: 0, max: 1 }) drive = 0.3;               // drive
+@param({ min: 0, max: 1 }) bar_accent = 0.25;         // bar accent
+@param({ min: 0, max: 1 }) mix = 0.9;                 // dry/wet
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state phMaster = 0.0;
+@state phSlave = 0.0;
+@state f0Hold = 55.0;
+@state f0Smooth = 55.0;
+@state env = 0.0;
+
+@state lp1L = new onepole();
+@state lp2L = new onepole();
+@state lp1R = new onepole();
+@state lp2R = new onepole();
+
+@state freeLfo = new phasor();
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+
+@state prevPhasorIn = 0.0;
+@state phasorLast = 0.0;
+@state phasorHold = 0.0;
+
+function polyBlep(t: number, dt: number): number {
+	if (t < dt) {
+		let x = t / dt;
+		return x + x - x * x - 1.0;
+	}
+	if (t > 1.0 - dt) {
+		let x = (t - 1.0) / dt;
+		return x * x + x + x + 1.0;
+	}
+	return 0.0;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phasorIn = in5;
+
+// --- Pitch hold and glide --------------------------------------------------
+if (pitchIn > 15.0 && pitchIn < 1200.0) {
+	f0Hold = pitchIn;
+}
+let slew = 1.0 - exp(0.0 - 1.0 / (0.010 * sr));
+f0Smooth += (clamp(f0Hold, 15.0, 1200.0) - f0Smooth) * slew;
+let f0 = clamp(f0Smooth, 15.0, 900.0);
+
+// --- 5-limit slave ratio ---------------------------------------------------
+let rIndex = clamp(ratio, 0.0, 3.0);
+let slaveRatio = 2.0;
+if (rIndex < 0.5) {
+	slaveRatio = 3.0 / 2.0;
+} else if (rIndex < 1.5) {
+	slaveRatio = 2.0;
+} else if (rIndex < 2.5) {
+	slaveRatio = 3.0;
+} else {
+	slaveRatio = 5.0 / 2.0;
+}
+
+// --- 2x oversampled hard sync ---------------------------------------------
+let incM = (f0 / sr) * 0.5;
+let incS = (f0 * slaveRatio / sr) * 0.5;
+let shape = clamp(sync_shape, 0.0, 1.0);
+let duty = 0.5 - 0.38 * shape;
+
+let syncSum = 0.0;
+for (let os: Int = 0; os < 2; os++) {
+	let prevM = phMaster;
+	phMaster = wrap(phMaster + incM, 0.0, 1.0);
+	phSlave = wrap(phSlave + incS, 0.0, 1.0);
+
+	// Hard sync: reset the slave phase at every master period boundary.
+	if (phMaster < prevM) {
+		phSlave = 0.0;
+	}
+
+	let sawSlave = 2.0 * phSlave - 1.0 - polyBlep(phSlave, incS);
+	let pulsePhase = wrap(phSlave + duty, 0.0, 1.0);
+	let sawPulse = 2.0 * pulsePhase - 1.0 - polyBlep(pulsePhase, incS);
+	let pulse = 0.5 * (sawSlave - sawPulse);
+
+	syncSum += linearinterp(shape, sawSlave, pulse);
+}
+let syncVoice = 0.5 * syncSum;
+
+// --- Phase lock the master to the tracker's phasor while it moves -----------
+if (abs(phasorIn - prevPhasorIn) > 0.0000001) {
+	phasorLast = phasorIn;
+	phasorHold = 0.1 * sr;
+} else if (phasorHold > 0.0) {
+	phasorHold -= 1.0;
+}
+prevPhasorIn = phasorIn;
+if (phasorHold > 0.0) {
+	let phaseErr = wrap(phasorLast - phMaster, 0.0 - 0.5, 0.5);
+	phMaster = wrap(phMaster + 0.002 * phaseErr, 0.0, 1.0);
+}
+
+// --- Bar accent ------------------------------------------------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+let lfoPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeLfo.next(0.15);
+let accentDepth = clamp(bar_accent, 0.0, 1.0);
+let accent = 1.0 - accentDepth * 0.5 * (1.0 - (0.5 + 0.5 * sin(2.0 * pi * lfoPh)));
+
+// --- Tone, drive, envelope gate -------------------------------------------
+let cut = clamp(tone_hz * (0.8 + 0.2 * accent), 120.0, sr * 0.42);
+let driveAmt = clamp(drive, 0.0, 1.0);
+let preL = tanh(syncVoice * accent * (1.0 + 2.5 * driveAmt)) / (1.0 + 0.4 * driveAmt);
+let preR = preL;
+let yL = lp2L.next(lp1L.next(preL, cut), cut);
+let yR = lp2R.next(lp1R.next(preR, cut), cut);
+
+let absMono = abs(0.5 * (xL + xR));
+let atk = 1.0 - exp(0.0 - 1.0 / (0.003 * sr));
+let rel = 1.0 - exp(0.0 - 1.0 / (0.080 * sr));
+if (absMono > env) {
+	env += (absMono - env) * atk;
+} else {
+	env += (absMono - env) * rel;
+}
+let gate = clamp(sqrt(maximum(env, 0.0)) * 1.7, 0.0, 1.0);
+
+let w = clamp(mix, 0.0, 1.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, yL * 0.5 * gate) * gain;
+out2 = linearinterp(w, xR, yR * 0.5 * gate) * gain;

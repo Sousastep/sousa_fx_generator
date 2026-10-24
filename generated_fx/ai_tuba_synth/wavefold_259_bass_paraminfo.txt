@@ -1,0 +1,63 @@
+================================================================================
+wavefold_259_bass — Parameter Information
+================================================================================
+
+WHAT IT IS
+A Buchla-259-style wavefolder applied to the tuba itself. Instead of clipping,
+the folder reflects peaks back toward zero, so a loud brass note curls into the
+woody, hollow, slightly vocal buzz that made the 259 famous. The fold is a
+smooth periodic curve (sin(pi*x/2)) processed with first-order antiderivative
+antialiasing, so the harmonics it adds do not fold back into the sub.
+
+Source: Esqueda, Pöntynen, Välimäki & Parker, DAFx-17 paper 82 (Buchla 259
+wavefolder); Werner & Azelborn, DAFx-23 paper 61 (ADAA waveshapers).
+
+The fold depth is scaled with f0 and with the note envelope, so low notes get
+as much fold as high ones and decay tails clean up instead of buzzing.
+
+PARAMETERS (6 + output gain)
+
+1. fold — 0…1, default 0.45
+   Fold amount. 0 is essentially the clean horn; 0.45 gives a woody synth
+   edge; near 1 the signal folds several times and becomes a screaming,
+   metallic bass. This is the character knob.
+
+2. symmetry — -1…+1, default 0
+   DC bias into the folder, which makes the fold asymmetric. At 0 only odd
+   harmonics are added; away from 0 the wave gains even harmonics and a
+   "half-wave" thickness. Small values (0.1–0.3) are the musical ones.
+
+3. pre_gain_db — 0…24 dB, default 6 dB
+   Input trim before folding. More gain = more folds at the same fold setting;
+   use it to match your tuba's level.
+
+4. tone_hz — 200…12000 Hz, default 5000 Hz
+   Two-pole lowpass after the folder. Low keeps the fold dark and heavy; high
+   exposes the metallic edge.
+
+5. bar_fold — 0…1, default 0.2
+   How much the one-bar phasor pumps the fold depth. 0 is static; higher makes
+   the fold open on the downbeat and relax through the bar.
+
+6. mix — 0…1, default 0.8
+   Dry tuba against the folded signal. The folded signal keeps the horn's
+   waveform and envelope, so the two sum without a level jump.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz, used only to scale fold drive with register. 0 or
+  out-of-range means "unknown": the last valid pitch is held (init 55 Hz).
+  No zero-crossing fallback.
+- in4: one-bar phasor. Held at 0 the fold pump free-runs at 0.12 Hz.
+- in5 (optional): smoothed tuba envelope 0…1. If unpatched (or static), an
+  internal follower drives the same fold back-off.
+- out1 / out2: stereo.
+
+NOTES
+- ADAA1 uses the exact antiderivative F(x) = -(2/pi)cos(pi*x/2); the fallback
+  is the midpoint value when the input step is tiny.
+- The symmetry bias is removed at the output, so no DC reaches the rig.
+- No safety limiter.

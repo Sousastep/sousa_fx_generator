@@ -1,0 +1,58 @@
+================================================================================
+formant_liquid_bass — Parameter Information
+================================================================================
+
+WHAT IT IS
+A vowel/formant synth bass: a band-limited saw at the tuba's f0 is shaped by
+three vocal-tract bandpass resonances, so the horn turns into a singing,
+"liquid" bass. The vowel knob morphs A → E → O; the bar phasor breathes the
+morph for slow talking-bass movement. A 5-limit tract shift moves all formants
+together (4/5, 1/1, 5/4) without detuning the voice.
+
+Source: Cook, DAFx-98 (source-filter voice synthesis); Arfib, Couturier &
+Kessous, DAFx-02 (vowel formant interpolation).
+
+PARAMETERS (5 + output gain)
+
+1. vowel — 0…1, default 0.4
+   0 = "ah" (open, F1 730 / F2 1090), 0.5 = "eh" (F1 530 / F2 1840),
+   1 = "oh" (F1 570 / F2 840). Around 0.3–0.5 is the most bass-friendly
+   "talking" colour; "oh" is darker and more hollow.
+
+2. formant_shift — 0…2 (stepped), default 1
+   0 = tract at 4/5 (dark, big — formants down a just major third),
+   1 = 1/1 (natural), 2 = 5/4 (bright, forward — formants up a just major
+   third). All 5-limit; the voice pitch itself never changes.
+
+3. q — 0.3…0.95, default 0.7
+   Formant resonance. 0.3 is a soft, broad colour; 0.7 is clearly vocal;
+   0.9+ whistles and rings (the band gains are normalised, so it does not get
+   louder as q rises).
+
+4. bar_depth — 0…1, default 0.35
+   How much the one-bar phasor morphs the vowel. 0 is static; 0.35 gives a
+   slow A↔O breath; 1 sweeps the full range every bar.
+
+5. mix — 0…1, default 0.75
+   Dry tuba against the formant voice. The voice is gated by the horn's own
+   envelope, so the two phrases together.
+
+6. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 or out-of-range means "unknown": the last valid pitch is
+  held (init 55 Hz). No zero-crossing fallback.
+- in4: one-bar phasor. Held at 0 the vowel morph free-runs at 0.10 Hz.
+- in5 (optional): smoothed tuba envelope 0…1. If unpatched (or static), an
+  internal follower gates the voice.
+- out1 / out2: stereo (the two sides use slightly different formant
+  frequencies for width).
+
+NOTES
+- The formant band gains are normalised by (1 − q), so raising resonance
+  changes colour, not level.
+- A fixed 9 kHz one-pole keeps the saw's top end polite; there is no user tone
+  control — the formants are the tone.
+- No safety limiter.

@@ -1,0 +1,155 @@
+// ============================================================================
+// ssb_space_shift.txt — 5-limit single-sideband shifter for inharmonic space bass
+//
+// From: S. Wardle, "A Hilbert-Transformer Frequency Shifter for Audio", DAFx-98
+//       (analytic signal + quadrature carrier: y = re*cos - im*sin shifts the
+//       spectrum up, the + sign shifts it down); F. Esqueda, V. Välimäki &
+//       J. Parker, "Barberpole Phasing and Flanging Illusions", DAFx-15
+//       paper 67 (SSB frequency shifting as the barber-pole/endless engine).
+//
+// Every partial of the tuba is moved by the same number of Hz, chosen as a
+// 5-limit fraction of f0 (f0/4, f0/3, f0/2, 2f0/3, 3f0/4). Because the shift
+// is tied to the horn, the result stays "in key" at the fundamental while the
+// upper partials go deliberately inharmonic — the metallic, bell-like space
+// bass timbre. Feedback re-shifts the shifted signal for rising/falling
+// barber-pole sidebands.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. 0 = unknown -> hold last valid f0 (init 55 Hz).
+//        No zero-crossing fallback.
+//   in4: bound only. A fixed 5-limit shift has no bar-synced motion.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+@param({ min: 0, max: 4, steps: 5 }) interval = 2;     // shift (1/4…3/4 of f0)
+@param({ min: 0, max: 1, steps: 2 }) direction = 0;    // 0 = down, 1 = up
+@param({ min: 0, max: 1 }) glide = 0.2;               // shift glide
+@param({ min: 0, max: 0.7 }) feedback = 0;            // regeneration
+@param({ min: 0, max: 1 }) mix = 0.6;                 // dry/wet
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state lReX = new FixedSampleArray(4);
+@state lReY = new FixedSampleArray(4);
+@state lImX = new FixedSampleArray(4);
+@state lImY = new FixedSampleArray(4);
+@state lDelRe = 0.0;
+
+@state rReX = new FixedSampleArray(4);
+@state rReY = new FixedSampleArray(4);
+@state rImX = new FixedSampleArray(4);
+@state rImY = new FixedSampleArray(4);
+@state rDelRe = 0.0;
+
+@state phShift = 0.0;
+@state f0Hold = 55.0;
+@state shiftSmooth = 27.5;
+
+@state fbL = 0.0;
+@state fbR = 0.0;
+@state dcXL = 0.0;
+@state dcYL = 0.0;
+@state dcXR = 0.0;
+@state dcYR = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let unused_in4 = in4;
+
+// --- Pitch hold and 5-limit shift ------------------------------------------
+if (pitchIn > 15.0 && pitchIn < 1200.0) {
+	f0Hold = pitchIn;
+}
+let f0 = clamp(f0Hold, 15.0, 900.0);
+
+let idx = clamp(interval, 0.0, 4.0);
+let shiftRatio = 0.5;
+if (idx < 0.5) {
+	shiftRatio = 1.0 / 4.0;
+} else if (idx < 1.5) {
+	shiftRatio = 1.0 / 3.0;
+} else if (idx < 2.5) {
+	shiftRatio = 1.0 / 2.0;
+} else if (idx < 3.5) {
+	shiftRatio = 2.0 / 3.0;
+} else {
+	shiftRatio = 3.0 / 4.0;
+}
+let dir = (direction >= 0.5) ? 1.0 : 0.0;
+let shiftTarget = f0 * shiftRatio * (1.0 + dir);
+
+// Glide: 3 ms .. 500 ms one-pole on the shift frequency.
+let glideS = 0.003 + clamp(glide, 0.0, 1.0) * 0.497;
+shiftSmooth += (shiftTarget - shiftSmooth) * (1.0 - exp(0.0 - 1.0 / (glideS * sr)));
+let shiftHz = clamp(shiftSmooth, -2000.0, 2000.0);
+
+phShift = wrap(phShift + shiftHz / sr, 0.0, 1.0);
+let shiftCos = cos(2.0 * pi * phShift);
+let shiftSin = sin(2.0 * pi * phShift);
+
+// --- Hilbert quadrature pair, per channel ----------------------------------
+let cRe0 = 0.4794008656; let cRe1 = 0.8762184935;
+let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983; let cIm1 = 0.7330289323;
+let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
+
+let fbAmt = clamp(feedback, 0.0, 0.7);
+
+// Left channel
+let inL = xL + fbAmt * tanh(fbL) * 0.8;
+let tL = inL;
+let l0 = cRe0 * (tL - lReY[0]) + lReX[0]; lReX[0] = tL; lReY[0] = l0; tL = l0;
+let l1 = cRe1 * (tL - lReY[1]) + lReX[1]; lReX[1] = tL; lReY[1] = l1; tL = l1;
+let l2 = cRe2 * (tL - lReY[2]) + lReX[2]; lReX[2] = tL; lReY[2] = l2; tL = l2;
+let l3 = cRe3 * (tL - lReY[3]) + lReX[3]; lReX[3] = tL; lReY[3] = l3;
+let reL = lDelRe;
+lDelRe = l3;
+
+let tLi = inL;
+let li0 = cIm0 * (tLi - lImY[0]) + lImX[0]; lImX[0] = tLi; lImY[0] = li0; tLi = li0;
+let li1 = cIm1 * (tLi - lImY[1]) + lImX[1]; lImX[1] = tLi; lImY[1] = li1; tLi = li1;
+let li2 = cIm2 * (tLi - lImY[2]) + lImX[2]; lImX[2] = tLi; lImY[2] = li2; tLi = li2;
+let li3 = cIm3 * (tLi - lImY[3]) + lImX[3]; lImX[3] = tLi; lImY[3] = li3;
+let imL = li3;
+
+let shiftL = (dir > 0.5) ? (reL * shiftCos - imL * shiftSin) : (reL * shiftCos + imL * shiftSin);
+
+// Right channel
+let inR = xR + fbAmt * tanh(fbR) * 0.8;
+let tR = inR;
+let r0 = cRe0 * (tR - rReY[0]) + rReX[0]; rReX[0] = tR; rReY[0] = r0; tR = r0;
+let r1 = cRe1 * (tR - rReY[1]) + rReX[1]; rReX[1] = tR; rReY[1] = r1; tR = r1;
+let r2 = cRe2 * (tR - rReY[2]) + rReX[2]; rReX[2] = tR; rReY[2] = r2; tR = r2;
+let r3 = cRe3 * (tR - rReY[3]) + rReX[3]; rReX[3] = tR; rReY[3] = r3;
+let reR = rDelRe;
+rDelRe = r3;
+
+let tRi = inR;
+let ri0 = cIm0 * (tRi - rImY[0]) + rImX[0]; rImX[0] = tRi; rImY[0] = ri0; tRi = ri0;
+let ri1 = cIm1 * (tRi - rImY[1]) + rImX[1]; rImX[1] = tRi; rImY[1] = ri1; tRi = ri1;
+let ri2 = cIm2 * (tRi - rImY[2]) + rImX[2]; rImX[2] = tRi; rImY[2] = ri2; tRi = ri2;
+let ri3 = cIm3 * (tRi - rImY[3]) + rImX[3]; rImX[3] = tRi; rImY[3] = ri3;
+let imR = ri3;
+
+let shiftR = (dir > 0.5) ? (reR * shiftCos - imR * shiftSin) : (reR * shiftCos + imR * shiftSin);
+
+// --- DC block and feedback state -------------------------------------------
+let dcCoef = 1.0 - (2.0 * pi * 12.0 / sr);
+let cleanL = shiftL - dcXL + dcCoef * dcYL;
+dcXL = shiftL;
+dcYL = cleanL;
+let cleanR = shiftR - dcXR + dcCoef * dcYR;
+dcXR = shiftR;
+dcYR = cleanR;
+
+fbL = cleanL;
+fbR = cleanR;
+
+let w = clamp(mix, 0.0, 1.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, cleanL) * gain;
+out2 = linearinterp(w, xR, cleanR) * gain;

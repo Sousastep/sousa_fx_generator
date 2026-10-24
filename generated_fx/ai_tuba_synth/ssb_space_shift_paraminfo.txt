@@ -1,0 +1,55 @@
+================================================================================
+ssb_space_shift — Parameter Information
+================================================================================
+
+WHAT IT IS
+A single-sideband frequency shifter that moves every tuba partial by the same
+number of Hz — chosen as an exact 5-limit fraction of the horn's f0. That is
+different from pitch shifting: the fundamental can stay put while the upper
+partials land between the harmonic series, which is the bell-like, hollow,
+"space bass" colour. Feedback re-shifts the shifted signal, so partials climb
+(or fall) in a barber-pole spiral.
+
+Source: Wardle, DAFx-98 (Hilbert-transformer frequency shifter); Esqueda,
+Välimäki & Parker, DAFx-15 paper 67 (SSB / barber-pole shifting).
+
+PARAMETERS (5 + output gain)
+
+1. interval — 0…4 (stepped), default 2
+   0 = f0/4, 1 = f0/3, 2 = f0/2, 3 = 2f0/3, 4 = 3f0/4. The shift is the
+   interval × f0 in Hz, all 5-limit; the horn keeps its pitch centre while the
+   spectrum goes inharmonic. f0/2 is the classic "half-speed ghost" setting.
+
+2. direction — 0 = down, 1 = up, default 0
+   Which sideband survives. Up glides the partials upward (rising, airy); down
+   pulls them under the fundamental (dark, subby, unsettling).
+
+3. glide — 0…1, default 0.2
+   Smoothing of the shift frequency, 3 ms to 500 ms. Short tracks every tuba
+   note exactly; long makes the shift slide between notes like a tape stop.
+
+4. feedback — 0…0.7, default 0
+   Regeneration around the shifter. 0 is a single clean shift; 0.3–0.5 makes
+   metallic barber-pole sidebands that grow as the note sustains. The loop is
+   tanh-limited, so it will not run away.
+
+5. mix — 0…1, default 0.6
+   Dry tuba against the shifted signal. 0.5–0.7 keeps the horn recognisable
+   while the inharmonic layer sits around it.
+
+6. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 or out-of-range means "unknown": the last valid pitch is
+  held (init 55 Hz). No zero-crossing fallback.
+- in4: bound only — the shift is a fixed interval, not a bar-synced motion.
+- out1 / out2: stereo.
+
+NOTES
+- Quadrature is the four-section one-pole allpass pair (the same coefficients
+  used by the repo's Hilbert effects); the shift is exact for 44.1–48 kHz.
+- A 12 Hz DC blocker after the shifter removes the offset produced when a
+  partial lands at 0 Hz.
+- No safety limiter.

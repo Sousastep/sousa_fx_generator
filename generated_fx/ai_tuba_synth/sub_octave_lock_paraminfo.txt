@@ -1,0 +1,53 @@
+================================================================================
+sub_octave_lock — Parameter Information
+================================================================================
+
+WHAT IT IS
+A clean, phase-locked sub-bass voice derived from the tuba's tracked pitch.
+Instead of ring-modulating or half-waving the horn, it runs a sine at an exact
+5-limit division of f0 (1/2, 2/3, 3/4, 4/5) and follows the horn's envelope.
+Because its phase ramp is driven by the same f0 as the horn, the sub never
+beats against the fundamental and never octave-jumps: the "direct divider"
+behaviour described by Esqueda, Lähdeoja & Välimäki, SMC-18 §2.
+
+Source: Esqueda, Lähdeoja & Välimäki, SMC-18 §2 (sub-octave generator).
+
+PARAMETERS (5 + output gain)
+
+1. sub_ratio — 0…3 (stepped), default 0
+   0 = 1/2 (octave down), 1 = 2/3 (just fifth below), 2 = 3/4 (just fourth
+   below), 3 = 4/5 (just major third below). All 5-limit; no ET ratio.
+
+2. harmonics — 0…1, default 0.25
+   Adds the 3rd and 5th harmonics of the sub. At 0 it is a pure sine (best on a
+   big rig); at 0.25–0.5 it is audible on laptop speakers and adds a little
+   brass "body" without turning into a saw.
+
+3. drive — 0…1, default 0.2
+   Soft saturation of the sub voice. 0 is clean; higher adds low-mid grit and
+   a touch of compression, useful under a riddim drop.
+
+4. gate_ms — 2…100 ms, default 15 ms
+   Envelope smoothing (both directions). Short keeps the tuba's articulation,
+   long makes a sustained drone that swells in and out.
+
+5. mix — 0…1, default 0.7
+   Dry tuba against the sub. The sub is mono and phase-locked, so it adds
+   pressure rather than cancelling the horn's low end.
+
+6. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 or out-of-range means "unknown": the last valid pitch is
+  held (init 55 Hz). No zero-crossing fallback.
+- in4: bound only — a sustained sub has no bar-synced motion.
+- in5 (optional): smoothed tuba envelope 0…1. If it is not patched (or stops
+  moving), an internal peak follower with gate_ms smoothing takes over.
+- out1 / out2: stereo (sub centred, dry keeps its image).
+
+NOTES
+- The sub phase advances at f0 × ratio from the same frequency ramp as the
+  horn, so every tuba cycle adds exactly the ratio's phase — no reset clicks.
+- No safety limiter.

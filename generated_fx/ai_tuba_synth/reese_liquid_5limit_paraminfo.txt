@@ -1,0 +1,65 @@
+================================================================================
+reese_liquid_5limit — Parameter Information
+================================================================================
+
+WHAT IT IS
+A classic Reese/supersaw bass voice built from three band-limited saws at the
+tuba's pitch: one phase-locked unison core and two voices detuned by a just
+(5-limit) comma. The beating you hear is an exact small-integer ratio — 81/80,
+128/125, 25/24 or 16/15 — not an equal-tempered cent offset, so the stack stays
+in tune with the horn however long the note lasts. A bar-synced two-pole tone
+filter supplies the "liquid" movement.
+
+Source: Timoney, DAFx-14 (oscillator waveform animation / detuned bank);
+Weingartner, DAFx-25 paper 68 §supersaw (multi-saw chorus).
+
+At mix = 1 the tuba itself is gone; the voice follows the horn's envelope
+(there is a fast-attack / 80 ms-release gate on the input).
+
+PARAMETERS (7 + output gain)
+
+1. detune — 0…100 cents, default 30 cents
+   Inter-voice detune. The value snaps to the nearest 5-limit comma:
+   <10.7 = unison, 21.5 = 81/80, 41.1 = 128/125, 70.7 = 25/24, and
+   91.2–100 = 16/15 (111.7 cents, the top of the range).
+   Small = tight, thick unison; 70 cents = full wide Reese shimmer.
+
+2. motion — 0…1, default 0.35
+   Depth of the bar-locked tone sweep. 0 is a static stack; higher opens and
+   closes the filter once per bar for the slow liquid bass movement.
+
+3. tone_hz — 200…12000 Hz, default 5000 Hz
+   Cutoff of the two-pole lowpass on the stack. Low values give the dark,
+   rounded deep-dubstep saw; high values let the buzz through.
+
+4. glide_ms — 0…200 ms, default 20 ms
+   Pitch-glide time for f0 changes. Short keeps the tuba's articulation;
+   long turns it into a portamento synth.
+
+5. stereo — 0…1, default 0.4
+   Fans the two detuned voices to opposite sides, core stays centred. At 0 the
+   output is mono-compatible.
+
+6. mix — 0…1, default 1
+   Dry tuba against the voice. The unison core is phase-locked to the horn
+   (and to in5 when patched), so the fundamental adds in phase rather than
+   cancelling.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 or out-of-range means "unknown": the last valid pitch is
+  held (init 55 Hz). There is no zero-crossing fallback.
+- in4: one-bar phasor. Held at 0 the filter free-runs at 0.12 Hz.
+- in5 (optional): phase-locked tuba phasor. When it moves, the unison core is
+  gently pulled into phase with it; unpatched, f0 integration alone runs the
+  bank.
+- out1 / out2: stereo.
+
+NOTES
+- Voice 2 is at ratio r and voice 3 at r^2; powers of 5-limit ratios are still
+  5-limit, so no ET interval can be dialled in.
+- The saws are polyBLEP-corrected, so the stack does not alias into the sub.
+- No safety limiter. Level is left to the player and out_gain_db.

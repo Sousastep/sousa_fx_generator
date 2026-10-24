@@ -1,0 +1,54 @@
+================================================================================
+phase_dist_cz_bass — Parameter Information
+================================================================================
+
+WHAT IT IS
+A Casio-CZ-style phase-distortion bass voice on the tuba's pitch. The
+oscillator is a sine, but its phase is read through a breakpoint map: the first
+part of the cycle is compressed and the rest stretched, so the sine turns into
+a bright brass/reed wave without any amplitude distortion. Moving the breakpoint
+is the CZ "DCW" sweep — the sound gets harder and more vocal as it closes.
+A second carrier morph adds a saw for a more direct synth-bass tone.
+
+Source: Smart, DAFx-25 paper 48 (phase distortion / wave pulse phase
+modulation); DAFx-09 paper 12 (adaptive phase distortion).
+
+PARAMETERS (5 + output gain)
+
+1. dcw — 0…1, default 0.45
+   Phase-distortion amount: 0 leaves the sine untouched, 0.45 is a warm CZ
+   reed, 1 pushes the breakpoint almost to the start of the cycle for a
+   buzzing, formant-like bass. This is the main timbre knob.
+
+2. shape — 0…1, default 0.3
+   Carrier morph from sine (0) to saw (1). The sine side is round and hollow;
+   the saw side is bright and cutting. 0.2–0.5 is the useful bass range.
+
+3. bar_depth — 0…1, default 0.3
+   How far the one-bar phasor sweeps the DCW. At 0 the timbre is static; at
+   higher values the breakpoint opens and closes once per bar for the liquid
+   "talking" motion.
+
+4. tone_hz — 300…12000 Hz, default 4000 Hz
+   Two-pole lowpass. Low for dark dub weight, high to expose the PD edge.
+
+5. mix — 0…1, default 0.85
+   Dry tuba against the PD voice. The voice is tuned to f0 and gated by the
+   horn's envelope.
+
+6. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 or out-of-range means "unknown": the last valid pitch is
+  held (init 55 Hz). No zero-crossing fallback.
+- in4: one-bar phasor. Held at 0 the DCW free-runs at 0.14 Hz.
+- out1 / out2: stereo.
+
+NOTES
+- Phase distortion is a phase map, not a waveshaper: no amplitude clipping and
+  no level-dependent timbre.
+- The breakpoint is clamped to 0.03…0.5, so the map stays monotonic and the
+  oscillator cannot stall.
+- No safety limiter.

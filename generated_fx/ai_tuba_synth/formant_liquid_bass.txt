@@ -1,0 +1,172 @@
+// ============================================================================
+// formant_liquid_bass.txt — phase-locked vowel/formant synth bass on the tuba
+//
+// From: P. R. Cook, "Toward the Perfect Audio Morph? Singing Voice Synthesis
+//       and Processing", DAFx-98 (source-filter voice: a periodic source
+//       through vocal-tract formant resonances); D. Arfib, J.-M. Couturier &
+//       L. Kessous, "Gestural Strategies for Specific Filtering Processes",
+//       DAFx-02 (interpolating between vowel formant sets).
+//
+// A band-limited saw at the tuba's f0 is the glottal source; three
+// state-variable bandpasses are the vocal tract. The vowel control morphs
+// A → E → O, the bar phasor breathes the morph, and a 5-limit formant shift
+// moves the whole tract (4/5, 1/1, 5/4) without retuning the voice. Gated by
+// the horn's envelope, so it sings only while the tuba plays.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. 0 = unknown -> hold last valid f0 (init 55 Hz).
+//        No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor for the vowel morph; held 0 -> free 0.10 Hz LFO.
+//   in5: optional smoothed tuba envelope 0..1 (static -> internal follower).
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+@param({ min: 0, max: 1 }) vowel = 0.4;               // A → E → O
+@param({ min: 0, max: 2, steps: 3 }) formant_shift = 1; // 4/5, 1/1, 5/4
+@param({ min: 0.3, max: 0.95 }) q = 0.7;              // formant resonance
+@param({ min: 0, max: 1 }) bar_depth = 0.35;          // bar morph depth
+@param({ min: 0, max: 1 }) mix = 0.75;                // dry/wet
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state phBase = 0.0;
+@state f0Hold = 55.0;
+@state f0Smooth = 55.0;
+
+@state svf1L = new svf();
+@state svf2L = new svf();
+@state svf3L = new svf();
+@state svf1R = new svf();
+@state svf2R = new svf();
+@state svf3R = new svf();
+
+@state toneL = new onepole();
+@state toneR = new onepole();
+
+@state env = 0.0;
+@state envFoll = 0.0;
+@state prevEnvIn = 0.0;
+@state envInLast = 0.0;
+@state envInHold = 0.0;
+
+@state freeLfo = new phasor();
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+
+function polyBlep(t: number, dt: number): number {
+	if (t < dt) {
+		let x = t / dt;
+		return x + x - x * x - 1.0;
+	}
+	if (t > 1.0 - dt) {
+		let x = (t - 1.0) / dt;
+		return x * x + x + x + 1.0;
+	}
+	return 0.0;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let envIn = in5;
+
+// --- Pitch hold -------------------------------------------------------------
+if (pitchIn > 15.0 && pitchIn < 1200.0) {
+	f0Hold = pitchIn;
+}
+let slew = 1.0 - exp(0.0 - 1.0 / (0.010 * sr));
+f0Smooth += (clamp(f0Hold, 15.0, 1200.0) - f0Smooth) * slew;
+let f0 = clamp(f0Smooth, 15.0, 900.0);
+
+// --- Bar phasor (sample-and-hold) ------------------------------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+let lfoPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeLfo.next(0.10);
+let lfo = 0.5 + 0.5 * sin(2.0 * pi * lfoPh);
+
+// --- Formant sets: A / E / O and the vowel morph ---------------------------
+let v = clamp(clamp(vowel, 0.0, 1.0) + clamp(bar_depth, 0.0, 1.0) * 0.45 * (lfo - 0.5), 0.0, 1.0);
+let f1 = 730.0;
+let f2 = 1090.0;
+let f3 = 2440.0;
+if (v < 0.5) {
+	let t = v * 2.0;
+	f1 = linearinterp(t, 730.0, 530.0);
+	f2 = linearinterp(t, 1090.0, 1840.0);
+	f3 = linearinterp(t, 2440.0, 2480.0);
+} else {
+	let t = (v - 0.5) * 2.0;
+	f1 = linearinterp(t, 530.0, 570.0);
+	f2 = linearinterp(t, 1840.0, 840.0);
+	f3 = linearinterp(t, 2480.0, 2410.0);
+}
+
+let shIndex = clamp(formant_shift, 0.0, 2.0);
+let tract = 1.0;
+if (shIndex < 0.5) {
+	tract = 4.0 / 5.0;
+} else if (shIndex >= 1.5) {
+	tract = 5.0 / 4.0;
+}
+f1 = clamp(f1 * tract, 120.0, sr * 0.40);
+f2 = clamp(f2 * tract, 180.0, sr * 0.42);
+f3 = clamp(f3 * tract, 400.0, sr * 0.44);
+
+// --- Glottal source: band-limited saw at f0 ---------------------------------
+let inc = f0 / sr;
+phBase = wrap(phBase + inc, 0.0, 1.0);
+let saw = 2.0 * phBase - 1.0 - polyBlep(phBase, inc);
+
+// --- Formant bank ----------------------------------------------------------
+let qq = clamp(q, 0.3, 0.95);
+let bandGain = 0.42 * 2.4 * (1.0 - qq);
+
+let b1L = svf1L.next(saw, f1, qq)[2];
+let b2L = svf2L.next(saw, f2, qq)[2];
+let b3L = svf3L.next(saw, f3, qq)[2];
+let b1R = svf1R.next(saw, f1 * 1.004, qq)[2];
+let b2R = svf2R.next(saw, f2 * 0.996, qq)[2];
+let b3R = svf3R.next(saw, f3 * 1.002, qq)[2];
+
+let formL = (b1L + 0.8 * b2L + 0.55 * b3L) * bandGain;
+let formR = (b1R + 0.8 * b2R + 0.55 * b3R) * bandGain;
+
+// Gentle fixed anti-alias / air limit.
+let yL = toneL.next(formL, 9000.0);
+let yR = toneR.next(formR, 9000.0);
+
+// --- Envelope: optional in5, follower otherwise ---------------------------
+let absMono = abs(0.5 * (xL + xR));
+envFoll += (absMono - envFoll) * (1.0 - exp(0.0 - 1.0 / (0.040 * sr)));
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envInLast = envIn;
+	envInHold = 0.1 * sr;
+} else if (envInHold > 0.0) {
+	envInHold -= 1.0;
+}
+prevEnvIn = envIn;
+let envSrc = (envInHold > 0.0) ? clamp(envInLast, 0.0, 1.0) : clamp(envFoll * 4.0, 0.0, 1.0);
+
+let atk = 1.0 - exp(0.0 - 1.0 / (0.004 * sr));
+let rel = 1.0 - exp(0.0 - 1.0 / (0.090 * sr));
+if (envSrc > env) {
+	env += (envSrc - env) * atk;
+} else {
+	env += (envSrc - env) * rel;
+}
+let gate = clamp(sqrt(maximum(env, 0.0)) * 1.5, 0.0, 1.0);
+
+let w = clamp(mix, 0.0, 1.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, yL * gate) * gain;
+out2 = linearinterp(w, xR, yR * gate) * gain;

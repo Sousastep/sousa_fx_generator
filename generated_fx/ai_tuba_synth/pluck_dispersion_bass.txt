@@ -1,0 +1,156 @@
+// ============================================================================
+// pluck_dispersion_bass.txt — pitch-locked Karplus-Strong / DWG bass from the tuba
+//
+// From: J. Kleimola, "Dispersion Modulation using Allpass Filters", DAFx-08
+//       paper 36 (allpass dispersion inside the delay-loop of an extended
+//       Karplus-Strong string, with delay compensation to stay in tune);
+//       J. Abeßer, P. Kramer, C. Dittmar & G. Schuller, "Parametric Audio
+//       Coding of Bass Guitar Recordings using a Tuned Physical Modeling
+//       Algorithm", DAFx-13 paper 9 (tuned bass delay-loop model).
+//
+// A delay line is tuned to an exact 5-limit division of the horn's f0 (1/1 or
+// 1/2) and excited by the tuba. Two first-order allpasses in the loop add
+// string-like dispersion (the high partials arrive early, the "liquid" pluck
+// chirp), a one-pole lowpass damps them, and feedback sets the decay. The
+// delay length is compensated for the allpass group delay at DC, so the loop
+// stays in tune.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. 0 = unknown -> hold last valid f0 (init 55 Hz).
+//        No zero-crossing fallback.
+//   in4: bound only — the string is tuned to f0, not to the bar.
+//   in5: optional smoothed tuba envelope 0..1 (static -> internal follower);
+//        it scales the excitation so note tails do not keep driving the loop.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+@param({ min: 0, max: 1, steps: 2 }) interval = 0;    // 1/1 or 1/2 of f0
+@param({ min: 0.05, max: 8 }) decay_s = 1.2;          // decay time
+@param({ min: 200, max: 8000 }) damping_hz = 1800;    // loop damping
+@param({ min: 0, max: 1 }) dispersion = 0.4;          // string dispersion
+@param({ min: 0, max: 1 }) mix = 0.6;                 // dry/wet
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state bufL = new FixedSampleArray(8192);
+@state bufR = new FixedSampleArray(8192);
+@state wi: Int = 0;
+
+@state lpL = 0.0;
+@state lpR = 0.0;
+
+@state apX1L = 0.0;
+@state apY1L = 0.0;
+@state apX2L = 0.0;
+@state apY2L = 0.0;
+@state apX1R = 0.0;
+@state apY1R = 0.0;
+@state apX2R = 0.0;
+@state apY2R = 0.0;
+
+@state f0Hold = 55.0;
+@state f0Smooth = 55.0;
+
+@state envFoll = 0.0;
+@state prevEnvIn = 0.0;
+@state envInLast = 0.0;
+@state envInHold = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let unused_in4 = in4;
+let envIn = in5;
+
+// --- Pitch hold -------------------------------------------------------------
+if (pitchIn > 15.0 && pitchIn < 1200.0) {
+	f0Hold = pitchIn;
+}
+let slew = 1.0 - exp(0.0 - 1.0 / (0.015 * sr));
+f0Smooth += (clamp(f0Hold, 15.0, 1200.0) - f0Smooth) * slew;
+let f0 = clamp(f0Smooth, 15.0, 900.0);
+
+let ratio = (interval >= 0.5) ? 0.5 : 1.0;
+let targetDelay = sr / (f0 * ratio);
+
+// --- Dispersion allpasses: two stages, coefficient a in 0..0.6 -------------
+let disp = clamp(dispersion, 0.0, 1.0);
+let apA = 0.6 * disp;
+let apDelay = (1.0 - apA) / (1.0 + apA);   // group delay per stage at DC
+let loopDelay = clamp(targetDelay - 2.0 * apDelay, 8.0, 4000.0);
+
+// --- Feedback from the requested decay time (per loop pass) ----------------
+let decayS = maximum(clamp(decay_s, 0.05, 8.0), 0.05);
+let fb = exp2(0.0 - 9.965784 * loopDelay / (decayS * sr));
+fb = clamp(fb, 0.0, 0.9995);
+
+// --- Envelope for excitation scaling ---------------------------------------
+let absMono = abs(0.5 * (xL + xR));
+envFoll += (absMono - envFoll) * (1.0 - exp(0.0 - 1.0 / (0.040 * sr)));
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envInLast = envIn;
+	envInHold = 0.1 * sr;
+} else if (envInHold > 0.0) {
+	envInHold -= 1.0;
+}
+prevEnvIn = envIn;
+let envSrc = (envInHold > 0.0) ? clamp(envInLast, 0.0, 1.0) : clamp(envFoll * 4.0, 0.0, 1.0);
+let excGain = 0.8 * (1.0 - fb) + 0.02;
+
+// --- Damping coefficient ---------------------------------------------------
+let damp = clamp(damping_hz, 200.0, 8000.0);
+let dampC = 1.0 - exp(0.0 - 2.0 * pi * damp / sr);
+
+// --- Read the loop ---------------------------------------------------------
+let readPosL = wi - loopDelay;
+while (readPosL < 0.0) { readPosL += 8192.0; }
+let i0L: Int = floor(readPosL);
+let tapL = cubicinterp(readPosL - i0L,
+	bufL[(i0L - 1 + 8192) & 8191],
+	bufL[i0L & 8191],
+	bufL[(i0L + 1) & 8191],
+	bufL[(i0L + 2) & 8191]);
+
+let readPosR = wi - loopDelay;
+while (readPosR < 0.0) { readPosR += 8192.0; }
+let i0R: Int = floor(readPosR);
+let tapR = cubicinterp(readPosR - i0R,
+	bufR[(i0R - 1 + 8192) & 8191],
+	bufR[i0R & 8191],
+	bufR[(i0R + 1) & 8191],
+	bufR[(i0R + 2) & 8191]);
+
+// --- Loop: damping, dispersion, feedback -----------------------------------
+lpL += dampC * (tapL - lpL);
+lpR += dampC * (tapR - lpR);
+
+let d1L = apA * lpL + apX1L - apA * apY1L;
+apX1L = lpL;
+apY1L = d1L;
+let d2L = apA * d1L + apX2L - apA * apY2L;
+apX2L = d1L;
+apY2L = d2L;
+
+let d1R = apA * lpR + apX1R - apA * apY1R;
+apX1R = lpR;
+apY1R = d1R;
+let d2R = apA * d1R + apX2R - apA * apY2R;
+apX2R = d1R;
+apY2R = d2R;
+
+let excL = xL * excGain * (0.25 + 0.75 * envSrc);
+let excR = xR * excGain * (0.25 + 0.75 * envSrc);
+bufL[wi] = excL + fb * d2L;
+bufR[wi] = excR + fb * d2R;
+wi = (wi + 1) & 8191;
+
+let wetL = tapL * 0.85;
+let wetR = tapR * 0.85;
+
+let w = clamp(mix, 0.0, 1.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, wetL) * gain;
+out2 = linearinterp(w, xR, wetR) * gain;

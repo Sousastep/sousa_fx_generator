@@ -1,0 +1,57 @@
+================================================================================
+pluck_dispersion_bass — Parameter Information
+================================================================================
+
+WHAT IT IS
+A physical-model bass string tuned to the tuba's pitch: the horn excites a
+delay loop whose length is an exact 5-limit division of f0, with damping and
+allpass dispersion inside the loop. Feed it a tuba note and it answers with a
+plucked/bowed hybrid — the attack of the horn, the body and pitch of a string.
+Dispersion makes the high partials arrive slightly early, which is the "liquid"
+chirp of a real bass string rather than a pure delay-loop tone.
+
+Source: Kleimola, DAFx-08 paper 36 (allpass dispersion in an extended
+Karplus-Strong loop, with tuning compensation); Abeßer et al., DAFx-13 paper 9
+(tuned bass physical model).
+
+PARAMETERS (5 + output gain)
+
+1. interval — 0…1 (stepped), default 0
+   0 = string at f0 (1/1), 1 = string an octave below (1/2). Both are exact
+   5-limit; the octave-down setting gives the deep-dubstep sub pluck.
+
+2. decay_s — 0.05…8 s, default 1.2 s
+   Time for the string to fall about 60 dB. Short (0.1–0.3 s) is a muted,
+   trip-hop thump; long is a sustained bowed drone that blooms under the horn.
+
+3. damping_hz — 200…8000 Hz, default 1800 Hz
+   One-pole lowpass in the loop. Low values make the string go dark and short;
+   high values keep the metallic pluck and fret noise.
+
+4. dispersion — 0…1, default 0.4
+   Allpass dispersion in the loop. 0 is a plain Karplus-Strong string; higher
+   values add the inharmonic "stiff string" chirp and a rubbery attack. The
+   loop length is compensated, so raising it does not detune the string.
+
+5. mix — 0…1, default 0.6
+   Dry tuba against the string. The string is tuned to f0, so the two agree at
+   the fundamental; 0.5–0.7 sounds like a doubled bass.
+
+6. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 or out-of-range means "unknown": the last valid pitch is
+  held (init 55 Hz). No zero-crossing fallback.
+- in4: bound only — the string tunes to f0, not to the bar.
+- in5 (optional): smoothed tuba envelope 0…1. If unpatched (or static), an
+  internal follower scales the excitation instead.
+- out1 / out2: stereo (independent loops, slight damping differences).
+
+NOTES
+- Excitation gain is scaled by (1 − loop gain), so a long decay does not mean
+  a louder string — the loop settles near the tuba's own level.
+- Feedback is capped at 0.9995 and the damping filter is passive, so the loop
+  is always stable.
+- No safety limiter.

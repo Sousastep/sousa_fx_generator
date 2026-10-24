@@ -1,0 +1,173 @@
+// ============================================================================
+// reese_liquid_5limit.txt — phase-locked 5-limit Reese stack at the tuba's f0
+//
+// From: J. Timoney, "Examining the Oscillator Waveform Animation Effect",
+//       DAFx-14 (a bank of slightly detuned oscillators is the classic
+//       oscillator-animation / supersaw voice); W. E. Weingartner, "Stable
+//       Limit Cycles as Tunable Signal Sources", DAFx-25 paper 68, §supersaw
+//       (multi-saw chorus, detuned saw oscillator bank).
+//
+// Three band-limited saws share one phase ramp locked to the tuba's pitch.
+// Voice 1 is the unison core (phase-locked to in5 when it moves), voices 2 and
+// 3 sit at a 5-limit comma ratio and its square — 81/80, 128/125, 25/24 or
+// 16/15 — so the beating is a just-intonation comma beat, never an equal-
+// tempered detune. Motion opens the two-pole tone filter from the bar phasor
+// (or a slow free LFO when in4 is held at 0).
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. 0 = unknown -> hold last valid f0 (init 55 Hz).
+//        No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor. Held 0 -> free 0.12 Hz LFO, still usable.
+//   in5: optional phase-locked tuba phasor 0..1. Used only as a gentle phase
+//        reference when it moves; unpatched / static -> f0 integration alone.
+// Outlets:
+//   out1 / out2: stereo, wet only at mix = 1
+// No safety limiter, no metering.
+// ============================================================================
+
+@param({ min: 0, max: 100 }) detune = 30;             // detune (5-limit comma)
+@param({ min: 0, max: 1 }) motion = 0.35;             // liquid motion
+@param({ min: 200, max: 12000 }) tone_hz = 5000;      // tone
+@param({ min: 0, max: 200 }) glide_ms = 20;           // glide
+@param({ min: 0, max: 1 }) stereo = 0.4;              // stereo spread
+@param({ min: 0, max: 1 }) mix = 1;                   // dry/wet
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state phBase = 0.0;
+@state phV2 = 0.0;
+@state phV3 = 0.0;
+@state f0Hold = 55.0;
+@state f0Smooth = 55.0;
+@state env = 0.0;
+
+@state lp1L = new onepole();
+@state lp2L = new onepole();
+@state lp1R = new onepole();
+@state lp2R = new onepole();
+
+@state freeLfo = new phasor();
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+
+@state prevPhasorIn = 0.0;
+@state phasorLast = 0.0;
+@state phasorHold = 0.0;
+
+// Band-limited saw: naive ramp minus the polyBLEP correction at each jump.
+function polyBlep(t: number, dt: number): number {
+	if (t < dt) {
+		let x = t / dt;
+		return x + x - x * x - 1.0;
+	}
+	if (t > 1.0 - dt) {
+		let x = (t - 1.0) / dt;
+		return x * x + x + x + 1.0;
+	}
+	return 0.0;
+}
+
+function sawAt(phase01: number, inc: number): number {
+	return 2.0 * phase01 - 1.0 - polyBlep(phase01, inc);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phasorIn = in5;
+
+// --- Pitch: hold the last valid f0, never read 0 as 1 Hz --------------------
+if (pitchIn > 15.0 && pitchIn < 1200.0) {
+	f0Hold = pitchIn;
+}
+let glideS = maximum(clamp(glide_ms, 0.0, 200.0) * 0.001, 0.001);
+let slew = 1.0 - exp(0.0 - 1.0 / (glideS * sr));
+f0Smooth += (clamp(f0Hold, 15.0, 1200.0) - f0Smooth) * slew;
+let f0 = clamp(f0Smooth, 15.0, 900.0);
+
+// --- 5-limit detune: nearest comma ratio, never an ET interval --------------
+let det = clamp(detune, 0.0, 100.0);
+let detRatio = 1.0;
+if (det >= 10.75 && det < 31.3) {
+	detRatio = 81.0 / 80.0;      // syntonic comma, 21.5 cents
+} else if (det >= 31.3 && det < 55.9) {
+	detRatio = 128.0 / 125.0;    // lesser diesis, 41.1 cents
+} else if (det >= 55.9 && det < 91.2) {
+	detRatio = 25.0 / 24.0;      // just chromatic semitone, 70.7 cents
+} else if (det >= 91.2) {
+	detRatio = 16.0 / 15.0;      // just diatonic semitone, 111.7 cents
+}
+let detRatio2 = detRatio * detRatio;
+
+// --- Phase ramps: voice 1 is the coherent core, 2/3 drift by the comma -------
+let incBase = f0 / sr;
+phBase = wrap(phBase + incBase, 0.0, 1.0);
+phV2 = wrap(phV2 + incBase * detRatio, 0.0, 1.0);
+phV3 = wrap(phV3 + incBase * detRatio2, 0.0, 1.0);
+
+// Gentle phase lock of the core to the tracker's phasor, only while it moves.
+if (abs(phasorIn - prevPhasorIn) > 0.0000001) {
+	phasorLast = phasorIn;
+	phasorHold = 0.1 * sr;
+} else if (phasorHold > 0.0) {
+	phasorHold -= 1.0;
+}
+prevPhasorIn = phasorIn;
+if (phasorHold > 0.0) {
+	let phaseErr = wrap(phasorLast - phBase, 0.0 - 0.5, 0.5);
+	phBase = wrap(phBase + 0.002 * phaseErr, 0.0, 1.0);
+}
+
+// --- Voice bank ------------------------------------------------------------
+let v1 = sawAt(phBase, incBase);
+let v2 = sawAt(phV2, incBase * detRatio);
+let v3 = sawAt(phV3, incBase * detRatio2);
+
+let sp = clamp(stereo, 0.0, 1.0);
+let g2L = 0.5 + 0.4 * sp;
+let g2R = 0.5 - 0.4 * sp;
+let g3L = 0.5 - 0.4 * sp;
+let g3R = 0.5 + 0.4 * sp;
+
+let stackL = 0.34 * (v1 + g2L * v2 + g3L * v3);
+let stackR = 0.34 * (v1 + g2R * v2 + g3R * v3);
+
+// --- Liquid motion: bar phasor (held with 100 ms hold) or free LFO ----------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+let lfoPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeLfo.next(0.12);
+
+let mot = clamp(motion, 0.0, 1.0);
+let lfo = 0.5 + 0.5 * sin(2.0 * pi * lfoPh);
+let cut = clamp(tone_hz, 200.0, 12000.0) * (1.0 - 0.55 * mot * (1.0 - lfo));
+let cutSafe = clamp(cut, 80.0, sr * 0.42);
+
+let yL = lp2L.next(lp1L.next(stackL, cutSafe), cutSafe);
+let yR = lp2R.next(lp1R.next(stackR, cutSafe), cutSafe);
+
+// --- Tuba envelope gate: the synth voice breathes with the horn -------------
+let absMono = abs(0.5 * (xL + xR));
+let atk = 1.0 - exp(0.0 - 1.0 / (0.003 * sr));
+let rel = 1.0 - exp(0.0 - 1.0 / (0.080 * sr));
+if (absMono > env) {
+	env += (absMono - env) * atk;
+} else {
+	env += (absMono - env) * rel;
+}
+let gate = clamp(sqrt(maximum(env, 0.0)) * 1.7, 0.0, 1.0);
+
+let wetL = yL * gate;
+let wetR = yR * gate;
+
+let w = clamp(mix, 0.0, 1.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = (linearinterp(w, xL, wetL)) * gain;
+out2 = (linearinterp(w, xR, wetR)) * gain;

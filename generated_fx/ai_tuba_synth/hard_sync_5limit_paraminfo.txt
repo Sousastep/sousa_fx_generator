@@ -1,0 +1,59 @@
+================================================================================
+hard_sync_5limit — Parameter Information
+================================================================================
+
+WHAT IT IS
+The classic hard-sync bass voice: a master ramp at the tuba's pitch, a slave
+oscillator running at a just ratio above it, and the slave forcibly reset on
+every master cycle. The reset is what makes the "sync formant" — a bright,
+vocal buzz that sits on the tuba's pitch instead of drifting away from it.
+All ratios are 5-limit, so the voice is exactly in tune with the horn.
+
+Source: Timoney, DAFx-12 (virtual-analog hard synchronisation, Fourier series
+and efficient implementation).
+
+The master ramp is the tuba's f0, so the whole waveform is exactly periodic at
+f0. The voice is gated by the horn's envelope; at mix = 1 the tuba is replaced.
+
+PARAMETERS (6 + output gain)
+
+1. ratio — 0…3 (stepped), default 1
+   0 = 3/2 (fifth above), 1 = 2/1 (octave), 2 = 3/1 (twelfth), 3 = 5/2 (just
+   major tenth). Higher ratios make the sync formant brighter and more
+   aggressive; 2/1 is the fat, usable "dubstep sync" default.
+
+2. sync_shape — 0…1, default 0.3
+   Morphs the slave from a saw (0) to a pulse (1). The pulse is thinner and
+   more nasal; around 0.5 it has the hollow sync growl.
+
+3. tone_hz — 200…12000 Hz, default 5000 Hz
+   Two-pole lowpass after the oscillator. Lower for dark deep-dubstep weight,
+   higher to let the sync edge bite.
+
+4. drive — 0…1, default 0.3
+   Soft saturation before the filter. Adds harmonics and a little level
+   compression; 0 is clean.
+
+5. bar_accent — 0…1, default 0.25
+   Depth of a bar-locked accent/duck on the voice (and a small tone sweep).
+   At 0 the voice is steady; higher gives it a rhythmic push against the kit.
+
+6. mix — 0…1, default 0.9
+   Dry tuba against the sync voice. The voice is phase-locked to the horn's
+   f0 (and to in5 when patched), so the low end adds rather than cancels.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 or out-of-range means "unknown": the last valid pitch is
+  held (init 55 Hz). No zero-crossing fallback.
+- in4: one-bar phasor. Held at 0 the accent free-runs at 0.15 Hz.
+- in5 (optional): phase-locked tuba phasor; when it moves the master ramp is
+  pulled into phase with the horn.
+- out1 / out2: stereo.
+
+NOTES
+- Saw and pulse are polyBLEP-corrected; the sync section runs 2x oversampled.
+- No safety limiter.

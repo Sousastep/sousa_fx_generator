@@ -1,0 +1,156 @@
+// ============================================================================
+// wavefold_259_bass.txt — Buchla-259-style wavefolder on the tuba
+//
+// From: F. Esqueda, H. Pöntynen, V. Välimäki & J. D. Parker, "Virtual Analog
+//       Buchla 259 Wavefolder", DAFx-17 paper 82 (the 259 folds the signal
+//       through a chain of parallel folding cells and sums them, so peaks are
+//       reflected back instead of clipped); K. J. Werner & E. Azelborn,
+//       "Antialiasing Piecewise Polynomial Waveshapers", DAFx-23 paper 61
+//       (first-order antiderivative antialiasing for a piecewise shaper).
+//
+// The folding curve is sin(pi*x/2), a smooth periodic fold with an exact
+// antiderivative, so ADAA1 removes most of the alias energy a naive fold would
+// put into the sub. The tuba is the input: at fold = 0 it passes through, and
+// as fold rises the peaks curl back into the classic 259 "wooden" brass buzz.
+// A DC bias (symmetry) makes the fold asymmetric for even harmonics, and the
+// bar phasor can pump the fold depth.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. 0 = unknown -> hold last valid f0 (init 55 Hz). Used to
+//        scale the fold drive with pitch, so low notes stay as thick as high
+//        ones. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor for the fold pump; held 0 -> free 0.12 Hz LFO.
+//   in5: optional smoothed tuba envelope 0..1 (static -> internal follower);
+//        it backs the fold off as the note decays, keeping the tail clean.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+@param({ min: 0, max: 1 }) fold = 0.45;               // fold amount
+@param({ min: -1, max: 1 }) symmetry = 0;             // fold symmetry
+@param({ min: 0, max: 24 }) pre_gain_db = 6;          // pre-gain
+@param({ min: 200, max: 12000 }) tone_hz = 5000;      // tone
+@param({ min: 0, max: 1 }) bar_fold = 0.2;            // bar fold pump
+@param({ min: 0, max: 1 }) mix = 0.8;                 // dry/wet
+@param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
+
+@state prevXL = 0.0;
+@state prevFL = -0.6366197723675814;
+@state prevXR = 0.0;
+@state prevFR = -0.6366197723675814;
+@state primed = 0.0;
+
+@state lp1L = new onepole();
+@state lp2L = new onepole();
+@state lp1R = new onepole();
+@state lp2R = new onepole();
+
+@state freeLfo = new phasor();
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+
+@state f0Hold = 55.0;
+@state f0Smooth = 55.0;
+
+@state envFoll = 0.0;
+@state prevEnvIn = 0.0;
+@state envInLast = 0.0;
+@state envInHold = 0.0;
+
+// Smooth periodic fold and its antiderivative:
+//   f(x)  = sin(pi*x/2)
+//   F(x)  = -(2/pi) * cos(pi*x/2),  F'(x) = f(x)
+function foldF(x: number): number {
+	return sin(pi * 0.5 * x);
+}
+
+function foldA(x: number): number {
+	return 0.0 - (2.0 / pi) * cos(pi * 0.5 * x);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let envIn = in5;
+
+// --- Pitch: only used to scale drive with register -------------------------
+if (pitchIn > 15.0 && pitchIn < 1200.0) {
+	f0Hold = pitchIn;
+}
+f0Smooth += (clamp(f0Hold, 15.0, 1200.0) - f0Smooth) * (1.0 - exp(0.0 - 1.0 / (0.020 * sr)));
+let f0 = clamp(f0Smooth, 15.0, 900.0);
+let pitchScale = clamp(sqrt(220.0 / f0), 0.65, 1.5);
+
+// --- Bar phasor (sample-and-hold) -----------------------------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+let lfoPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeLfo.next(0.12);
+let lfo = 0.5 + 0.5 * sin(2.0 * pi * lfoPh);
+
+// --- Envelope: optional in5, internal follower otherwise -------------------
+let absMono = abs(0.5 * (xL + xR));
+envFoll += (absMono - envFoll) * (1.0 - exp(0.0 - 1.0 / (0.030 * sr)));
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envInLast = envIn;
+	envInHold = 0.1 * sr;
+} else if (envInHold > 0.0) {
+	envInHold -= 1.0;
+}
+prevEnvIn = envIn;
+let envSrc = (envInHold > 0.0) ? clamp(envInLast, 0.0, 1.0) : clamp(envFoll * 4.0, 0.0, 1.0);
+
+// --- Fold drive ------------------------------------------------------------
+let foldAmt = clamp(fold, 0.0, 1.0);
+let pump = 1.0 + clamp(bar_fold, 0.0, 1.0) * 1.5 * lfo;
+let foldEnv = 0.4 + 0.6 * envSrc;
+let drive = dbtoa(clamp(pre_gain_db, 0.0, 24.0)) * (0.35 + 2.6 * foldAmt) * pitchScale * pump * foldEnv;
+let bias = clamp(symmetry, -1.0, 1.0) * (0.25 + 0.75 * foldAmt);
+let biasOffset = foldF(bias);
+
+// --- ADAA1 folding, per channel -------------------------------------------
+let inL = xL * drive + bias;
+let inR = xR * drive + bias;
+
+// First sample: seed the ADAA history with the true F(x) instead of 0, so the
+// 1/(x - x1) difference never starts from an inconsistent pair.
+if (primed < 0.5) {
+	prevXL = inL;
+	prevFL = foldA(inL);
+	prevXR = inR;
+	prevFR = foldA(inR);
+	primed = 1.0;
+}
+
+let dL = inL - prevXL;
+let yFoldL = (abs(dL) > 0.000001) ? ((foldA(inL) - prevFL) / dL) : foldF(0.5 * (inL + prevXL));
+prevXL = inL;
+prevFL = foldA(inL);
+
+let dR = inR - prevXR;
+let yFoldR = (abs(dR) > 0.000001) ? ((foldA(inR) - prevFR) / dR) : foldF(0.5 * (inR + prevXR));
+prevXR = inR;
+prevFR = foldA(inR);
+
+// Remove the DC the bias would otherwise add.
+let wetL = yFoldL - biasOffset;
+let wetR = yFoldR - biasOffset;
+
+// --- Tone ------------------------------------------------------------------
+let cut = clamp(tone_hz * (0.8 + 0.2 * lfo), 150.0, sr * 0.42);
+let outL = lp2L.next(lp1L.next(wetL, cut), cut);
+let outR = lp2R.next(lp1R.next(wetR, cut), cut);
+
+let w = clamp(mix, 0.0, 1.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, outL * 0.55) * gain;
+out2 = linearinterp(w, xR, outR * 0.55) * gain;
