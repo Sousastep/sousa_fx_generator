@@ -1,0 +1,87 @@
+================================================================================
+rev_spring_dispersion_tank_v2 — Parameter Information
+================================================================================
+
+WHAT IT IS
+A single-spring reverb tank. The signal is pushed through a delay loop whose
+round trip contains a 12-stage first-order allpass chain, so each echo is a
+downward chirp instead of a click — the "boing/drip" of a Hammond-style spring.
+In v2 the spring has mass: spring_ms is not read raw, it is the rest length of
+a damped spring, so moving it stretches, overshoots, bounces and rattles.
+Source: Parker & Bilbao, "Spring Reverberation: A Physical Perspective",
+DAFx-09 Paper 84 §3 (echo spacing TD, dispersion transition frequency FC);
+Gamper, Parker & Välimäki, "Automated Calibration of a Parametric Spring Reverb
+Model", DAFx-11 Paper 39 §2 (dispersion allpasses in a delay loop).
+
+100% wet, no dry/wet. Place it on an aux send; the dry tuba stays outside.
+
+PARAMETERS (8 + output gain)
+
+1. predelay_ms — 0…150 ms, default 10 ms
+   Gap before the spring is hit. 0–20 ms keeps the drip glued to the tongue;
+   80 ms+ pulls the tank behind the note. Slewed (~40 ms), so moving it glides
+   like a tape delay instead of clicking.
+
+2. spring_ms — 15…90 ms, default 45 ms
+   Echo spacing, now exact (loop delay is compensated). Short = tight, bright,
+   "sproing"; long = looser, more cavernous. Moving it bends the pitch of every
+   echo (shorter = up, longer = down), because the echoes recirculate through
+   the moving delay.
+
+3. disperse — 0…1, default 0.6
+   Amount of allpass chirp. At 0 the tank is a true plain comb echo; at 1 the
+   echoes smear into a long downward glide. Input now enters before the chain,
+   so even the first echo chirps.
+
+4. decay_s — 0.4…8 s, default 2.5 s
+   RT60 of the tank. Loop gain is derived from this and the live spring length,
+   so long springs decay in fewer round trips for the same setting.
+
+5. damp_hz — 800…12000 Hz, default 3500 Hz
+   One-pole lowpass inside the loop. Low values darken each pass (vintage tank),
+   high values keep the metallic top.
+
+6. width — 0…1, default 0.7
+   Mid/side spread of the two slightly detuned spring lines (the right line is
+   3.7% longer). 0 = mono tank, 1 = wide.
+
+7. elastic — 0…1, default 0.6   (NEW)
+   How heavy and springy the spring body is when spring_ms moves.
+     0     = instant jump, exactly like v1 (click/clang, no pitch glide)
+     ~0.3  = fast critically-damped glide: a quick pitched "zip"
+     ~0.6  = glide with one visible overshoot: "sproing"
+     1.0   = slow (about 2.4 Hz) and underdamped: wobbles several times, dubby
+             dive-and-recover
+   Glide speed is capped so the echoes never play backwards (pitch ratio stays
+   between about 0.2x and 1.8x).
+
+8. whack — 0…1, default 0.35   (NEW)
+   Clang and rattle injected into the loop when spring_ms moves: a burst on
+   each jump of the knob (~30 ms decay) plus a continuous rattle proportional
+   to the spring's speed. Passes through the dispersion chain, so it chirps.
+   Works with silent input (bumping the tank). 0 = silent movement.
+
+9. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim, after all processing. Does not count toward the 8-param
+   limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- in3: connected but unused (kept so the batch inlet layout is identical).
+- in4: one-bar phasor, connected but unused — a spring has no tempo-locked time.
+- out1 / out2: stereo wet only.
+
+NOTES
+- Level is energy-normalised against the loop gain, so changing decay_s does
+  not change loudness much.
+- Loop gain is capped at 0.975; the tank cannot run away. The loop also has a
+  20 Hz DC blocker and a gentle tanh (unity at small signal, soft ceiling
+  around 1.4), which only colours hot or whacked signal.
+- Tension coupling: while the spring stretches the chirp steepens, while it
+  compresses the chirp relaxes. Only active when elastic > 0.
+- Delay buffers are 32768 samples, enough for the full range up to 192 kHz.
+- If a batch maps params by index, the two new @param lines sit between width
+  and out_gain_db; move them below out_gain_db to keep v1 indices unchanged.
+- No pitch tracking, no bar sync, no limiter.
+- The whack burst uses two declared noise generators (@state ... = new noise(),
+  read with .next()), one per channel.

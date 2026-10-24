@@ -1,0 +1,266 @@
+// ============================================================================
+// rev_spring_dispersion_tank_v2.txt
+// A single-spring tank: dispersive echoes that chirp downward like a drip,
+// with a spring that has MASS: moving spring_ms stretches, overshoots, bounces
+// and rattles instead of just jumping.
+// From: Julian Parker & Stefan Bilbao, "Spring Reverberation: A Physical
+//       Perspective", DAFx-09 Paper 84, §3 (echo spacing TD, dispersion
+//       transition frequency FC), and Hannes Gamper, Julian Parker & Vesa
+//       Välimäki, "Automated Calibration of a Parametric Spring Reverb Model",
+//       DAFx-11 Paper 39, §2 (first-order allpass dispersion inside a delay
+//       loop).
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: bound only (this tank has no pitch-relative parameter)
+//   in4: 0..1 one-bar phasor, bound only (no tempo-locked time in a spring)
+// Outlets:
+//   out1 / out2: stereo spring tank, wet only
+//
+// v2 changes (see paraminfo for the short version):
+//   - spring_ms is now driven through a mass-spring-damper, not read raw.
+//     Delay-time velocity = Doppler pitch bend on every recirculating echo.
+//   - Moving the spring injects a clang/rattle burst into the loop (whack).
+//   - Chirp steepens as the spring stretches (tension coupling).
+//   - Input now enters BEFORE the dispersion chain, so echo 1 chirps too.
+//   - disperse = 0 is now a true plain comb.
+//   - Loop delay is compensated, so spring_ms is the true echo spacing.
+//   - DC blocker + gentle tanh in the loop; buffers sized for up to 192 kHz.
+//   - predelay / disperse / damp are slewed (no zipper clicks).
+// ============================================================================
+
+@param({ min: 0, max: 150 }) predelay_ms = 10;      // predelay
+@param({ min: 15, max: 90 }) spring_ms = 45;        // spring length
+@param({ min: 0, max: 1 }) disperse = 0.6;          // dispersion
+@param({ min: 0.4, max: 8 }) decay_s = 2.5;         // decay
+@param({ min: 800, max: 12000 }) damp_hz = 3500;    // damping
+@param({ min: 0, max: 1 }) width = 0.7;             // width
+@param({ min: 0, max: 1 }) elastic = 0.6;           // spring mass: 0 = instant jump (v1), up = slower + bouncier
+@param({ min: 0, max: 1 }) whack = 0.35;            // clang / rattle when the spring is moved
+@param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
+
+@state preBufL = new FixedSampleArray(32768);
+@state preBufR = new FixedSampleArray(32768);
+@state preIdx: Int = 0;
+
+@state springBufL = new FixedSampleArray(32768);
+@state springBufR = new FixedSampleArray(32768);
+@state spIdx: Int = 0;
+
+// Dispersion: 12 first-order allpasses per channel, x[n-1] / y[n-1] state.
+// (Raise 12 -> 24 in BOTH loops and in loopComp below for longer "pew" zaps.)
+@state dspXL = new FixedSampleArray(12);
+@state dspYL = new FixedSampleArray(12);
+@state dspXR = new FixedSampleArray(12);
+@state dspYR = new FixedSampleArray(12);
+
+@state lpL = 0.0;
+@state lpR = 0.0;
+@state dcXL = 0.0;
+@state dcYL = 0.0;
+@state dcXR = 0.0;
+@state dcYR = 0.0;
+
+// Spring body (mass-spring-damper acting on the delay length, in samples)
+@state inited: Int = 0;
+@state springPos = 0.0;
+@state springVel = 0.0;
+@state prevTgtMs = 0.0;
+@state whackEnv = 0.0;
+@state nPrevL = 0.0;
+@state nPrevR = 0.0;
+@state noiseGenL = new noise();   // generators are stateful in codebox~: declare, then .next()
+@state noiseGenR = new noise();   // separate instance per channel so the clang is decorrelated
+@state cosWc = 1.0;
+
+// Slewed copies of the other time-ish controls
+@state preSm = 0.0;
+@state dispSm = 0.0;
+@state dampSm = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let unused_in3 = in3; // keeps the in3 port present
+let barIn = in4;      // accepted for the batch contract; no tempo-locked time here
+
+let tgtMs = clamp(spring_ms, 15.0, 90.0);
+let tgtSamps = mstosamps(tgtMs);
+
+if (inited == 0) {
+	inited = 1;
+	springPos = tgtSamps;
+	springVel = 0.0;
+	prevTgtMs = tgtMs;
+	preSm = clamp(mstosamps(predelay_ms), 1.0, 32700.0);
+	dispSm = clamp(disperse, 0.0, 1.0);
+	dampSm = clamp(damp_hz, 200.0, sr * 0.45);
+	cosWc = cos(2.0 * pi * 1000.0 / sr);
+}
+
+// --- Slew the controls that otherwise click when moved ---------------------
+let cSlow = 1.0 - exp(0.0 - 1.0 / (0.02 * sr));   // ~20 ms
+let cPre = 1.0 - exp(0.0 - 1.0 / (0.04 * sr));    // ~40 ms (predelay glides like tape)
+preSm = preSm + cPre * (clamp(mstosamps(predelay_ms), 1.0, 32700.0) - preSm);
+dispSm = dispSm + cSlow * (clamp(disperse, 0.0, 1.0) - dispSm);
+dampSm = dampSm + cSlow * (clamp(damp_hz, 200.0, sr * 0.45) - dampSm);
+
+// --- Predelay (read position is identical for L and R) ---------------------
+preBufL[preIdx] = xL;
+preBufR[preIdx] = xR;
+
+let preRead = preIdx - preSm;
+while (preRead < 0.0) { preRead += 32768.0; }
+let preInt: Int = floor(preRead);
+let preFrac = preRead - preInt;
+let feedL = cubicinterp(preFrac,
+	preBufL[(preInt - 1 + 32768) & 32767],
+	preBufL[preInt & 32767],
+	preBufL[(preInt + 1) & 32767],
+	preBufL[(preInt + 2) & 32767]);
+let feedR = cubicinterp(preFrac,
+	preBufR[(preInt - 1 + 32768) & 32767],
+	preBufR[preInt & 32767],
+	preBufR[(preInt + 1) & 32767],
+	preBufR[(preInt + 2) & 32767]);
+
+preIdx = (preIdx + 1) & 32767;
+
+// --- The spring body: a mass on a spring, pulled toward spring_ms ----------
+// elastic = 0 reproduces v1 (instant jump). Above that the delay length is a
+// damped oscillator: low elastic = quick critically-damped glide, high elastic
+// = slow and underdamped, so it overshoots and wobbles before settling.
+// Delay velocity (samples/sample) is a Doppler pitch bend on every echo:
+// shortening = pitch up, lengthening = pitch down. It is capped at +/-0.8
+// so the read head never runs backwards.
+let el = clamp(elastic, 0.0, 1.0);
+if (el < 0.001) {
+	springPos = tgtSamps;
+	springVel = 0.0;
+} else {
+	let f0 = 60.0 * exp(0.0 - 3.2189 * el);        // 60 Hz .. 2.4 Hz
+	let w0 = minimum(2.0 * pi * f0 / sr, 0.5);
+	let zeta = 1.0 - 0.8 * el;                     // 1.0 .. 0.2
+	springVel = springVel + w0 * w0 * (tgtSamps - springPos) - 2.0 * zeta * w0 * springVel;
+	springVel = clamp(springVel, -0.8, 0.8);
+	springPos = springPos + springVel;
+}
+// End stops: let it overshoot the knob range a little, never past the buffer.
+let stopLo = mstosamps(9.0);
+let stopHi = mstosamps(103.0);
+if (springPos < stopLo) { springPos = stopLo; springVel = maximum(springVel, 0.0); }
+if (springPos > stopHi) { springPos = stopHi; springVel = minimum(springVel, 0.0); }
+
+// --- Whack: moving the spring jostles it -----------------------------------
+// A jump of the knob adds a burst that decays in ~30 ms; the spring's speed
+// adds a continuous rattle while it is in motion. Works with silent input,
+// like bumping a real tank.
+let dTgt = tgtMs - prevTgtMs;
+prevTgtMs = tgtMs;
+let whAmt = clamp(whack, 0.0, 1.0);
+let whDecay = exp(0.0 - 1.0 / (0.03 * sr));
+whackEnv = minimum(whackEnv * whDecay + minimum(abs(dTgt) * 0.05, 1.0) * whAmt, 1.0);
+let exc = whackEnv + abs(springVel) * 0.5 * whAmt;
+
+let nL = noiseGenL.next();
+let nR = noiseGenR.next();
+let clangL = (nL - nPrevL) * exc * 0.25;   // first-difference = high-passed noise
+let clangR = (nR - nPrevR) * exc * 0.25;
+nPrevL = nL;
+nPrevR = nR;
+
+// --- Loop gain and damping (DAFx-09 §3: TD sets the echo spacing) ----------
+let springSec = springPos / sr;
+let rt60 = clamp(decay_s, 0.4, 8.0);
+let gLoop = clamp(exp(0.0 - 6.907755 * springSec / rt60), 0.0, 0.975);
+
+let dampC = 1.0 - exp(0.0 - 2.0 * pi * dampSm / sr);
+
+// Negative allpass coefficient: group delay is longest at DC and collapses at
+// Nyquist, which is the downward chirp of a real spring. disperse = 0 gives
+// coefficient 0, i.e. each stage is a plain 1-sample delay -> plain comb.
+let gd = 0.0 - 0.85 * pow(maximum(dispSm, 0.0), 0.85);
+
+// Tension coupling: a stretching spring (springVel > 0) chirps harder, a
+// compressing one chirps less. Zero when elastic = 0.
+let gdEff = clamp(gd * (1.0 + 0.5 * clamp(springVel, -0.8, 0.8)), 0.0 - 0.9, 0.0);
+
+// Loop delay compensation: the 12-stage chain adds group delay inside the
+// loop. Subtract its value at 1 kHz so spring_ms is the real echo spacing.
+let loopComp = 12.0 * (1.0 - gd * gd) / (1.0 + 2.0 * gd * cosWc + gd * gd);
+let dBase = springPos - loopComp;
+
+// --- Spring delay line read (two slightly different lengths for stereo) ----
+let dSampsL = clamp(dBase, 8.0, 32700.0);
+let dSampsR = clamp(dBase * 1.037, 8.0, 32700.0);
+
+let readL = spIdx - dSampsL;
+while (readL < 0.0) { readL += 32768.0; }
+let riL: Int = floor(readL);
+let tapL = cubicinterp(readL - riL,
+	springBufL[(riL - 1 + 32768) & 32767],
+	springBufL[riL & 32767],
+	springBufL[(riL + 1) & 32767],
+	springBufL[(riL + 2) & 32767]);
+
+let readR = spIdx - dSampsR;
+while (readR < 0.0) { readR += 32768.0; }
+let riR: Int = floor(readR);
+let tapR = cubicinterp(readR - riR,
+	springBufR[(riR - 1 + 32768) & 32767],
+	springBufR[riR & 32767],
+	springBufR[(riR + 1) & 32767],
+	springBufR[(riR + 2) & 32767]);
+
+// --- Damping, DC block, gentle saturation on the recirculating signal ------
+lpL = lpL + dampC * (tapL - lpL);
+lpR = lpR + dampC * (tapR - lpR);
+
+let dcR = 1.0 - 2.0 * pi * 20.0 / sr;
+let hpL = lpL - dcXL + dcR * dcYL;
+dcXL = lpL;
+dcYL = hpL;
+let hpR = lpR - dcXR + dcR * dcYR;
+dcXR = lpR;
+dcYR = hpR;
+
+// tanh(0.7x)/0.7: unity at small signal, soft ceiling ~1.43. Dubby when hot.
+let recL = tanh(hpL * 0.7) / 0.7;
+let recR = tanh(hpR * 0.7) / 0.7;
+
+// --- Dispersion chain: input + recirculation + clang all get chirped -------
+let dL = feedL + recL * gLoop + clangL;
+for (let i: Int = 0; i < 12; i++) {
+	let vL = gdEff * (dL - dspYL[i]) + dspXL[i];
+	dspXL[i] = dL;
+	dspYL[i] = vL;
+	dL = vL;
+}
+
+let dR = feedR + recR * gLoop + clangR;
+for (let i: Int = 0; i < 12; i++) {
+	let vR = gdEff * (dR - dspYR[i]) + dspXR[i];
+	dspXR[i] = dR;
+	dspYR[i] = vR;
+	dR = vR;
+}
+
+springBufL[spIdx] = dL;
+springBufR[spIdx] = dR;
+spIdx = (spIdx + 1) & 32767;
+
+// Energy normalisation: a comb of feedback g carries 1/(1-g^2) of the input
+// energy, so scale by its inverse root to keep the wet level steady.
+let norm = sqrt(maximum(1.0 - gLoop * gLoop, 0.0001));
+let wetL = tapL * norm;
+let wetR = tapR * norm;
+
+// --- Width (mid/side) ------------------------------------------------------
+let mid = 0.5 * (wetL + wetR);
+let side = 0.5 * (wetL - wetR) * clamp(width, 0.0, 1.0);
+let oL = mid + side;
+let oR = mid - side;
+
+let g = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * g;
+out2 = oR * g;
