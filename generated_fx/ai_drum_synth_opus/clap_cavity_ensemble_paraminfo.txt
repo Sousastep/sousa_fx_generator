@@ -1,0 +1,71 @@
+================================================================================
+clap_cavity_ensemble — Parameter Information
+================================================================================
+
+WHAT IT IS
+A triggered hand clap built like real hands. Each clap is a ~5 ms noise
+burst into the resonance of the air pocket between the palms: cupped hands
+ring low and hollow (~500 Hz), flat hands high and sharp (~1.5 kHz). Up to
+twenty virtual clappers fire together, flammed, or spread over up to a
+second. Each one cups a little differently and is re-drawn on every hit from measured
+hand-clap statistics, so no two claps match. A filtered noise tail (a
+short room, or the long smeared tail of an 808 clap) follows each clap; a
+tight flam shares one tail after its last clap.
+
+Every hit also drifts the whole group's hand shape slightly (random walk).
+A retrigger while the clap is still sounding flams tighter (the hands are
+already close) and adds into what is ringing. Nothing resets. With long
+spreads, a new hit reschedules the claps of the previous one that have
+not landed yet (the new clap restarts the group).
+
+Source: Jylhä & Erkut, DAFx-08 §2-2.1 and Table 1 (ClaPD: per-clap
+resonator f / B / G drawn per hand configuration); Ahmad & Kondoz, DAFx-11
+§5.2, §6.1 (non-repetitive impact sounds).
+
+PARAMETERS (7 + output gain)
+
+1. cavity — 0…100 %, default 50 %
+   Hand shape, following the paper's configurations: cupped A1+ (~500 Hz)
+   -> A1 -> A1- -> A2 -> flat P3 (~1560 Hz). Low = hollow, dubby; high =
+   snappy, cutting.
+
+2. clappers — 1…20 (stepped), default 4
+   People clapping. 1 = a single dry clap; 4-6 = a thick group clap;
+   12-20 = a crowd. Loudness is normalised to how many claps overlap, so
+   it stays about the same (peaks within ~4 dB of the default).
+
+3. spread_ms — 0…1000 ms, default 12 ms
+   How far apart the clappers land (tapered: the first third of the knob
+   covers 0-40 ms). 0 = one fat hit; 10-15 = classic drum-machine flam;
+   30-80 = loose, human group; 300-1000 with many clappers = a burst of
+   applause. Claps more than 30 ms apart each get their own tail; a
+   tighter flam shares one.
+
+4. tail_ms — 20…1500 ms, default 250 ms
+   Noise tail after each clap (time to -40 dB). Short = dry room; long
+   = big trip-hop / space reverb clap.
+
+5. air — 0…100 %, default 50 %
+   Palm-slap brightness on each clap, and how open the tail is. 0 = dark,
+   resonant only; 100 = crisp and splashy.
+
+6. width — 0…100 %, default 60 %
+   Clapper panning and tail decorrelation. 0 = mono.
+
+7. variance — 0…100 %, default 35 %
+   Scales the paper's per-clap deviations and the drift between hits.
+   0 = every clapper exactly on the mean (their timing and personal hand
+   bias still differ).
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim, last in the chain.
+
+INLETS / OUTLETS
+- in1: trigger. A single-sample click (any rising edge above 0.1). No
+  velocity: the level is fixed, and variance supplies the movement.
+- out1 / out2: stereo.
+
+NOTES
+- Isolated hits peak around -7…-3 dBFS at defaults. Long tails pile up
+  when rolled fast (+7 dBFS with tail_ms 1500 and air 100).
+- No safety limiter.

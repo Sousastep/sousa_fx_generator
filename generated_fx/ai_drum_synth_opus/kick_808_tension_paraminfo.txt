@@ -1,0 +1,61 @@
+================================================================================
+kick_808_tension — Parameter Information
+================================================================================
+
+WHAT IT IS
+A triggered kick. A sine body starts sharp and falls to its pitch as its
+energy drains, like a tensioned head (or an 808's bridged-T). At the hit the
+waveform carries a loopback-FM harmonic series, so the kick still reads on
+phone speakers. The series thins to a clean sine as the note dies, which
+keeps the low end tight instead of boomy. A soft contact pulse gives a felt
+beater thump plus a mid "knock", lowpassed so it never clicks.
+
+Every hit lands on a slightly different spot (detune, brightness, knock
+pitch, contact time drift by a random walk). Hitting a drum that is still
+ringing ramps from where it is: the pitch starts a little higher (energy
+adds) and the contact is shorter and softer. No reset, no click.
+
+Source: Werner, Abel & Smith, DAFx-14 (TR-808 bass drum: §4 pulse shaper,
+§8.1 attack frequency shift, §8.2 pitch sigh); Marogna, Avanzini & Bank,
+DAFx-10 P49 §2.3, §3.2 eq. 20 (tension ~ energy); Hsu & Smyth, SMC-19 §3.2,
+§3.4 eq. 8-9 (closed-form loopback FM); Avanzini & Rocchesso, DAFx-01 §2.1
+(contact force).
+
+PARAMETERS (7 + output gain)
+
+1. tune_hz — 35…800 Hz, default 50 Hz
+   Pitch the body settles to. 45-55 = deep dubstep; 60-70 = trip-hop thud;
+   150+ = tom-like, then synth-blip territory. The level is compensated
+   across the range (K-weighted loudness within 3.6 dB from 35 to 800 Hz),
+   and the harmonics thin out at high tunings so they never alias.
+
+2. decay_ms — 80…1500 ms, default 380 ms
+   Time to -40 dB. Under 250 = tight and punchy; over 800 = 808-style boom.
+
+3. drop_st — 0…36 st, default 14 st
+   How far above tune_hz the hit starts. 0 = flat sine; 24+ = laser zap.
+
+4. drop_ms — 5…200 ms, default 35 ms
+   How fast the pitch falls. Short = punch; long = sighing, dubby kick.
+
+5. harmonics — 0…100 %, default 45 %
+   Loopback-FM brightness at the attack, plus gentle saturation. This is
+   what phones and laptops hear. 0 = pure sine.
+
+6. beater — 0…100 %, default 40 %
+   Beater level and hardness: soft felt thump to hard plastic knock.
+
+7. variance — 0…100 %, default 35 %
+   How much the strike spot wanders from hit to hit. 0 = identical hits.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim, last in the chain.
+
+INLETS / OUTLETS
+- in1: trigger. A single-sample click (any rising edge above 0.1). No
+  velocity: the level is fixed, and variance supplies the movement.
+- out1 / out2: the kick (mono, same on both).
+
+NOTES
+- Isolated hits peak near -2 dBFS at defaults; fast rolls stack higher.
+- No safety limiter.

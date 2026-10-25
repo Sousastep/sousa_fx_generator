@@ -1,0 +1,318 @@
+// ============================================================================
+// clap_cavity_ensemble.txt — triggered hand clap: 1-20 virtual clappers, each
+//                            a noise burst through the resonance of the air
+//                            cavity between the hands, flammed, plus a tail
+//
+// From: A. Jylhä, C. Erkut, "Inferring the Hand Configuration from Hand
+//       Clapping Sounds", DAFx-08: §2 (a clap is ~5 ms with one pronounced
+//       cavity resonance; a smaller cavity resonates higher), §2.1 (ClaPD:
+//       each clap = enveloped noise burst into a 2nd-order resonator whose
+//       parameters are drawn per clap), Table 1 (mean and deviation of
+//       centre f, -3 dB bandwidth B and gain G per hand configuration);
+//       W. Ahmad, A. M. Kondoz, "Generation of Non-Repetitive Everyday Impact
+//       Sounds for Interactive Applications", DAFx-11: §5.2, §6.1 (every
+//       event re-drawn from the analysed distributions, so repeats are never
+//       identical).
+//
+// cavity morphs along Table 1, sorted by centre frequency:
+//   A1+ (cupped) 500 Hz -> A1 775 -> A1- 984 -> A2 1355 -> P3 (flat) 1562.
+// Per hit, each clapper draws f, B, G from Gaussians around the morphed
+// means (deviations from the table, scaled by variance), adds its own fixed
+// hand bias (every clapper cups a little differently) and fires after a
+// random offset within spread_ms. Burst = difference of two exponentials
+// (0.25 ms rise, ~2.5 ms fall) into a unity-peak TPT band-pass. "air" adds
+// the broadband slap of palm contact. Every clap re-peaks the tail (stereo
+// noise through a wide band-pass, decaying over tail_ms) unless another
+// clap is due within 30 ms, continuing from its current level: a tight flam
+// gets one tail after its last clap, spread claps each get their own.
+// The random walk drifts the whole ensemble's cavity between hits. A
+// retrigger while the clap is still sounding flams tighter (the hands are
+// already close) and adds into the ringing resonators. Nothing resets.
+//
+// Inlets:
+//   in1: audio-rate trigger (single-sample click, rising edge above 0.1)
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Hand cavity: cupped (0) -> flat (100)
+@param({ min: 0, max: 100 }) cavity = 50;
+// Number of clappers
+@param({ min: 1, max: 20, steps: 20 }) clappers = 4;
+// Flam spread between clappers
+@param({ min: 0, max: 1000, exponent: 3 }) spread_ms = 12;
+// Tail (time to -40 dB)
+@param({ min: 20, max: 1500, exponent: 2 }) tail_ms = 250;
+// Air: palm slap / brightness
+@param({ min: 0, max: 100 }) air = 50;
+// Stereo width
+@param({ min: 0, max: 100 }) width = 60;
+// Hit-to-hit variance
+@param({ min: 0, max: 100 }) variance = 35;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state rng = new noise();
+@state airLpL = new onepole();
+@state airLpR = new onepole();
+@state tailLpL = new onepole();
+@state tailLpR = new onepole();
+@state dcLpL = new onepole();
+@state dcLpR = new onepole();
+
+// Table 1 chain: A1+, A1, A1-, A2, P3
+@state cavF = new FixedSampleArray(5);
+@state cavDf = new FixedSampleArray(5);
+@state cavB = new FixedSampleArray(5);
+@state cavDb = new FixedSampleArray(5);
+@state cavG = new FixedSampleArray(5);
+@state cavDg = new FixedSampleArray(5);
+
+// per clapper
+@state vBias = new FixedSampleArray(20);
+@state vWait = new FixedSampleArray(20);
+@state vEnvA = new FixedSampleArray(20);
+@state vEnvD = new FixedSampleArray(20);
+@state vGain = new FixedSampleArray(20);
+@state vGL = new FixedSampleArray(20);
+@state vGR = new FixedSampleArray(20);
+@state vK = new FixedSampleArray(20);
+@state vA1 = new FixedSampleArray(20);
+@state vA2 = new FixedSampleArray(20);
+@state vA3 = new FixedSampleArray(20);
+@state vIc1 = new FixedSampleArray(20);
+@state vIc2 = new FixedSampleArray(20);
+
+@state prevTrig = 0.0;
+@state lastSr = 0.0;
+@state lastTail = -1.0;
+@state kRise = 0.0;
+@state kFall = 0.0;
+@state kTail = 0.0;
+@state spot = 0.0;
+@state tailEnvA = 0.0;
+@state tailEnvD = 0.0;
+@state tailHz = 1300.0;
+@state tA1 = 0.0;
+@state tA2 = 0.0;
+@state tA3 = 0.0;
+@state tIc1L = 0.0;
+@state tIc2L = 0.0;
+@state tIc1R = 0.0;
+@state tIc2R = 0.0;
+@state recent = 0.0;
+@state slapNorm = 1.0;
+
+function init() {
+	cavF[0] = 500.0;
+	cavDf[0] = 178.0;
+	cavB[0] = 91.0;
+	cavDb[0] = 27.0;
+	cavG[0] = 33.8;
+	cavDg[0] = 5.57;
+	cavF[1] = 775.0;
+	cavDf[1] = 39.0;
+	cavB[1] = 137.0;
+	cavDb[1] = 15.0;
+	cavG[1] = 22.2;
+	cavDg[1] = 3.55;
+	cavF[2] = 984.0;
+	cavDf[2] = 396.0;
+	cavB[2] = 137.0;
+	cavDb[2] = 36.0;
+	cavG[2] = 11.3;
+	cavDg[2] = 1.42;
+	cavF[3] = 1355.0;
+	cavDf[3] = 57.0;
+	cavB[3] = 222.0;
+	cavDb[3] = 53.0;
+	cavG[3] = 24.0;
+	cavDg[3] = 8.03;
+	cavF[4] = 1562.0;
+	cavDf[4] = 257.0;
+	cavB[4] = 375.0;
+	cavDb[4] = 94.0;
+	cavG[4] = 19.5;
+	cavDg[4] = 6.31;
+	for (let k: Int = 0; k < 20; k++) {
+		vBias[k] = 0.12 * rng.next();
+		vWait[k] = -1.0;
+	}
+}
+
+// ~N(0,1) from three uniforms (variance 3 * 1/3)
+function gauss() {
+	return rng.next() + rng.next() + rng.next();
+}
+
+// unity-peak TPT band-pass coefficients for voice k
+function setVoiceFilter(k: Int, f, bw, sr) {
+	let fc = clamp(f, 150.0, sr * 0.4);
+	let damp = clamp(bw / fc, 0.02, 2.0);
+	let g = tan(pi * fc / sr);
+	let a1 = 1.0 / (1.0 + g * (g + damp));
+	vK[k] = damp;
+	vA1[k] = a1;
+	vA2[k] = g * a1;
+	vA3[k] = g * g * a1;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let v = clamp(variance, 0.0, 100.0) * 0.01;
+let airAmt = clamp(air, 0.0, 100.0) * 0.01;
+let wid = clamp(width, 0.0, 100.0) * 0.01;
+
+if (sr != lastSr || tail_ms != lastTail) {
+	kRise = exp(-1.0 / (0.00025 * sr));
+	kFall = exp(-1.0 / (0.0025 * sr));
+	kTail = exp(-4.6 / (clamp(tail_ms, 20.0, 1500.0) * 0.001 * sr));
+	lastSr = sr;
+	lastTail = tail_ms;
+}
+
+// --- trigger: schedule the ensemble ---
+let trigIn = abs(in1);
+if (trigIn > 0.1 && prevTrig <= 0.1) {
+	let n: Int = trunc(clamp(clappers, 1.0, 20.0) + 0.5);
+	spot = clamp(0.55 * spot + 0.65 * rng.next(), -1.0, 1.0);
+	// equal loudness for any number of clappers: normalise by how many claps
+	// overlap (~8 ms each within the spread); 4 clappers over 12 ms -> 3 -> 1.0
+	let nEff = 1.0 + (n - 1.0) * minimum(1.0, 8.0 / maximum(spread_ms, 0.001));
+	let nNorm = sqrt(3.0 / nEff);
+	// the slap shares one noise source, so overlapping slaps add coherently
+	slapNorm = 3.0 / nEff;
+	let busy = clamp(recent, 0.0, 1.0);
+	let spr = clamp(spread_ms, 0.0, 1000.0) * 0.001 * sr * (1.0 - 0.4 * busy);
+	for (let k: Int = 0; k < 20; k++) {
+		if (k < n) {
+			let x = clamp(clamp(cavity, 0.0, 100.0) * 0.01 + 0.15 * v * spot + vBias[k], 0.0, 1.0);
+			let pos = x * 4.0;
+			let ii: Int = trunc(minimum(pos, 3.0));
+			let fr = pos - ii;
+			let fm = cavF[ii] + (cavF[ii + 1] - cavF[ii]) * fr;
+			let dfm = cavDf[ii] + (cavDf[ii + 1] - cavDf[ii]) * fr;
+			let bm = cavB[ii] + (cavB[ii + 1] - cavB[ii]) * fr;
+			let dbm = cavDb[ii] + (cavDb[ii + 1] - cavDb[ii]) * fr;
+			let gm = cavG[ii] + (cavG[ii + 1] - cavG[ii]) * fr;
+			let dgm = cavDg[ii] + (cavDg[ii + 1] - cavDg[ii]) * fr;
+			let dev = 1.4 * v;
+			let f = maximum(fm + dev * dfm * gauss(), 250.0);
+			let bw = maximum(bm + dev * dbm * gauss(), 40.0);
+			let gg = maximum(gm + dev * dgm * gauss(), 4.0);
+			setVoiceFilter(k, f, bw, sr);
+			// G from the table; sqrt(sr / (pi B)) keeps narrow cavities as loud as
+			// wide ones (a unity-peak band-pass passes noise power ~ B)
+			vGain[k] = gg / 22.0 * 0.6 * sqrt(sr / (pi * bw)) * nNorm;
+			// first clapper on time, the others within the spread
+			let w = (k == 0) ? 0.0 : spr * (k + 0.6 * rng.next()) / n;
+			vWait[k] = maximum(w, 0.0);
+			let p = clamp(wid * ((k == 0) ? 0.2 * rng.next() : rng.next()), -1.0, 1.0);
+			vGL[k] = sqrt(0.5 * (1.0 - p));
+			vGR[k] = sqrt(0.5 * (1.0 + p));
+			if (k == 0) {
+				tailHz = clamp(f * 1.4, 400.0, sr * 0.4);
+			}
+		}
+	}
+	let tg = tan(pi * tailHz / sr);
+	tA1 = 1.0 / (1.0 + tg * (tg + 0.6));
+	tA2 = tg * tA1;
+	tA3 = tg * tA2;
+}
+prevTrig = trigIn;
+
+// --- clappers ---
+let yl = 0.0;
+let yr = 0.0;
+let slapL = 0.0;
+let slapR = 0.0;
+let active = 0.0;
+let fired = 0.0;
+for (let k: Int = 0; k < 20; k++) {
+	if (vWait[k] >= 0.0) {
+		vWait[k] = vWait[k] - 1.0;
+		if (vWait[k] < 0.0) {
+			vEnvA[k] = vEnvA[k] + 1.0;
+			vEnvD[k] = vEnvD[k] + 1.0;
+			// a clap starts the tail unless another lands within 30 ms (a
+			// tight flam keeps one tail, after its last clap)
+			let soon = 0.0;
+			for (let j: Int = 0; j < 20; j++) {
+				if (vWait[j] >= 0.0 && vWait[j] < 0.03 * sr) {
+					soon = 1.0;
+				}
+			}
+			if (soon < 0.5) {
+				fired = 1.0;
+			}
+		}
+	}
+	let envA = vEnvA[k] * kRise;
+	let envD = vEnvD[k] * kFall;
+	vEnvA[k] = envA;
+	vEnvD[k] = envD;
+	let env = envD - envA;
+	let ic1 = vIc1[k];
+	let ic2 = vIc2[k];
+	if (env > 0.00001 || abs(ic1) + abs(ic2) > 0.000001) {
+		let x = rng.next() * env * 1.2;
+		let v3 = x - ic2;
+		let v1 = vA1[k] * ic1 + vA2[k] * v3;
+		let v2 = ic2 + vA2[k] * ic1 + vA3[k] * v3;
+		vIc1[k] = 2.0 * v1 - ic1;
+		vIc2[k] = 2.0 * v2 - ic2;
+		let s = vK[k] * v1 * vGain[k];
+		yl += s * vGL[k];
+		yr += s * vGR[k];
+		slapL += env * vGL[k];
+		slapR += env * vGR[k];
+		active += env;
+	}
+}
+recent = maximum(active, recent * kFall);
+
+// --- air: broadband palm slap (high-passed noise on the burst envelopes) ---
+let nL = rng.next();
+let nR = rng.next();
+let nRw = (1.0 - wid) * nL + wid * nR;
+let hL = nL - airLpL.next(nL, 2500.0);
+let hR = nRw - airLpR.next(nRw, 2500.0);
+yl += hL * slapL * airAmt * 0.6 * slapNorm;
+yr += hR * slapR * airAmt * 0.6 * slapNorm;
+
+// --- tail: every clap re-peaks it (a clap in a room always has its room),
+// except one with another clap due within 30 ms. Continues from the current
+// level (no jump): a tight flam gets one tail, spread-out claps each get one.
+if (fired > 0.5) {
+	let tailNow = tailEnvD - tailEnvA;
+	tailEnvD = maximum(tailEnvD, 1.0);
+	tailEnvA = tailEnvD - tailNow;
+}
+tailEnvA = tailEnvA * kFall;
+tailEnvD = tailEnvD * kTail;
+let tailEnv = tailEnvD - tailEnvA;
+let tl = nL * tailEnv;
+let tr = nRw * tailEnv;
+let tv3L = tl - tIc2L;
+let tv1L = tA1 * tIc1L + tA2 * tv3L;
+let tv2L = tIc2L + tA2 * tIc1L + tA3 * tv3L;
+tIc1L = 2.0 * tv1L - tIc1L;
+tIc2L = 2.0 * tv2L - tIc2L;
+let tv3R = tr - tIc2R;
+let tv1R = tA1 * tIc1R + tA2 * tv3R;
+let tv2R = tIc2R + tA2 * tIc1R + tA3 * tv3R;
+tIc1R = 2.0 * tv1R - tIc1R;
+tIc2R = 2.0 * tv2R - tIc2R;
+// air also opens the tail: band-pass blended with the brighter raw noise
+let tailHi = 1500.0 + 9000.0 * airAmt;
+let tbl = 0.6 * tv1L + 0.25 * airAmt * tailLpL.next(tl, tailHi);
+let tbr = 0.6 * tv1R + 0.25 * airAmt * tailLpR.next(tr, tailHi);
+yl += 0.8 * tbl;
+yr += 0.8 * tbr;
+
+yl = yl - dcLpL.next(yl, 30.0);
+yr = yr - dcLpR.next(yr, 30.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = 1.4 * yl * gain;
+out2 = 1.4 * yr * gain;

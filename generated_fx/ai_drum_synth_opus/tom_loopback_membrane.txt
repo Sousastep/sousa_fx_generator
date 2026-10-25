@@ -1,0 +1,303 @@
+// ============================================================================
+// tom_loopback_membrane.txt — triggered tom: four membrane modes as
+//                             closed-form loopback-FM oscillators whose
+//                             pitch glides with the head's energy
+//
+// From: J. Hsu, T. Smyth, "Percussion Synthesis using Loopback Frequency
+//       Modulation Oscillators", SMC-19: §3.4 eq. 9-10 (z0 = (b0 + e^jT)/
+//       (1 + b0 e^jT), T the integrated phase: glide and timbre are
+//       independent), §4.1 eq. 11 (modal synthesis with loopback FM
+//       oscillators times decaying envelopes), §5.3 (time-varying b0: bright
+//       attack, purer tail), §5.5 (pitch glides), §6.2 (tom tom excited by a
+//       filtered noise burst);
+//       R. Marogna, F. Avanzini, B. Bank, "Energy Based Synthesis of Tension
+//       Modulation in Membranes", DAFx-10 P49: §2.2 (Bessel-zero modes and
+//       J_n(mu r) strike weights), §3.2 eq. 20 (quasistatic tension is
+//       proportional to the membrane energy), §4 eq. 21 (hammer contact);
+//       F. Avanzini, D. Rocchesso, "Modeling Collision Sounds: Non-Linear
+//       Contact Force", DAFx-01: §2.1 (harder mallet = shorter contact =
+//       more high modes).
+//
+// Modes (0,1) 1.000, (1,1) 1.593, (2,1) 2.136, (0,2) 2.295 of tune_hz. Each is
+// Re{z0} - b0 (DC-free, fundamental normalised), its phase integrated at
+// f_i * sqrt(1 + K * E) where E = sum of squared mode amplitudes (the
+// energy): the glide comes from the decay itself, as in a real head.
+// Mode amplitudes ramp over the contact time (felt 4 ms .. stick 0.4 ms)
+// to J_n(mu r) * contact lowpass, then decay (higher modes faster).
+// Attack texture: a noise burst through a band-pass around 3 * f0 (Hsu
+// §6.2). Modes 1..3 are panned out by spread.
+// Every hit moves a random-walk strike radius (mode balance, detune, pan
+// tilt, burst colour, contact time). A retrigger ramps each mode from its
+// current amplitude (energy adds, so a roll pushes the pitch back up). The
+// phase is continuous and nothing resets.
+// Hand mute (in2): a hand laid on the head is extra damping at the contact
+// (an added loss term, cf. Hunt-Crossley damping in DAFx-10 eq. 21). Every
+// mode then decays to -40 dB within 200 ms (fingertips) .. 12 ms (firm palm),
+// the upper modes first. The decay rate changes and the amplitude does not
+// jump, so the mute itself cannot click. The palm landing makes a dull
+// low-passed noise thump, scaled by the head's current amplitude: muting a
+// silent tom is silent. The hand stays until the next stick hit lifts it.
+//
+// Inlets:
+//   in1: audio-rate trigger (single-sample click, rising edge above 0.1)
+//   in2: audio-rate hand mute (single-sample click, rising edge above 0.1)
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Tune (head fundamental)
+@param({ min: 35, max: 800, exponent: 3 }) tune_hz = 110;
+// Decay (time to -40 dB)
+@param({ min: 100, max: 2500, exponent: 2 }) decay_ms = 600;
+// Pitch glide at full energy
+@param({ min: 0, max: 12 }) glide_st = 3;
+// Loopback FM brightness
+@param({ min: 0, max: 100 }) fm = 35;
+// Mallet: felt (0) -> stick (100)
+@param({ min: 0, max: 100 }) mallet = 40;
+// Stereo spread of the modes
+@param({ min: 0, max: 100 }) spread = 40;
+// Hit-to-hit variance
+@param({ min: 0, max: 100 }) variance = 35;
+// Hand mute: fingertips (0) -> firm palm (100)
+@param({ min: 0, max: 100 }) hand = 40;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state rng = new noise();
+@state dcLpL = new onepole();
+@state dcLpR = new onepole();
+@state handLp1 = new onepole();
+@state handLp2 = new onepole();
+
+@state modeOrder = new FixedSampleArray(4);
+@state modeMu = new FixedSampleArray(4);
+@state modePh = new FixedSampleArray(4);
+@state modeAmp = new FixedSampleArray(4);
+@state modeStart = new FixedSampleArray(4);
+@state modePeak = new FixedSampleArray(4);
+@state modeK = new FixedSampleArray(4);
+@state modeGL = new FixedSampleArray(4);
+@state modeGR = new FixedSampleArray(4);
+@state modeMuteK = new FixedSampleArray(4);
+
+@state prevTrig = 0.0;
+@state lastSr = 0.0;
+@state lastDecay = -1.0;
+@state lastSpread = -1.0;
+@state spot = 0.0;
+@state detuneMul = 1.0;
+@state tilt = 0.0;
+@state atkPos = 1000000.0;
+@state atkLen = 48.0;
+@state bright = 0.0;
+@state brightStart = 0.0;
+@state kBright = 0.0;
+@state burstEnv = 0.0;
+@state kBurst = 0.0;
+@state kA1 = 0.0;
+@state kA2 = 0.0;
+@state kA3 = 0.0;
+@state ic1 = 0.0;
+@state ic2 = 0.0;
+@state prevDamp = 0.0;
+@state muted = 0.0;
+@state handEnvA = 0.0;
+@state handEnvD = 0.0;
+@state handHz = 700.0;
+@state kHandRise = 0.0;
+@state kHandFall = 0.0;
+
+function init() {
+	modeOrder[0] = 0.0;
+	modeMu[0] = 2.404826;
+	modeOrder[1] = 1.0;
+	modeMu[1] = 3.831706;
+	modeOrder[2] = 2.0;
+	modeMu[2] = 5.135622;
+	modeOrder[3] = 0.0;
+	modeMu[3] = 5.520078;
+}
+
+// J_n(x) = (1/pi) * integral_0^pi cos(n t - x sin t) dt  (midpoint rule)
+function besselJ(n, x) {
+	let acc = 0.0;
+	for (let k: Int = 0; k < 24; k++) {
+		let t = pi * (k + 0.5) / 24.0;
+		acc += cos(n * t - x * sin(t));
+	}
+	return acc / 24.0;
+}
+
+function setPans() {
+	let sp = clamp(spread, 0.0, 100.0) * 0.01;
+	for (let i: Int = 0; i < 4; i++) {
+		let side = (i == 0) ? 0.0 : ((i == 2) ? 1.0 : -1.0);
+		if (i == 3) {
+			side = -0.5;
+		}
+		let p = clamp(side * sp * 0.8 + tilt, -1.0, 1.0);
+		modeGL[i] = sqrt(0.5 * (1.0 - p));
+		modeGR[i] = sqrt(0.5 * (1.0 + p));
+	}
+}
+
+let sr = maximum(samplerate(), 1.0);
+let v = clamp(variance, 0.0, 100.0) * 0.01;
+let hard = clamp(mallet, 0.0, 100.0) * 0.01;
+let f0 = clamp(tune_hz, 35.0, 800.0) * detuneMul;
+
+if (sr != lastSr || decay_ms != lastDecay) {
+	let dec = clamp(decay_ms, 100.0, 2500.0) * 0.001;
+	for (let i: Int = 0; i < 4; i++) {
+		let ratio = modeMu[i] / 2.404826;
+		modeK[i] = exp(-4.6 / (dec * pow(ratio, -0.9) * sr));
+	}
+	kBright = exp(-1.0 / ((0.04 + 0.15 * dec) * sr));
+	kHandRise = exp(-1.0 / (0.0005 * sr));
+	kHandFall = exp(-1.0 / (0.006 * sr));
+	lastSr = sr;
+	lastDecay = decay_ms;
+}
+if (spread != lastSpread) {
+	setPans();
+	lastSpread = spread;
+}
+
+// --- trigger ---
+let trigIn = abs(in1);
+if (trigIn > 0.1 && prevTrig <= 0.1) {
+	let u1 = rng.next();
+	let u2 = rng.next();
+	let u3 = rng.next();
+	let ringing = clamp(modeAmp[0], 0.0, 1.0);
+	spot = clamp(0.55 * spot + 0.65 * u1, -1.0, 1.0);
+	let r = clamp(0.3 + 0.25 * v * spot, 0.05, 0.6);
+	detuneMul = exp2(v * 0.15 * u2 / 12.0);
+	f0 = clamp(tune_hz, 35.0, 800.0) * detuneMul;
+	tilt = v * 0.25 * u3;
+	setPans();
+	// the stick hit lifts any resting hand
+	muted = 0.0;
+	// contact time: felt 4 ms .. stick 0.4 ms; a moving head shortens it
+	let tc = 0.004 * exp2(0.0 - 3.3 * hard) * exp2(v * 0.5 * u2) * (1.0 - 0.3 * ringing);
+	atkLen = maximum(2.0, tc * sr);
+	atkPos = 0.0;
+	// contact lowpass relative to the fundamental: level stays put, the
+	// balance of the upper modes changes
+	let fc0 = f0 * tc * 1.5;
+	for (let i: Int = 0; i < 4; i++) {
+		let ratio = modeMu[i] / 2.404826;
+		let fc = fc0 * ratio;
+		let pk = besselJ(modeOrder[i], modeMu[i] * r) * (1.0 + fc0 * fc0) / (1.0 + fc * fc);
+		let cur = modeAmp[i];
+		modeStart[i] = cur;
+		// energy adds, bounded so a roll cannot run away
+		modePeak[i] = minimum(sqrt(cur * cur + pk * pk), 1.5 * abs(pk) + 0.05);
+	}
+	brightStart = bright;
+	burstEnv = burstEnv + (0.4 + 0.6 * hard) * (1.0 - 0.3 * ringing);
+	kBurst = exp(-1.0 / ((0.012 - 0.008 * hard) * sr));
+	let bpHz = clamp(f0 * 3.2 * exp2(v * 0.4 * spot), 100.0, sr * 0.4);
+	let g = tan(pi * bpHz / sr);
+	kA1 = 1.0 / (1.0 + g * (g + 0.6));
+	kA2 = g * kA1;
+	kA3 = g * kA2;
+}
+prevTrig = trigIn;
+
+// --- hand mute (in2): extra damping until the next stick hit ---
+let dampIn = abs(in2);
+if (dampIn > 0.1 && prevDamp <= 0.1) {
+	let hd = clamp(hand, 0.0, 100.0) * 0.01;
+	// fingertips 200 ms .. firm palm 12 ms to -40 dB; upper modes go first
+	let tMute = 0.2 * exp2(0.0 - 4.0 * hd) * exp2(v * 0.4 * rng.next());
+	for (let i: Int = 0; i < 4; i++) {
+		let ratio = modeMu[i] / 2.404826;
+		modeMuteK[i] = exp(-4.6 / (tMute * pow(ratio, -0.5) * sr));
+	}
+	muted = 1.0;
+	// the palm landing: a dull thump, louder and brighter when firm. It only
+	// sounds against a moving head, so it scales with how loud the tom still
+	// is (full right after a hit, nothing on a silent drum)
+	let ringE = 0.0;
+	for (let i: Int = 0; i < 4; i++) {
+		ringE += modeAmp[i] * modeAmp[i];
+	}
+	let ring = clamp(sqrt(ringE) * 1.25, 0.0, 1.0);
+	handEnvA = handEnvA + hd * ring;
+	handEnvD = handEnvD + hd * ring;
+	handHz = 250.0 + 1200.0 * hd;
+}
+prevDamp = dampIn;
+
+// --- envelopes: raised-cosine ramp over the contact, then exponential ---
+let inAtk = atkPos < atkLen;
+let ramp = 0.5 - 0.5 * cos(pi * minimum(atkPos / atkLen, 1.0));
+if (inAtk) {
+	bright = brightStart + (1.0 - brightStart) * ramp;
+	atkPos += 1.0;
+} else {
+	bright *= kBright;
+}
+
+// energy (quasistatic tension) from the mode amplitudes
+let energy = 0.0;
+for (let i: Int = 0; i < 4; i++) {
+	if (inAtk) {
+		modeAmp[i] = modeStart[i] + (modePeak[i] - modeStart[i]) * ramp;
+	} else {
+		let kd = (muted > 0.5) ? minimum(modeK[i], modeMuteK[i]) : modeK[i];
+		modeAmp[i] = modeAmp[i] * kd;
+	}
+	energy += modeAmp[i] * modeAmp[i];
+}
+energy = minimum(energy, 1.5);
+let kGlide = exp2(2.0 * clamp(glide_st, 0.0, 12.0) / 12.0) - 1.0;
+let tensMul = sqrt(1.0 + kGlide * energy);
+
+// --- modes: closed-form loopback FM, fundamental normalised ---
+let bBase = clamp(fm, 0.0, 100.0) * 0.01 * (0.25 + 0.55 * bright);
+let yl = 0.0;
+let yr = 0.0;
+for (let i: Int = 0; i < 4; i++) {
+	let ratio = modeMu[i] / 2.404826;
+	let f = minimum(f0 * ratio * tensMul, sr * 0.45);
+	let ph = modePh[i] + f / sr;
+	ph = ph - floor(ph);
+	modePh[i] = ph;
+	// keep each mode's harmonic series under -60 dB at Nyquist
+	let bLim = minimum(0.85, exp(-6.9 * f / maximum(0.5 * sr - f, 1.0)));
+	let b = 0.0 - clamp(bBase * (1.0 - 0.2 * i), 0.0, bLim);
+	let c = sin(2.0 * pi * ph);
+	let raw = (2.0 * b + (1.0 + b * b) * c) / (1.0 + 2.0 * b * c + b * b) - b;
+	let s = modeAmp[i] * raw / (1.0 - b * b) * (1.0 + 0.5 * b);
+	yl += s * modeGL[i];
+	yr += s * modeGR[i];
+}
+
+// --- attack texture: band-passed noise burst (Hsu §6.2) ---
+let nz = rng.next() * burstEnv;
+burstEnv *= kBurst;
+let v3 = nz - ic2;
+let v1 = kA1 * ic1 + kA2 * v3;
+let v2 = ic2 + kA2 * ic1 + kA3 * v3;
+ic1 = 2.0 * v1 - ic1;
+ic2 = 2.0 * v2 - ic2;
+let burst = 0.6 * v1 * 0.5;
+
+// palm thump: two-pole low-passed noise on a 0.5 / 6 ms envelope
+handEnvA = handEnvA * kHandRise;
+handEnvD = handEnvD * kHandFall;
+let palm = handLp2.next(handLp1.next(rng.next() * (handEnvD - handEnvA), handHz), handHz) * 1.8;
+
+// equal loudness across tunings: lift below ~40 Hz, exactly 1 at 110 Hz
+let tuneComp = sqrt((1.0 + (40.0 / f0) * (40.0 / f0)) / (1.0 + (40.0 / 110.0) * (40.0 / 110.0)));
+yl = 0.7 * tuneComp * yl + burst + palm;
+yr = 0.7 * tuneComp * yr + burst + palm;
+yl = yl - dcLpL.next(yl, 20.0);
+yr = yr - dcLpR.next(yr, 20.0);
+let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = yl * gain;
+out2 = yr * gain;

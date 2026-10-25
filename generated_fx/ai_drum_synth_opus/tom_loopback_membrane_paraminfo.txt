@@ -1,0 +1,81 @@
+================================================================================
+tom_loopback_membrane — Parameter Information
+================================================================================
+
+WHAT IT IS
+A triggered tom. Four drum-head modes (circular-membrane Bessel ratios) are
+each a loopback-FM oscillator: at 0 % fm it is a real-sounding modal tom,
+and turned up every mode grows its own harmonic series, a "space" tom
+halfway to a synth. The pitch glides down because the head loses energy
+(tension follows energy, as in a real tom). A roll pushes it back up. A
+filtered noise burst gives the stick or felt attack. The upper modes are
+panned out, so the drum fills the stereo field without moving its
+fundamental off centre.
+
+A click on in2 is a hand laid on the head: it chokes the ring quickly,
+from a gentle fingertip fade to a hard palm grab with a dull thump. The
+thump only happens while the tom is sounding.
+
+Every hit lands on a slightly different spot (mode balance, detune, pan
+tilt, attack colour drift by a random walk). Mode phases run freely, so
+no two hits line up the same. A retrigger ramps each mode from where it
+is: no reset, no click.
+
+Source: Hsu & Smyth, SMC-19 §3.4, §4.1, §5.3, §5.5, §6.2 (loopback-FM
+modal percussion, tom tom); Marogna, Avanzini & Bank, DAFx-10 P49 §2.2,
+§3.2 eq. 20, §4 (membrane modes, energy-based tension modulation, hammer);
+Avanzini & Rocchesso, DAFx-01 §2.1 (contact time).
+
+PARAMETERS (8 + output gain)
+
+1. tune_hz — 35…800 Hz, default 110 Hz
+   Head fundamental. 35-60 = sub boom; 60-90 = floor tom / dub boom;
+   150+ = rack tom; 400+ = timbale / syndrum ping. The level is compensated
+   below ~40 Hz (K-weighted loudness within 1.6 dB from 35 to 800 Hz), and
+   the fm harmonics thin out at high tunings so they never alias.
+
+2. decay_ms — 100…2500 ms, default 600 ms
+   Time to -40 dB for the fundamental; upper modes die sooner.
+
+3. glide_st — 0…12 st, default 3 st
+   Pitch rise at full energy; the fall follows the decay. 0 = steady;
+   12 = 808-style "pew" tom.
+
+4. fm — 0…100 %, default 35 %
+   Loopback-FM brightness. It is strongest at the attack and fades into the
+   tail. 0 = acoustic modes; 100 = buzzy, synthetic.
+
+5. mallet — 0…100 %, default 40 %
+   Felt (0: 4 ms contact, round and dark) to stick (100: 0.4 ms, more
+   upper modes and a louder noise attack).
+
+6. spread — 0…100 %, default 40 %
+   Stereo spread of the upper modes. 0 = mono.
+
+7. variance — 0…100 %, default 35 %
+   How much the strike spot wanders from hit to hit. 0 = same spot every
+   time (the free-running phases still differ).
+
+8. hand — 0…100 %, default 40 %
+   The muting hand on in2. Fingertips (0) ease the drum out in about
+   200 ms with no sound of their own. A firm palm (100) chokes it in about
+   12 ms with an audible dull thump. The thump follows how loud the tom
+   still is: up to about -11 dB re the stick hit right after a hit, quieter
+   as the ring dies, silent on a silent drum. The upper modes die first, as
+   under a real hand. The hand stays down until the next stick hit lifts
+   it.
+
+9. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim, last in the chain.
+
+INLETS / OUTLETS
+- in1: trigger. A single-sample click (any rising edge above 0.1). No
+  velocity: the level is fixed, and variance supplies the movement.
+- in2: hand mute. A single-sample click (rising edge above 0.1) lays the
+  hand on the head; see "hand". Muting a silent drum makes no sound.
+- out1 / out2: stereo.
+
+NOTES
+- Isolated hits peak around -3…-1 dBFS at defaults; fm and mallet at 100
+  run about 4 dB hotter.
+- No safety limiter.

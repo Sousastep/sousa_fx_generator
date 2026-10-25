@@ -1,0 +1,66 @@
+================================================================================
+snare_wire_collision — Parameter Information
+================================================================================
+
+WHAT IT IS
+A triggered snare. A six-mode drum head (circular-membrane Bessel ratios)
+is struck by a short stick pulse, and where it lands sets the mode balance:
+near the centre is round, towards the rim is ringier. The snare wires are
+not just a noise burst. They only sound while the head swings far enough to
+slap into them, so their buzz comes in bursts at the head's own pitch and
+dies with it. The wire texture is velvet noise (sparse random clicks): turn
+it down for a crackly, dusty trip-hop rattle, up for a crisp modern one.
+Left and right wires are independent, so the snare is wide; the head stays
+centred.
+
+Every hit lands on a slightly different spot (mode balance, contact time,
+detune, wire sensitivity drift by a random walk). A retrigger adds into
+the ringing head (nothing resets) with a shorter, harder contact.
+
+Source: Torin & Hamilton, DAFx-14 §2.4-2.5 eq. 10-16 (mallet and snare
+collisions); Marogna, Avanzini & Bank, DAFx-10 P49 §2.2 (membrane modes);
+Werner, DAFx-19 paper 53 (velvet noise); Poirot, Bilbao &
+Kronland-Martinet, DAFx-23 paper 42 §5.2 (collisions, randomness).
+
+PARAMETERS (7 + output gain)
+
+1. tune_hz — 35…800 Hz, default 190 Hz
+   Head fundamental. 140-170 = fat trip-hop snare; 250+ = tight, piccolo;
+   under 80 = a slow, gong-like rattle; 500+ = a tiny tin snare. The head
+   level is compensated below ~40 Hz (K-weighted loudness within 1.2 dB
+   from 35 to 800 Hz).
+
+2. decay_ms — 40…800 ms, default 180 ms
+   Head ring (time to -40 dB for the fundamental; overtones die sooner).
+   The wires follow it, because they are driven by the head.
+
+3. snares — 0…100 %, default 70 %
+   Wire level. 0 = a bare tom-like head. More wires also damp the head a
+   little, as real ones do.
+
+4. wire_gap — 0…100 %, default 50 %
+   Tight (0) wires only rattle on the big first swings: short and dry.
+   Loose (100) wires keep slapping far down the decay: long, splashy buzz.
+
+5. tone_hz — 1500…12000 Hz, default 5000 Hz
+   Lowpass on the wires. Low = dark, dubby; high = sizzle.
+
+6. grain — 0…100 %, default 70 %
+   Velvet-noise density, about 300 to 15000 clicks per second. Low =
+   crackly, lo-fi grit; high = smooth hiss.
+
+7. variance — 0…100 %, default 35 %
+   How much the strike spot wanders from hit to hit. 0 = identical hits.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim, last in the chain.
+
+INLETS / OUTLETS
+- in1: trigger. A single-sample click (any rising edge above 0.1). No
+  velocity: the level is fixed, and variance supplies the movement.
+- out1 / out2: stereo (head centred, wires wide).
+
+NOTES
+- Isolated hits peak near -2 dBFS at defaults; loose wires with
+  snares 100 run about 6 dB hotter.
+- No safety limiter.
