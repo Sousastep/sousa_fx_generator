@@ -1,0 +1,176 @@
+// ============================================================================
+// animator_pulse_bass.txt — waveform animator: difference of two phase-offset
+//                           saws on the tuba's phase, width animated per bar
+//
+// From: J. Timoney, V. Lazzarini, J. Kleimola, V. Välimäki, "Examining the
+//       Oscillator Waveform Animation Effect", DAFx-14 §3 (Hutchins'
+//       waveform animator: an LFO-shifted comparator turns the saw into a
+//       PWM wave whose width follows the LFO, and saw - PWM is the
+//       phase-shifted saw), §5 (the animator as a delay-line filter acting
+//       on the saw); J. Nam, V. Välimäki, DAFx-09 paper 72 §4.2 (pulse/square
+//       from differenced saw-like trains).
+//
+// This effect keeps the animator's PWM stage as the voice: the difference of
+// two phase-shifted saws is exactly that variable-width pulse.
+//
+// pulse = saw(ph + 0.25 + w/2) - saw(ph + 0.25 - w/2), both saws polyBLEP
+// corrected. The pair is centred, so whatever the width w, the pulse's
+// fundamental is exactly sin(2*pi*ph): the tuba phasor's fundamental. Width
+// animation therefore changes only the harmonics (classic PWM shimmer) and
+// never shifts the voice against the dry horn, which keeps the wet/dry
+// crossfade phase-coherent. Left and right animate with an adjustable phase
+// offset for width.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (width animation). Held (no movement for 100 ms)
+//        -> internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1. Static -> internal ramp at f0,
+//        continued from the last tracked phase.
+//   in6: smoothed tuba envelope 0..1 (gate). Static -> internal peak follower.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Pulse width
+@param({ min: 1, max: 99 }) width = 50;
+// Animation depth
+@param({ min: 0, max: 100 }) animate = 40;
+// Animation cycles per bar
+@param({ min: 1, max: 16 }) animate_div = 1;
+// Stereo spread (L/R animation phase offset)
+@param({ min: 0, max: 100 }) spread = 50;
+// Tone (2-pole lowpass)
+@param({ min: 200, max: 12000 }) tone_hz = 2500;
+// Wet
+@param({ min: 0, max: 100 }) wet = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+@state prevBarPh = 0.0;
+@state barCount = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+
+@state prevEnvIn = 0.0;
+@state envHold = 0.0;
+@state envInt = 0.0;
+
+@state lp1L = new onepole();
+@state lp2L = new onepole();
+@state lp1R = new onepole();
+@state lp2R = new onepole();
+
+function polyBlep(t: number, dt: number): number {
+	if (t < dt) {
+		let x = t / dt;
+		return x + x - x * x - 1.0;
+	}
+	if (t > 1.0 - dt) {
+		let x = (t - 1.0) / dt;
+		return x * x + x + x + 1.0;
+	}
+	return 0.0;
+}
+
+function sawAt(ph: number, dt: number): number {
+	let p = wrap(ph, 0.0, 1.0);
+	return 2.0 * p - 1.0 - polyBlep(p, dt);
+}
+
+// centred variable-width pulse; fundamental = sin(2*pi*ph) for every w
+function pulseAt(ph: number, w: number, dt: number): number {
+	return sawAt(ph + 0.25 + 0.5 * w, dt) - sawAt(ph + 0.25 - 0.5 * w, dt);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+let envIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let inc = clamp(f0Smooth, 20.0, 1000.0) / sr;
+
+// --- Bar phase: hold-latched in4, else internal 2 s bar; 4-bar position -----
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+if (barPh < prevBarPh - 0.5) {
+	barCount += 1.0;
+	if (barCount >= 4.0) {
+		barCount = 0.0;
+	}
+}
+prevBarPh = barPh;
+let pos4 = barCount + barPh;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + inc, 0.0, 1.0);
+}
+
+// --- Envelope: in6 while it moves, else internal peak follower --------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.003 * sr));
+let rel = 1.0 - exp(-1.0 / (0.080 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envHold = 0.1 * sr;
+} else if (envHold > 0.0) {
+	envHold -= 1.0;
+}
+prevEnvIn = envIn;
+let envVal = (envHold > 0.0) ? clamp(envIn, 0.0, 1.0) : clamp(envInt, 0.0, 1.0);
+let gate = clamp(sqrt(envVal) * 1.6, 0.0, 1.0);
+
+// --- Bar-locked width animation ---------------------------------------------
+let div = round(clamp(animate_div, 1.0, 16.0));
+let theta = wrap(pos4 * div, 0.0, 1.0);
+let w0 = clamp(width, 1.0, 99.0) * 0.01;
+let depthA = clamp(animate, 0.0, 100.0) * 0.01 * 0.45;
+let offR = 0.5 * clamp(spread, 0.0, 100.0) * 0.01;
+let wL = clamp(w0 + depthA * sin(2.0 * pi * theta), 0.02, 0.98);
+let wR = clamp(w0 + depthA * sin(2.0 * pi * wrap(theta + offR, 0.0, 1.0)), 0.02, 0.98);
+
+let pL = pulseAt(ownPh, wL, inc) * 0.5;
+let pR = pulseAt(ownPh, wR, inc) * 0.5;
+
+let tone = clamp(tone_hz, 200.0, minimum(12000.0, sr * 0.45));
+let vL = lp2L.next(lp1L.next(pL, tone), tone) * gate;
+let vR = lp2R.next(lp1R.next(pR, tone), tone) * gate;
+
+// --- Wet: phase-locked crossfade --------------------------------------------
+let w = clamp(wet, 0.0, 100.0) * 0.01;
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, vL) * outGain;
+out2 = linearinterp(w, xR, vR) * outGain;

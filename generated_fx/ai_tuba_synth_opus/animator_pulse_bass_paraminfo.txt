@@ -1,0 +1,57 @@
+================================================================================
+animator_pulse_bass — Parameter Information
+================================================================================
+
+WHAT IT IS
+A pulse-width-modulated bass made the way the classic analog "waveform
+animator" makes it: two phase-shifted copies of a saw on the tuba's phase,
+subtracted. The width breathes in time with the bar, which gives the chorus-
+like shimmer of an animated oscillator without detuning anything. The pulse is
+centred, so its fundamental sits exactly on the horn's whatever the width:
+only the harmonics move.
+
+Source: Timoney, Lazzarini, Kleimola & Välimäki, DAFx-14 §3 (Hutchins'
+waveform animator, PWM stage), §5 (delay-line animator); Nam & Välimäki,
+DAFx-09 §4.2.
+
+PARAMETERS (6 + output gain)
+
+1. width — 1…99 %, default 50 %
+   Pulse width. 50 = hollow square; 10–20 = thin, nasal; 80–90 = the same
+   colours mirrored.
+
+2. animate — 0…100 %, default 40 %
+   How far the width swings around its setting (up to ±45 %).
+
+3. animate_div — 1…16 (stepped), default 1
+   Width swings per bar: 1 = slow liquid breath, 4 = quarter-note pulse,
+   16 = fast, buzzy flutter.
+
+4. spread — 0…100 %, default 50 %
+   Left/right animate out of step (100 % = opposite). 0 = mono.
+
+5. tone_hz — 200…12000 Hz, default 2500 Hz
+   Two-pole lowpass on the pulse.
+
+6. wet — 0…100 %, default 100 %
+   Dry/wet crossfade. The pulse's fundamental is locked in phase with the
+   horn, so the blend adds up instead of cancelling.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (width animation). If held, an internal 2 s bar
+  (120 BPM) takes over.
+- in5: phase-locked tuba phasor. If static, an internal ramp at f0 carries
+  on from the last phase.
+- in6: smoothed tuba envelope (gate). If static, an internal peak follower
+  is used.
+- out1 / out2: stereo.
+
+NOTES
+- Both saws are polyBLEP-corrected (no aliasing into the sub).
+- Gated by the envelope; silent when the horn is.
+- No safety limiter.

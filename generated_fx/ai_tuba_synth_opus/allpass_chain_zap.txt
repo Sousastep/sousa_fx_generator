@@ -1,0 +1,190 @@
+// ============================================================================
+// allpass_chain_zap.txt — first-order allpass chain with its coefficient
+//                         modulated at audio rate by the tuba's phase:
+//                         space-bass zaps and laser sidebands
+//
+// From: J. Kleimola, J. Pekonen, H. Penttinen, V. Välimäki, J. S. Abel,
+//       "Sound Synthesis Using an Allpass Filter Chain with Audio-rate
+//       Coefficient Modulation", DAFx-09 paper 66: §2.1 eq. 3
+//       (y = x[n-1] + m[n] x[n] - m[n] y[n-1], m[n-1] -> m[n] to avoid
+//       transients), §2.2 eq. 11-12 (chain of N stages widens the sidebands),
+//       §2.4 (relation to AM/FM), §4.1 (synth sounds: sine carrier and
+//       sine modulator), §4.3 (processing arbitrary input signals);
+//       J. Kleimola, "Dispersion Modulation using Allpass Filters", DAFx-08
+//       §2.3 (allpass dispersion as a time-varying delay).
+//
+// Carrier: the tuba's phase-locked fundamental sine (in6). Modulator:
+// m = depth * sin(2*pi*ratio*phase) on the same tuba phase, so for ratios on
+// the 0.5 grid every sideband lands on a (sub)harmonic of the horn. The depth
+// "zaps": on each bar step it jumps up and decays (a laser sweep). Dry/wet
+// ("input") chooses what goes INTO the chain -- tuba or locked sine -- and the
+// output always comes from the chain; at depth 0 the chain is a plain
+// N-sample delay, so there is no dry/wet comb.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (zap steps). Held (no movement for 100 ms) ->
+//        internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1 (modulator phase). Static ->
+//        internal ramp at f0, continued from the last tracked phase.
+//   in6: phase-locked fundamental sine -1..1, scaled by confidence (carrier).
+//        Static -> internal sin(2*pi*phase).
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Allpass stages
+@param({ min: 1, max: 16 }) stages = 8;
+// Modulation depth
+@param({ min: 0, max: 95 }) depth = 60;
+// Modulator ratio x f0 (snaps to 0.5 steps)
+@param({ min: 0.5, max: 4 }) mod_ratio = 1;
+// Zap amount
+@param({ min: 0, max: 100 }) sweep = 50;
+// Zaps per bar
+@param({ min: 1, max: 16 }) sweep_div = 2;
+// Tone (2-pole lowpass)
+@param({ min: 200, max: 12000 }) tone_hz = 6000;
+// Input: tuba (0) -> locked sine (100) into the chain
+@param({ min: 0, max: 100 }) input = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+@state prevBarPh = 0.0;
+@state barCount = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+@state prevOwnPh = 0.0;
+@state flip = 0.0;
+
+@state prevSinIn = 0.0;
+@state sinHold = 0.0;
+
+@state envInt = 0.0;
+@state mSmooth = 0.0;
+
+// Per channel, per stage: [x1, y1]
+@state apX = new FixedSampleArray(2, 16);
+@state apY = new FixedSampleArray(2, 16);
+
+@state lp1L = new onepole();
+@state lp2L = new onepole();
+@state lp1R = new onepole();
+@state lp2R = new onepole();
+
+// Modulated allpass chain for channel ch (DAFx-09 eq. 3, stage after stage).
+function chain(ch: Int, x: number, m: number, nSt: Int): number {
+	let s = x;
+	for (let i: Int = 0; i < nSt; i++) {
+		let y = apX[ch][i] + m * s - m * apY[ch][i];
+		apX[ch][i] = s;
+		apY[ch][i] = y;
+		s = y;
+	}
+	return s;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+let sinIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let inc = clamp(f0Smooth, 20.0, 1000.0) / sr;
+
+// --- Bar phase: hold-latched in4, else internal 2 s bar; 4-bar position -----
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+if (barPh < prevBarPh - 0.5) {
+	barCount += 1.0;
+	if (barCount >= 4.0) {
+		barCount = 0.0;
+	}
+}
+prevBarPh = barPh;
+let pos4 = barCount + barPh;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + inc, 0.0, 1.0);
+}
+// two-cycle ramp 0..2 so half-integer ratios stay continuous
+if (ownPh < prevOwnPh - 0.5) {
+	flip = 1.0 - flip;
+}
+prevOwnPh = ownPh;
+let ph2 = ownPh + flip;
+
+// --- Internal envelope gate (quiet when the horn is quiet) -----------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.003 * sr));
+let rel = 1.0 - exp(-1.0 / (0.080 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+let gate = clamp(sqrt(maximum(envInt, 0.0)) * 1.6, 0.0, 1.0);
+
+// --- Carrier: in6 locked sine while it moves, else internal -----------------
+if (abs(sinIn - prevSinIn) > 0.0000001) {
+	sinHold = 0.1 * sr;
+} else if (sinHold > 0.0) {
+	sinHold -= 1.0;
+}
+prevSinIn = sinIn;
+let carrier = ((sinHold > 0.0) ? clamp(sinIn, -1.0, 1.0) : sin(2.0 * pi * ownPh)) * gate;
+
+// --- Modulator: zap contour per bar step ------------------------------------
+let ratio = clamp(round(2.0 * clamp(mod_ratio, 0.5, 4.0)) * 0.5, 0.5, 4.0);
+let div = round(clamp(sweep_div, 1.0, 16.0));
+let stepPh = wrap(pos4 * div, 0.0, 1.0);
+let decay = 1.0 - stepPh;
+let zap = decay * decay * decay;
+let sw = clamp(sweep, 0.0, 100.0) * 0.01;
+let depthNow = clamp(depth, 0.0, 95.0) * 0.01 * (1.0 - sw + sw * zap);
+// short smoothing so the zap's restart at each step is a fast rise, not a click
+mSmooth += (depthNow - mSmooth) * (1.0 - exp(-1.0 / (0.0015 * sr)));
+let m = clamp(mSmooth * sin(2.0 * pi * wrap(ratio * ph2, 0.0, 1.0)), -0.95, 0.95);
+
+// --- Input blend into the chain ---------------------------------------------
+let inp = clamp(input, 0.0, 100.0) * 0.01;
+let nSt: Int = trunc(clamp(stages, 1.0, 16.0) + 0.5);
+let yL = chain(0, linearinterp(inp, xL, carrier), m, nSt);
+let yR = chain(1, linearinterp(inp, xR, carrier), m, nSt);
+
+let tone = clamp(tone_hz, 200.0, minimum(12000.0, sr * 0.45));
+let oL = lp2L.next(lp1L.next(yL, tone), tone);
+let oR = lp2R.next(lp1R.next(yR, tone), tone);
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

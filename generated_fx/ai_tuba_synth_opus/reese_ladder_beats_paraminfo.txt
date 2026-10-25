@@ -1,0 +1,58 @@
+================================================================================
+reese_ladder_beats — Parameter Information
+================================================================================
+
+WHAT IT IS
+A two-saw Reese bass at the tuba's pitch, pushed through a nonlinear Moog
+ladder. Saw A rides the tuba's own phase; saw B is offset by a whole number of
+turns per bar, so the Reese "beating" is locked to the tempo and lands on the
+bar line instead of drifting. The dry/wet blend happens before the ladder, so
+horn and synth share one filter and one saturation stage.
+
+Source: Huovilainen, DAFx-04 §4.2 (nonlinear ladder), §5 (half-sample
+feedback delay); Timoney et al., DAFx-14 §3 (detuned oscillator animation).
+
+PARAMETERS (7 + output gain)
+
+1. beats_per_bar — 0…16 (stepped), default 4
+   How many times the two saws beat per bar. 0 = plain doubled saw,
+   1–2 = slow liquid roll, 4–8 = classic Reese churn, 16 = fast growl.
+
+2. cutoff_hz — 40…8000 Hz, default 500 Hz
+   Ladder cutoff before envelope tracking. Low values = deep, round sub-Reese.
+
+3. resonance — 0…100 %, default 35 %
+   Ladder feedback. Near 100 % the ladder starts to self-oscillate.
+
+4. drive_db — 0…24 dB, default 9 dB
+   Gain into the ladder's tanh stages. Level is roughly compensated; higher
+   values = denser, more compressed saturation.
+
+5. env_track — 0…100 %, default 50 %
+   How far the horn's envelope opens the cutoff (100 % = up to 4 octaves).
+   Lets your dynamics play the filter.
+
+6. stereo — 0…100 %, default 50 %
+   The right channel's partner saw beats in the opposite direction. 0 = mono.
+
+7. source — 0…100 %, default 100 %
+   Dry/wet, applied BEFORE the ladder: 0 = tuba through the ladder,
+   100 = Reese through the ladder. Both share one filter, so the blend never
+   combs. For an unfiltered dry sound, open cutoff_hz.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor. If held, an internal 2 s bar (120 BPM) takes over.
+- in5: phase-locked tuba phasor (saw A phase). If static, an internal ramp at
+  f0 carries on from the last phase.
+- in6: smoothed tuba envelope (synth gate + cutoff tracking). If static, an
+  internal peak follower is used.
+- out1 / out2: stereo.
+
+NOTES
+- The synth is gated by the envelope, so it is silent when the horn is.
+- No safety limiter.

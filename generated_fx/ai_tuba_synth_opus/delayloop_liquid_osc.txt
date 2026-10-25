@@ -1,0 +1,226 @@
+// ============================================================================
+// delayloop_liquid_osc.txt — feedback-delay-loop oscillator re-struck by the
+//                            tuba's phase: liquid saw/square with a decaying,
+//                            darkening loop
+//
+// From: J. Nam, V. Välimäki, "Alias-Free Virtual Analog Oscillators Using a
+//       Feedback Delay Loop",
+//       DAFx-09 paper 72: §2.1 eqs. 1-2 (impulse train from a delay loop with
+//       a first-order Thiran allpass, D in [0.418, 1.418]), §2.2 (bipolar
+//       loop: minus sign, half the length -> odd harmonics), §4.1 eq. 7
+//       (leaky integrator, dc removed first -> sawtooth), §4.2 (square from
+//       the bipolar train).
+//
+// One delay line per channel with two read taps: a full period (unipolar,
+// saw) and a negated half period (bipolar, square). "shape" crossfades the
+// two inside the loop. Each tap has its own Thiran allpass for the fractional
+// part of the period. Instead of a single seed impulse, the loop is re-struck
+// once per tuba cycle (on the wrap of the tuba phasor, sub-sample placed), so
+// it can never drift from the horn. "sustain" is the loop gain and the loop
+// lowpass ("damping") darkens every recirculation -- the liquid part. The
+// lowpass's own delay is subtracted from the loop length to keep it in tune.
+//
+// Dry/wet ("source") picks what strikes the loop: 100 % = impulses (synth),
+// 0 % = the differentiated tuba, which the output integrator turns back into
+// the tuba. At sustain 0 and source 0 the output is the dry tuba (highpassed
+// at ~1.5 Hz); with sustain up the horn rings through a comb tuned exactly to
+// its own period -- phase-coherent by construction.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (damping sweep). Held (no movement for 100 ms)
+//        -> internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1 (strike times). Static -> internal
+//        ramp at f0, continued from the last tracked phase.
+//   in6: smoothed tuba envelope 0..1 (strike strength). Static -> internal
+//        peak follower on in1/in2.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Shape: saw (0) -> square (100)
+@param({ min: 0, max: 100 }) shape = 0;
+// Sustain (loop gain)
+@param({ min: 0, max: 99 }) sustain = 85;
+// Loop damping lowpass
+@param({ min: 200, max: 12000 }) damping_hz = 2500;
+// Bar sweep of damping (down to -3 octaves)
+@param({ min: 0, max: 100 }) damp_sweep = 40;
+// Sweep steps per bar
+@param({ min: 1, max: 16 }) sweep_div = 1;
+// Source: tuba (0) -> impulses (100) striking the loop
+@param({ min: 0, max: 100 }) source = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+@state prevBarPh = 0.0;
+@state barCount = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+@state prevOwnPh = 0.0;
+@state pendImp = 0.0;
+
+@state prevEnvIn = 0.0;
+@state envHold = 0.0;
+@state envInt = 0.0;
+
+@state prevXL = 0.0;
+@state prevXR = 0.0;
+
+// Loop buffers (power of two, > sr/20 at 96 kHz)
+@state buf = new FixedSampleArray(2, 8192);
+@state wIdx: Int = 0;
+// Per channel: [ap1 x1, ap1 y1, ap2 x1, ap2 y1, loop lp, dc x1, dc y1, integrator]
+@state st = new FixedSampleArray(2, 8);
+
+// One sample of the loop for channel ch (reads its own @state arrays).
+function loopStep(ch: Int, exc: number, n1: Int, a1: number, n2: Int, a2: number, sh: number, g: number, p: number, rDc: number): number {
+	let i1: Int = (wIdx - n1 + 8192) & 8191;
+	let i2: Int = (wIdx - n2 + 8192) & 8191;
+	let r1 = buf[ch][i1];
+	let r2 = buf[ch][i2];
+	// first-order Thiran allpass per tap (DAFx-09 eq. 1)
+	let ap1 = a1 * r1 + st[ch][0] - a1 * st[ch][1];
+	st[ch][0] = r1;
+	st[ch][1] = ap1;
+	let ap2 = a2 * r2 + st[ch][2] - a2 * st[ch][3];
+	st[ch][2] = r2;
+	st[ch][3] = ap2;
+	// saw loop (full period) vs bipolar loop (negated half period)
+	let mixed = (1.0 - sh) * ap1 - sh * ap2;
+	st[ch][4] = st[ch][4] + (1.0 - p) * (mixed - st[ch][4]);
+	let y = exc + g * st[ch][4];
+	buf[ch][wIdx] = y;
+	// dc blocker, then leaky integrator (DAFx-09 eq. 7)
+	let dcOut = y - st[ch][5] + rDc * st[ch][6];
+	st[ch][5] = y;
+	st[ch][6] = dcOut;
+	return dcOut;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+let envIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+let inc = f0 / sr;
+
+// --- Bar phase: hold-latched in4, else internal 2 s bar; 4-bar position -----
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+if (barPh < prevBarPh - 0.5) {
+	barCount += 1.0;
+	if (barCount >= 4.0) {
+		barCount = 0.0;
+	}
+}
+prevBarPh = barPh;
+let pos4 = barCount + barPh;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + inc, 0.0, 1.0);
+}
+
+// --- Envelope: in6 while it moves, else internal peak follower --------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.003 * sr));
+let rel = 1.0 - exp(-1.0 / (0.080 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envHold = 0.1 * sr;
+} else if (envHold > 0.0) {
+	envHold -= 1.0;
+}
+prevEnvIn = envIn;
+let envVal = (envHold > 0.0) ? clamp(envIn, 0.0, 1.0) : clamp(envInt, 0.0, 1.0);
+let gate = clamp(sqrt(envVal) * 1.6, 0.0, 1.0);
+
+// --- Strike: unit impulse on each tuba-phase wrap, linear sub-sample split --
+let imp = pendImp;
+pendImp = 0.0;
+if (ownPh < prevOwnPh - 0.5) {
+	let tPast = clamp(ownPh / maximum(inc, 0.000001), 0.0, 1.0);
+	imp += tPast;
+	pendImp = 1.0 - tPast;
+}
+prevOwnPh = ownPh;
+
+// --- Loop damping with the bar-step sweep -----------------------------------
+let div = round(clamp(sweep_div, 1.0, 16.0));
+let stepPh = wrap(pos4 * div, 0.0, 1.0);
+let contour = 0.5 - 0.5 * cos(2.0 * pi * stepPh);
+let fd = clamp(damping_hz, 200.0, 12000.0) * exp2(-3.0 * clamp(damp_sweep, 0.0, 100.0) * 0.01 * contour);
+let fdSafe = clamp(fd, 20.0, sr * 0.45);
+let p = exp(-2.0 * pi * fdSafe / sr);
+let lpDelay = p / (1.0 - p);
+
+// --- Loop lengths: integer read + Thiran fraction, lowpass delay removed ----
+let per = sr / f0;
+let len1 = clamp(per - lpDelay, 2.5, 8000.0);
+let n1: Int = trunc(len1 - 0.418);
+let dFrac1 = len1 - n1;
+let a1 = (1.0 - dFrac1) / (1.0 + dFrac1);
+let len2 = clamp(0.5 * per - lpDelay, 2.5, 8000.0);
+let n2: Int = trunc(len2 - 0.418);
+let dFrac2 = len2 - n2;
+let a2 = (1.0 - dFrac2) / (1.0 + dFrac2);
+
+// --- Excitation: impulses vs differentiated tuba ----------------------------
+let g = clamp(sustain, 0.0, 99.0) * 0.01;
+let sh = clamp(shape, 0.0, 100.0) * 0.01;
+let src = clamp(source, 0.0, 100.0) * 0.01;
+let impAmp = 2.0 * (1.0 - g) * gate * imp;
+let dL = (xL - prevXL) * (1.0 - g);
+let dR = (xR - prevXR) * (1.0 - g);
+prevXL = xL;
+prevXR = xR;
+let excL = linearinterp(src, dL, impAmp);
+let excR = linearinterp(src, dR, impAmp);
+
+// dc blocker and leaky integrator both corner at ~1.5 Hz, so the tuba's
+// fundamental passes with only a few degrees of phase shift
+let leak = 1.0 - 2.0 * pi * 1.5 / sr;
+let lkL = loopStep(0, excL, n1, a1, n2, a2, sh, g, p, leak);
+let lkR = loopStep(1, excR, n1, a1, n2, a2, sh, g, p, leak);
+wIdx = (wIdx + 1) & 8191;
+st[0][7] = lkL + leak * st[0][7];
+st[1][7] = lkR + leak * st[1][7];
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = st[0][7] * outGain;
+out2 = st[1][7] * outGain;

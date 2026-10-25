@@ -1,0 +1,61 @@
+================================================================================
+allpass_chain_zap — Parameter Information
+================================================================================
+
+WHAT IT IS
+A chain of allpass filters whose coefficient is wobbled at audio rate by the
+tuba's own phase. Fed the horn's fundamental sine, the chain sprays sidebands
+on both sides of it, a metallic, laser-like bass that stays in tune because
+the modulator runs on the same phase. On each bar step the depth jumps up and
+decays: a space-bass "zap".
+
+Source: Kleimola, Pekonen, Penttinen, Välimäki & Abel, DAFx-09 paper 66
+§2.1–2.2 (audio-rate allpass coefficient modulation, chains), §4.1 and §4.3
+(synth sounds; processing any input); Kleimola, DAFx-08 (dispersion
+modulation).
+
+PARAMETERS (7 + output gain)
+
+1. stages — 1…16 (stepped), default 8
+   Chain length. More stages = wider spectrum, more "zzzap".
+
+2. depth — 0…95 %, default 60 %
+   Peak modulation index. 0 = clean (the chain is just a few samples of
+   delay); high = dense, gritty sidebands.
+
+3. mod_ratio — 0.5…4 × f0, default 1
+   Modulator frequency, snapped to 0.5 steps. 1 = harmonic sidebands;
+   0.5 = sub-octave sidebands (growl); 1.5 / 2.5 = hollow, bell-like.
+
+4. sweep — 0…100 %, default 50 %
+   How much of the depth is zapped per step. 0 = steady timbre.
+
+5. sweep_div — 1…16 (stepped), default 2
+   Zaps per bar.
+
+6. tone_hz — 200…12000 Hz, default 6000 Hz
+   Two-pole lowpass after the chain.
+
+7. input — 0…100 %, default 100 %
+   Dry/wet, applied to what goes INTO the chain: 0 = the tuba itself
+   (laser-processed horn), 100 = the horn's locked fundamental sine (pure
+   synth). The output always comes from the chain, so there is no comb
+   between dry and wet.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (zap steps). If held, an internal 2 s bar (120 BPM)
+  takes over.
+- in5: phase-locked tuba phasor (modulator phase). If static, an internal
+  ramp at f0 carries on from the last phase.
+- in6: phase-locked fundamental sine (carrier). If static, an internal sine
+  on the tuba phase is used.
+- out1 / out2: stereo.
+
+NOTES
+- The sine carrier is gated by an envelope follower; silent when the horn is.
+- No safety limiter.

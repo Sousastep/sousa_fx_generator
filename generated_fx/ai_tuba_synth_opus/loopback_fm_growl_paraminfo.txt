@@ -1,0 +1,60 @@
+================================================================================
+loopback_fm_growl — Parameter Information
+================================================================================
+
+WHAT IT IS
+A growl bass from loopback FM, a self-modulating oscillator, written in its
+closed form so it can run straight on the tuba's phase: the pitch is always
+the horn's, and only the timbre moves. The feedback B is swept in a rise-fall
+contour on every bar step for the "yoi"/talking growl of deep dubstep, and
+your dynamics can push it further. The level stays steady as the spectrum
+opens.
+
+Source: Hsu & Smyth, SMC-19 §3.1–3.4 (loopback FM, closed form z0 and b0,
+time-varying timbre); Smyth, SMC-19 (self-coupled oscillators).
+
+PARAMETERS (7 + output gain)
+
+1. feedback — 0…99 %, default 60 %
+   Loopback coefficient B. 0 = pure sine on the horn's phase; 50 = warm,
+   saw-like; 90+ = harsh, nasal growl.
+
+2. sweep — 0…100 %, default 60 %
+   How far each bar step pulls B down and back up. 0 = static timbre.
+
+3. sweep_div — 1…16 (stepped), default 4
+   Growl steps per bar: 1 = one long "yoi", 4 = quarter notes,
+   8 = eighths, 16 = sixteenth-note chatter.
+
+4. env_to_fb — 0…100 %, default 40 %
+   Playing louder pushes B towards maximum. 0 = dynamics leave the timbre
+   alone.
+
+5. octave — -1…+1 (stepped), default 0
+   Voice an octave below, on, or above the horn. The octave-down ramp is
+   built from the same phase, so it never drifts.
+
+6. tone_hz — 200…12000 Hz, default 3000 Hz
+   Two-pole lowpass on the voice.
+
+7. wet — 0…100 %, default 100 %
+   Dry/wet crossfade. At low feedback the voice is the horn's fundamental in
+   phase, so the blend reinforces rather than cancels.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (step sweep). If held, an internal 2 s bar (120 BPM)
+  takes over.
+- in5: phase-locked tuba phasor (oscillator phase). If static, an internal
+  ramp at f0 carries on from the last phase.
+- in6: smoothed tuba envelope (gate + dynamics to feedback). If static, an
+  internal peak follower is used.
+- out1 / out2: stereo (voice centred).
+
+NOTES
+- Gated by the envelope; silent when the horn is.
+- No safety limiter.

@@ -1,0 +1,59 @@
+================================================================================
+delayloop_liquid_osc — Parameter Information
+================================================================================
+
+WHAT IT IS
+A virtual-analog saw/square oscillator made from a feedback delay loop tuned
+to exactly one tuba period. The loop is struck once per tuba cycle, so it can
+never drift from the horn. Each pass round the loop goes through a lowpass, so
+the wave keeps softening into a rounded, liquid tone, and that damping can
+close on every bar step. With source at 0 % the tuba itself rings through the
+same loop, a comb tuned to its own pitch.
+
+Source: Nam & Välimäki, DAFx-09 paper 72 §2.1 (delay loop with Thiran
+allpass), §2.2 (bipolar loop), §4.1–4.2 (leaky-integrated saw and square).
+
+PARAMETERS (6 + output gain)
+
+1. shape — 0…100 %, default 0 %
+   0 = saw (all harmonics), 100 = square (odd harmonics, hollow). In between
+   is a hybrid made inside the loop.
+
+2. sustain — 0…99 %, default 85 %
+   Loop gain. Low = bright, plucky strike every cycle; high = the waveform
+   is mostly recirculated loop, darker and smoother; 99 = slow swell, very
+   liquid.
+
+3. damping_hz — 200…12000 Hz, default 2500 Hz
+   Lowpass inside the loop. Lower = rounder each pass.
+
+4. damp_sweep — 0…100 %, default 40 %
+   Closes the damping by up to 3 octaves and back on every bar step.
+
+5. sweep_div — 1…16 (stepped), default 1
+   Damping sweeps per bar.
+
+6. source — 0…100 %, default 100 %
+   What strikes the loop (dry/wet): 0 = the tuba (with sustain 0 that is the
+   dry signal), 100 = synth impulses. Everything shares one loop tuned to
+   the horn's period, so the blend is phase-coherent.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba (each side has its own loop).
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (damping sweep). If held, an internal 2 s bar
+  (120 BPM) takes over.
+- in5: phase-locked tuba phasor (strike times). If static, an internal ramp
+  at f0 carries on from the last phase.
+- in6: smoothed tuba envelope (strike strength). If static, an internal peak
+  follower is used.
+- out1 / out2: stereo.
+
+NOTES
+- Strikes scale with the envelope, so the synth is silent when the horn is.
+- At sustain 99 % the voice takes about a second to build up, and the DC
+  blocker needs a moment to settle.
+- No safety limiter.

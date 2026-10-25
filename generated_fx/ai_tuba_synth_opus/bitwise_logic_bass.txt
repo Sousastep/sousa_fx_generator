@@ -1,0 +1,187 @@
+// ============================================================================
+// bitwise_logic_bass.txt — bitwise logical modulation (XOR/AND/OR) of two
+//                          phase-locked sinusoids on the tuba's phase
+//
+// From: J. Kleimola, "Audio Synthesis by Bitwise Logical Modulation",
+//       DAFx-08 paper 13: §2 (OR/AND/XOR on two's-complement words; sign
+//       rule -> XOR is full-wave rectified, OR/AND half-wave; |result| <=
+//       max|source|, eq. 4), §3.2 (breaking the sign rule removes the
+//       rectification / octave shift), §3.3 (amount A2), §3.4 (steady,
+//       harmonic tones when f2/f1 is rational: n/2, n/3), §3.5 (phase
+//       offset theta2 animates the wave), §3.8 (XOR vs OR vs AND).
+//
+// S1 = sin(2*pi*ph) at full scale and S2 = A2 * sin(2*pi*(ratio*ph + theta))
+// are quantised to signed integers of "bits" word length and combined
+// bitwise. ratio is on the n/2 grid, so S2 is always a (sub)harmonic of the
+// horn and the result is a steady, periodic, pitch-locked tone. theta rises
+// and falls once per bar (phase_sweep), which flips segments of the wave
+// in and out (§3.5) -- a rhythmic, lo-fi digital animation. The output is
+// meant to alias a little (the paper treats that as part of the sound);
+// tone_hz tames it.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (theta sweep). Held (no movement for 100 ms) ->
+//        internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1. Static -> internal ramp at f0,
+//        continued from the last tracked phase.
+//   in6: pitch confidence 0..1. Low confidence fades to plain S1 (the
+//        fundamental). Static -> treated as 1.
+// Outlets:
+//   out1 / out2: stereo (dry keeps its image, voice is centred)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Operation: 0 XOR, 1 AND, 2 OR, 3 XOR with sign rule broken (no octave)
+@param({ min: 0, max: 3 }) op = 0;
+// S2 ratio index: 0 = 1, 1 = 2, 2 = 3/2, 3 = 3, 4 = 4, 5 = 1/2
+@param({ min: 0, max: 5 }) ratio = 1;
+// S2 amount (A2)
+@param({ min: 0, max: 100 }) mod_amount = 50;
+// Word length
+@param({ min: 2, max: 12 }) bits = 6;
+// Bar sweep of S2 phase offset (fraction of a cycle)
+@param({ min: 0, max: 100 }) phase_sweep = 50;
+// Tone (2-pole lowpass)
+@param({ min: 200, max: 12000 }) tone_hz = 2500;
+// Wet
+@param({ min: 0, max: 100 }) wet = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+@state prevOwnPh = 0.0;
+@state flip = 0.0;
+
+@state prevConfIn = 0.0;
+@state confHold = 0.0;
+
+@state envInt = 0.0;
+@state dcX = 0.0;
+@state dcY = 0.0;
+@state lp1 = new onepole();
+@state lp2 = new onepole();
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+let confIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let inc = clamp(f0Smooth, 20.0, 1000.0) / sr;
+
+// --- Bar phase: hold-latched in4, else internal 2 s bar ---------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + inc, 0.0, 1.0);
+}
+// two-cycle ramp 0..2 so the n/2 ratios stay continuous
+if (ownPh < prevOwnPh - 0.5) {
+	flip = 1.0 - flip;
+}
+prevOwnPh = ownPh;
+let ph2 = ownPh + flip;
+
+// --- Confidence: in6 while it moves, else 1 ---------------------------------
+if (abs(confIn - prevConfIn) > 0.0000001) {
+	confHold = 0.1 * sr;
+} else if (confHold > 0.0) {
+	confHold -= 1.0;
+}
+prevConfIn = confIn;
+let conf = (confHold > 0.0) ? clamp(confIn, 0.0, 1.0) : 1.0;
+
+// --- Internal envelope gate (quiet when the horn is quiet) -----------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.003 * sr));
+let rel = 1.0 - exp(-1.0 / (0.080 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+let gate = clamp(sqrt(maximum(envInt, 0.0)) * 1.6, 0.0, 1.0);
+
+// --- Sources -----------------------------------------------------------------
+let ri = round(clamp(ratio, 0.0, 5.0));
+let rat = 2.0;
+if (ri < 0.5) {
+	rat = 1.0;
+} else if (ri < 1.5) {
+	rat = 2.0;
+} else if (ri < 2.5) {
+	rat = 1.5;
+} else if (ri < 3.5) {
+	rat = 3.0;
+} else if (ri < 4.5) {
+	rat = 4.0;
+} else {
+	rat = 0.5;
+}
+// theta rises and falls once per bar (continuous at the bar line)
+let tri = 1.0 - abs(2.0 * barPh - 1.0);
+let thetaOff = clamp(phase_sweep, 0.0, 100.0) * 0.01 * tri;
+let s1 = sin(2.0 * pi * ownPh);
+let s2 = clamp(mod_amount, 0.0, 100.0) * 0.01 * sin(2.0 * pi * wrap(rat * ph2 + thetaOff, 0.0, 1.0));
+
+// --- Quantise to signed words and combine bitwise (two's complement) -------
+let nb = round(clamp(bits, 2.0, 12.0));
+let qMax = exp2(nb - 1.0) - 1.0;
+let a: Int = trunc(s1 * qMax);
+let b: Int = trunc(s2 * qMax);
+let opSel = round(clamp(op, 0.0, 3.0));
+let r: Int = a ^ b;
+if (opSel > 0.5 && opSel < 1.5) {
+	r = a & b;
+} else if (opSel > 1.5 && opSel < 2.5) {
+	r = a | b;
+} else if (opSel > 2.5) {
+	// break the sign rule (§3.2): result follows the sign of S1
+	r = (b < 0) ? (0 - r) : r;
+}
+let logic = r / (qMax + 1.0);
+
+// --- Confidence fades to plain S1, then dc block and tone -------------------
+let voice = linearinterp(conf, s1, logic);
+let rDc = 1.0 - 2.0 * pi * 5.0 / sr;
+let hp = voice - dcX + rDc * dcY;
+dcX = voice;
+dcY = hp;
+let tone = clamp(tone_hz, 200.0, minimum(12000.0, sr * 0.45));
+let voiceF = lp2.next(lp1.next(hp, tone), tone) * gate * 0.8;
+
+// --- Wet: crossfade with a voice that shares the horn's period -------------
+let w = clamp(wet, 0.0, 100.0) * 0.01;
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, voiceF) * outGain;
+out2 = linearinterp(w, xR, voiceF) * outGain;

@@ -1,0 +1,60 @@
+================================================================================
+vps_liquid_orbit — Parameter Information
+================================================================================
+
+WHAT IT IS
+Vector phaseshaping (VPS) applied to the tuba's own phase. The phaseshaper's
+bend point p = (d, v) sets the timbre: the centre (0.5, 0.5) is a pure sine
+in phase with the horn's fundamental, larger v grows a formant, and d far
+from 0.5 brightens it. The bend point orbits a Lissajous figure locked to the
+bar, so the bass "talks" and flows in time with the track.
+
+Source: Kleimola, Lazzarini, Timoney & Välimäki, DAFx-11 §3 (VPS), §3.1
+(formant crossfade), §4.3 (Lissajous modulation); Lazzarini, Timoney,
+Pekonen & Välimäki, DAFx-09 (adaptive phase distortion).
+
+PARAMETERS (7 + output gain)
+
+1. d — 0.05…0.95, default 0.30
+   Horizontal bend point. 0.5 = symmetric; towards 0 or 1 = brighter, buzzier.
+
+2. v — 0.5…4, default 2.0
+   Vertical bend point. 0.5 = plain; 1 = pulse-like; 1.5–4 = a formant at
+   about (2v − 1) × f0, the vocal "liquid" peak.
+
+3. orbit — 0…100 %, default 35 %
+   Size of the Lissajous orbit around (d, v). 0 = static timbre.
+
+4. orbit_per_bar — 0.25…4, default 1
+   Orbit speed, snapped to 1/4, 1/2, 1, 2, 3 or 4 cycles per bar (always
+   in sync with the bar line, even across 4 bars).
+
+5. lissajous_ratio — 1…4 (stepped), default 2
+   How many times v moves for each turn of d. 1 = ellipse, 2 = figure-eight,
+   3–4 = knotted, more vowel changes per cycle.
+
+6. tone_hz — 200…12000 Hz, default 4000 Hz
+   Two-pole lowpass on the voice.
+
+7. wet — 0…100 %, default 100 %
+   Dry/wet crossfade. The voice is built on the horn's phase, so its
+   fundamental lines up with the dry note and the blend adds up in phase.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor. If held, an internal 2 s bar (120 BPM) takes over.
+- in5: phase-locked tuba phasor (the phase that is shaped). If static, an
+  internal ramp at f0 carries on from the last phase.
+- in6: pitch confidence. Low confidence fades the voice back to the plain
+  fundamental (no wild formants on unsure notes). If static, treated as 1.
+- out1 / out2: stereo (voice centred).
+
+NOTES
+- Non-integral formants use the paper's two-oscillator crossfade, so sweeping
+  v stays smooth instead of aliasing.
+- Gated by an internal envelope follower; silent when the horn is.
+- No safety limiter.

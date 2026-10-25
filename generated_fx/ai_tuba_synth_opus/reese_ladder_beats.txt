@@ -1,0 +1,184 @@
+// ============================================================================
+// reese_ladder_beats.txt — bar-locked Reese: two saws beating N times per bar
+//                          through a nonlinear Moog ladder
+//
+// From: A. Huovilainen, "Non-Linear Digital Implementation of the Moog Ladder
+//       Filter", DAFx-04 (P_061) §4.2 eqs. 13-17 (Euler-discretised ladder,
+//       one tanh per stage, cached), §5 (half-sample feedback delay for
+//       tuning); J. Timoney et al., "Examining the Oscillator Waveform
+//       Animation Effect", DAFx-14 §3 (detuned-oscillator animation);
+//       DAFx-26 paper 29 §3.2 (ladder model characteristics compared).
+//
+// Saw A runs on the tuba's own phase. Saw B runs on that phase plus
+// beats_per_bar x (bar phase), so the A/B phase difference -- the Reese
+// beating -- turns exactly beats_per_bar times per bar and lines up with the
+// bar line. The right channel's partner turns the other way (stereo).
+// Dry/wet ("source") happens BEFORE the ladder: tuba and synth share the same
+// filter and nonlinearity, so the blend never combs against itself.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor. Held (no movement for 100 ms) -> internal
+//        2 s bar (120 BPM 4/4), so the beating still runs.
+//   in5: phase-locked tuba phasor 0..1 (saw A phase). Static -> internal ramp
+//        at f0, continued from the last tracked phase.
+//   in6: smoothed tuba envelope 0..1 (synth gate + cutoff tracking).
+//        Static -> internal peak follower on in1/in2.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Beats per bar
+@param({ min: 0, max: 16 }) beats_per_bar = 4;
+// Ladder cutoff
+@param({ min: 40, max: 8000 }) cutoff_hz = 500;
+// Ladder resonance
+@param({ min: 0, max: 100 }) resonance = 35;
+// Ladder drive
+@param({ min: 0, max: 24 }) drive_db = 9;
+// Envelope to cutoff
+@param({ min: 0, max: 100 }) env_track = 50;
+// Stereo
+@param({ min: 0, max: 100 }) stereo = 50;
+// Source: tuba (0) -> synth (100) into the ladder
+@param({ min: 0, max: 100 }) source = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+
+@state prevEnvIn = 0.0;
+@state envHold = 0.0;
+@state envInt = 0.0;
+
+// Ladder state per channel: [y1, y2, y3, y4, tanh(y1), tanh(y2), tanh(y3), y4 previous]
+@state lad = new FixedSampleArray(2, 8);
+
+// polyBLEP residual for a unit saw jump at t = 0
+function polyBlep(t: number, dt: number): number {
+	if (t < dt) {
+		let x = t / dt;
+		return x + x - x * x - 1.0;
+	}
+	if (t > 1.0 - dt) {
+		let x = (t - 1.0) / dt;
+		return x * x + x + x + 1.0;
+	}
+	return 0.0;
+}
+
+function sawAt(ph: number, dt: number): number {
+	return 2.0 * ph - 1.0 - polyBlep(ph, dt);
+}
+
+// Huovilainen ladder (DAFx-04 eqs. 13-17), thermal voltage normalised (2Vt = 1).
+// Feedback is taken from the half-sample-delayed output (paper §5).
+function ladder(ch: Int, x: number, g: number, k: number): number {
+	let fbSig = 0.5 * (lad[ch][3] + lad[ch][7]);
+	let u = tanh(x - k * fbSig);
+	lad[ch][0] = lad[ch][0] + g * (u - lad[ch][4]);
+	lad[ch][4] = tanh(lad[ch][0]);
+	lad[ch][1] = lad[ch][1] + g * (lad[ch][4] - lad[ch][5]);
+	lad[ch][5] = tanh(lad[ch][1]);
+	lad[ch][2] = lad[ch][2] + g * (lad[ch][5] - lad[ch][6]);
+	lad[ch][6] = tanh(lad[ch][2]);
+	lad[ch][7] = lad[ch][3];
+	lad[ch][3] = lad[ch][3] + g * (lad[ch][6] - tanh(lad[ch][3]));
+	return 0.5 * (lad[ch][3] + lad[ch][7]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+let envIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let inc = clamp(f0Smooth, 20.0, 1000.0) / sr;
+
+// --- Bar phase: hold-latched in4, else internal 2 s bar ---------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + inc, 0.0, 1.0);
+}
+let phA = ownPh;
+
+// --- Envelope: in6 while it moves, else internal peak follower --------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.003 * sr));
+let rel = 1.0 - exp(-1.0 / (0.080 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envHold = 0.1 * sr;
+} else if (envHold > 0.0) {
+	envHold -= 1.0;
+}
+prevEnvIn = envIn;
+let envVal = (envHold > 0.0) ? clamp(envIn, 0.0, 1.0) : clamp(envInt, 0.0, 1.0);
+let gate = clamp(sqrt(envVal) * 1.6, 0.0, 1.0);
+
+// --- Bar-locked beating pair ------------------------------------------------
+let beats = round(clamp(beats_per_bar, 0.0, 16.0));
+let phB = wrap(phA + beats * barPh, 0.0, 1.0);
+let phC = wrap(phA - beats * barPh, 0.0, 1.0);
+let sA = sawAt(phA, inc);
+let sB = sawAt(phB, inc);
+let sC = sawAt(phC, inc);
+let st = clamp(stereo, 0.0, 100.0) * 0.01;
+let synL = 0.5 * (sA + sB) * gate;
+let synR = 0.5 * (sA + linearinterp(st, sB, sC)) * gate;
+
+// --- Source blend before the shared ladder ----------------------------------
+let src = clamp(source, 0.0, 100.0) * 0.01;
+let driveGain = dbtoa(clamp(drive_db, 0.0, 24.0));
+let inL = linearinterp(src, xL, synL) * driveGain;
+let inR = linearinterp(src, xR, synR) * driveGain;
+
+// --- Ladder: cutoff opens with the envelope (up to 4 octaves) ---------------
+let fc = clamp(cutoff_hz, 40.0, 8000.0) * exp2(4.0 * clamp(env_track, 0.0, 100.0) * 0.01 * envVal);
+let fcSafe = clamp(fc, 20.0, sr * 0.4);
+let g = 1.0 - exp(-2.0 * pi * fcSafe / sr);
+let k = 4.0 * clamp(resonance, 0.0, 100.0) * 0.01;
+let comp = (1.0 + 0.5 * k) / sqrt(driveGain);
+
+let yL = ladder(0, inL, g, k) * comp;
+let yR = ladder(1, inR, g, k) * comp;
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = yL * outGain;
+out2 = yR * outGain;

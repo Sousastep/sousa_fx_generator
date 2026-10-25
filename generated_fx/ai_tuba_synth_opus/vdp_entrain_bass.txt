@@ -1,0 +1,196 @@
+// ============================================================================
+// vdp_entrain_bass.txt — Van der Pol limit-cycle bass tuned to the tuba's f0
+//                        and pulled into lock by the tuba's fundamental
+//
+// From: W. E. Weingartner, "Stable Limit Cycles as Tunable Signal Sources",
+//       DAFx-25 paper 68: §2.1.1 eq. 4 (van der Pol: f(x) = -mu(1-x^2),
+//       g(x) = x), §3.1 eqs. 12, 15 (generalised angular frequency
+//       w = T_ang(mu)/T, amplitude normalisation by gamma_max), §3.2.1
+//       (offline step counting -> lookup table, same solver as real time),
+//       §3.2.2 eq. 16 (h = f T_ang / (S fs), substeps averaged for
+//       antialiasing), §4.5 (mu as a timbre control);
+//       M. Neukom, "Frequency Control of Nonlinear Oscillators", SMC-18
+//       §2.2 (nonlinear extensions), §4.3 (control by external forces).
+//
+// The oscillator is solved at S = 8 substeps per sample with a semi-implicit
+// Euler step (damping term implicit, so high mu stays stable). The step size
+// comes from the table below, so the pitch stays at f0 whatever mu does.
+// "lock" adds the tuba's phase-locked fundamental as an external force
+// (Neukom §4.3): the limit cycle entrains to the horn and holds a steady phase
+// relation instead of beating. mu breathes on each bar step: low mu = round
+// sine, high mu = buzzy relaxation square.
+//
+// Table: T_ang(mu, h) and max|x| for mu = 0.1, 0.25, 0.5 ... 8 (33 rows,
+// step 0.25) x h = 0.0005 * 2^j, j = 0..7 (8 columns), index mu_row*8 + j.
+// Made offline with the same solver (80 time units settle, 3 periods
+// counted on upward zero crossings). Simulated tuning error without lock:
+// <= 5 cents up to 200 Hz for all mu, <= 20 cents at 500 Hz.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (mu breathing). Held (no movement for 100 ms)
+//        -> internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked fundamental sine -1..1, scaled by confidence (the
+//        forcing). Static -> internal sine at f0.
+//   in6: smoothed tuba envelope 0..1 (gate). Static -> internal peak follower.
+// Outlets:
+//   out1 / out2: stereo (dry keeps its image, voice is centred)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Nonlinearity mu
+@param({ min: 0.1, max: 8 }) mu = 2.5;
+// Bar-step sweep of mu (towards a sine and back)
+@param({ min: 0, max: 100 }) mu_sweep = 40;
+// Sweeps per bar
+@param({ min: 1, max: 16 }) sweep_div = 1;
+// Lock (forcing by the tuba's fundamental)
+@param({ min: 0, max: 100 }) lock = 50;
+// Tone (2-pole lowpass)
+@param({ min: 200, max: 12000 }) tone_hz = 3500;
+// Mix
+@param({ min: 0, max: 100 }) mix = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state tangTab = new FixedSampleArray([6.28727, 6.28743, 6.28774, 6.28837, 6.28961, 6.29208, 6.29692, 6.30619, 6.30809, 6.30848, 6.30928, 6.31087, 6.31404, 6.32035, 6.33290, 6.35761, 6.38150, 6.38233, 6.38397, 6.38727, 6.39386, 6.40703, 6.43332, 6.48568, 6.50168, 6.50299, 6.50561, 6.51084, 6.52132, 6.54228, 6.58424, 6.66833, 6.66516, 6.66704, 6.67079, 6.67829, 6.69331, 6.72340, 6.78382, 6.90567, 6.86666, 6.86920, 6.87428, 6.88444, 6.90479, 6.94562, 7.02787, 7.19488, 7.09968, 7.10298, 7.10959, 7.12283, 7.14938, 7.20270, 7.31045, 7.53068, 7.35766, 7.36184, 7.37020, 7.38696, 7.42058, 7.48826, 7.62545, 7.90763, 7.63504, 7.64020, 7.65054, 7.67126, 7.71286, 7.79674, 7.96734, 8.32093, 7.92757, 7.93382, 7.94636, 7.97148, 8.02197, 8.12393, 8.33200, 8.76667, 8.23217, 8.23964, 8.25458, 8.28456, 8.34485, 8.46680, 8.71653, 9.24237, 8.54663, 8.55541, 8.57300, 8.60828, 8.67930, 8.82317, 9.11884, 9.74610, 8.86929, 8.87950, 8.89995, 8.94099, 9.02365, 9.19140, 9.53734, 10.27714, 9.19890, 9.21064, 9.23418, 9.28143, 9.37669, 9.57031, 9.97089, 10.83472, 9.53447, 9.54787, 9.57471, 9.62863, 9.73742, 9.95890, 10.41899, 11.41822, 9.87523, 9.89038, 9.92076, 9.98181, 10.10507, 10.35643, 10.88038, 12.02881, 10.22052, 10.23755, 10.27169, 10.34033, 10.47901, 10.76232, 11.35497, 12.66533, 10.56984, 10.58885, 10.62698, 10.70366, 10.85872, 11.17599, 11.84209, 13.32871, 10.92273, 10.94384, 10.98618, 11.07136, 11.24378, 11.59716, 12.34181, 14.01764, 11.27883, 11.30215, 11.34893, 11.44309, 11.63381, 12.02540, 12.85365, 14.73453, 11.63782, 11.66346, 11.71491, 11.81850, 12.02851, 12.46038, 13.37744, 15.48060, 11.99943, 12.02751, 12.08386, 12.19735, 12.42761, 12.90195, 13.91304, 16.25400, 12.36344, 12.39406, 12.45554, 12.57940, 12.83090, 13.34987, 14.46038, 17.05599, 12.72963, 12.76292, 12.82974, 12.96444, 13.23816, 13.80398, 15.01932, 17.88996, 13.09784, 13.13389, 13.20630, 13.35231, 13.64924, 14.26414, 15.58992, 18.75365, 13.46789, 13.50684, 13.58505, 13.74284, 14.06398, 14.73016, 16.17244, 19.65013, 13.83966, 13.88161, 13.96586, 14.13590, 14.48225, 15.20202, 16.76663, 20.58046, 14.21303, 14.25808, 14.34861, 14.53137, 14.90394, 15.67953, 17.37258, 21.54217, 14.58787, 14.63615, 14.73318, 14.92914, 15.32894, 16.16264, 17.99008, 22.52800, 14.96411, 15.01572, 15.11948, 15.32911, 15.75717, 16.65144, 18.61920, 23.55200, 15.34163, 15.39670, 15.50742, 15.73120, 16.18852, 17.14557, 19.26051, 24.70399, 15.72038, 15.77901, 15.89692, 16.13533, 16.62297, 17.64526, 19.91407, 25.77429, 16.10026, 16.16258, 16.28791, 16.54143, 17.06039, 18.15036, 20.57938, 26.93027]);
+@state xmaxTab = new FixedSampleArray([2.00014, 2.00017, 2.00023, 2.00035, 2.00060, 2.00110, 2.00211, 2.00410, 2.00072, 2.00080, 2.00096, 2.00127, 2.00190, 2.00314, 2.00566, 2.01060, 2.00265, 2.00280, 2.00312, 2.00375, 2.00501, 2.00753, 2.01259, 2.02278, 2.00551, 2.00575, 2.00623, 2.00718, 2.00909, 2.01291, 2.02058, 2.03608, 2.00894, 2.00926, 2.00990, 2.01118, 2.01374, 2.01888, 2.02920, 2.05019, 2.01247, 2.01287, 2.01367, 2.01528, 2.01851, 2.02498, 2.03804, 2.06457, 2.01571, 2.01619, 2.01716, 2.01910, 2.02299, 2.03080, 2.04658, 2.07876, 2.01843, 2.01899, 2.02012, 2.02239, 2.02693, 2.03608, 2.05456, 2.09244, 2.02054, 2.02118, 2.02248, 2.02507, 2.03026, 2.04072, 2.06192, 2.10510, 2.02208, 2.02281, 2.02426, 2.02718, 2.03302, 2.04479, 2.06867, 2.11790, 2.02316, 2.02396, 2.02557, 2.02880, 2.03529, 2.04836, 2.07491, 2.12992, 2.02386, 2.02474, 2.02651, 2.03005, 2.03717, 2.05153, 2.08077, 2.14159, 2.02427, 2.02523, 2.02715, 2.03101, 2.03876, 2.05441, 2.08617, 2.15300, 2.02446, 2.02550, 2.02758, 2.03175, 2.04013, 2.05706, 2.09166, 2.16425, 2.02449, 2.02561, 2.02784, 2.03232, 2.04134, 2.05955, 2.09684, 2.17545, 2.02440, 2.02560, 2.02799, 2.03278, 2.04242, 2.06192, 2.10190, 2.18611, 2.02423, 2.02550, 2.02805, 2.03315, 2.04341, 2.06420, 2.10689, 2.19774, 2.02400, 2.02534, 2.02804, 2.03345, 2.04434, 2.06641, 2.11183, 2.20907, 2.02372, 2.02514, 2.02799, 2.03371, 2.04523, 2.06858, 2.11674, 2.22041, 2.02341, 2.02491, 2.02791, 2.03394, 2.04608, 2.07072, 2.12164, 2.23187, 2.02308, 2.02466, 2.02781, 2.03415, 2.04691, 2.07284, 2.12652, 2.24348, 2.02274, 2.02439, 2.02770, 2.03434, 2.04773, 2.07496, 2.13145, 2.25500, 2.02240, 2.02412, 2.02759, 2.03453, 2.04855, 2.07707, 2.13634, 2.26714, 2.02205, 2.02385, 2.02747, 2.03472, 2.04936, 2.07918, 2.14133, 2.27920, 2.02171, 2.02359, 2.02735, 2.03491, 2.05018, 2.08130, 2.14632, 2.29145, 2.02137, 2.02332, 2.02724, 2.03511, 2.05099, 2.08343, 2.15134, 2.30417, 2.02103, 2.02306, 2.02713, 2.03531, 2.05183, 2.08556, 2.15629, 2.31717, 2.02071, 2.02282, 2.02704, 2.03552, 2.05267, 2.08772, 2.16147, 2.33048, 2.02039, 2.02257, 2.02695, 2.03574, 2.05351, 2.08989, 2.16660, 2.34208, 2.02009, 2.02234, 2.02687, 2.03597, 2.05437, 2.09207, 2.17177, 2.35529, 2.01979, 2.02212, 2.02680, 2.03621, 2.05524, 2.09426, 2.17699, 2.37272, 2.01950, 2.02191, 2.02674, 2.03646, 2.05612, 2.09647, 2.18225, 2.38763, 2.01923, 2.02171, 2.02669, 2.03672, 2.05701, 2.09870, 2.18755, 2.40342]);
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+@state prevBarPh = 0.0;
+@state barCount = 0.0;
+
+@state ownPh = 0.0;
+@state prevSinIn = 0.0;
+@state sinHold = 0.0;
+
+@state prevEnvIn = 0.0;
+@state envHold = 0.0;
+@state envInt = 0.0;
+
+@state vx = 2.0;
+@state vy = 0.0;
+@state muSmooth = 2.5;
+@state hPrev = 0.001;
+@state lp1 = new onepole();
+@state lp2 = new onepole();
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let sinIn = in5;
+let envIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+ownPh = wrap(ownPh + f0 / sr, 0.0, 1.0);
+
+// --- Bar phase: hold-latched in4, else internal 2 s bar; 4-bar position -----
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+if (barPh < prevBarPh - 0.5) {
+	barCount += 1.0;
+	if (barCount >= 4.0) {
+		barCount = 0.0;
+	}
+}
+prevBarPh = barPh;
+let pos4 = barCount + barPh;
+
+// --- Forcing: in5 locked sine while it moves, else internal sine at f0 ------
+if (abs(sinIn - prevSinIn) > 0.0000001) {
+	sinHold = 0.1 * sr;
+} else if (sinHold > 0.0) {
+	sinHold -= 1.0;
+}
+prevSinIn = sinIn;
+let force = (sinHold > 0.0) ? clamp(sinIn, -1.0, 1.0) : sin(2.0 * pi * ownPh);
+
+// --- Envelope: in6 while it moves, else internal peak follower --------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.003 * sr));
+let rel = 1.0 - exp(-1.0 / (0.080 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envHold = 0.1 * sr;
+} else if (envHold > 0.0) {
+	envHold -= 1.0;
+}
+prevEnvIn = envIn;
+let envVal = (envHold > 0.0) ? clamp(envIn, 0.0, 1.0) : clamp(envInt, 0.0, 1.0);
+let gate = clamp(sqrt(envVal) * 1.6, 0.0, 1.0);
+
+// --- mu: base, breathing down towards a sine on each bar step ---------------
+let div = round(clamp(sweep_div, 1.0, 16.0));
+let stepPh = wrap(pos4 * div, 0.0, 1.0);
+let contour = 0.5 - 0.5 * cos(2.0 * pi * stepPh);
+let muTarget = clamp(mu * (1.0 - clamp(mu_sweep, 0.0, 100.0) * 0.01 * contour), 0.1, 8.0);
+muSmooth += (muTarget - muSmooth) * (1.0 - exp(-1.0 / (0.003 * sr)));
+let muNow = clamp(muSmooth, 0.1, 8.0);
+
+// --- 2-D table lookup (mu x log2 h), bilinear; h by fixed-point iteration -
+// h = f0 T_ang(mu, h) / (S fs) depends on the solver's own period at that h
+// (§3.2.1: same solver offline and in real time), so the previous sample's
+// h is used to read the table; it converges within a few samples.
+let fi = (muNow < 0.25) ? (muNow - 0.1) / 0.15 : (muNow - 0.25) / 0.25 + 1.0;
+fi = clamp(fi, 0.0, 31.999);
+let i0: Int = trunc(fi);
+let fr = fi - i0;
+let hj = clamp(log2(maximum(hPrev, 0.0000001) / 0.0005), 0.0, 6.999);
+let j0: Int = trunc(hj);
+let fh = hj - j0;
+let a00: Int = i0 * 8 + j0;
+let a10: Int = a00 + 8;
+let tA = tangTab[a00] + fh * (tangTab[a00 + 1] - tangTab[a00]);
+let tB = tangTab[a10] + fh * (tangTab[a10 + 1] - tangTab[a10]);
+let tAng = tA + fr * (tB - tA);
+let xA = xmaxTab[a00] + fh * (xmaxTab[a00 + 1] - xmaxTab[a00]);
+let xB = xmaxTab[a10] + fh * (xmaxTab[a10 + 1] - xmaxTab[a10]);
+let xMax = xA + fr * (xB - xA);
+
+// --- Solve: S substeps, semi-implicit Euler, averaged (DAFx-25 eq. 16) ------
+let subS = 8.0;
+let h = f0 * tAng / (subS * sr);
+hPrev = h;
+let fAmp = clamp(lock, 0.0, 100.0) * 0.015 * force;
+let acc = 0.0;
+for (let k: Int = 0; k < 8; k++) {
+	let den = maximum(1.0 - h * muNow * (1.0 - vx * vx), 0.1);
+	vy = (vy + h * (fAmp - vx)) / den;
+	vx = vx + h * vy;
+	acc += vx;
+}
+// recover from any numerical blow-up (NaN fails the comparison too)
+if (!(abs(vx) < 10.0) || !(abs(vy) < 200.0)) {
+	vx = 2.0;
+	vy = 0.0;
+	acc = 0.0;
+}
+let osc = acc / (subS * xMax);
+
+let tone = clamp(tone_hz, 200.0, minimum(12000.0, sr * 0.45));
+let voice = lp2.next(lp1.next(osc, tone), tone) * gate * 0.8;
+
+// --- Mix: crossfade with an oscillator that is entrained to the horn --------
+let w = clamp(mix, 0.0, 100.0) * 0.01;
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, voice) * outGain;
+out2 = linearinterp(w, xR, voice) * outGain;

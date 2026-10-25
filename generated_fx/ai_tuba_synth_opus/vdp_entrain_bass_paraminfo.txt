@@ -1,0 +1,61 @@
+================================================================================
+vdp_entrain_bass — Parameter Information
+================================================================================
+
+WHAT IT IS
+A self-oscillating Van der Pol circuit (the classic triode limit cycle) kept
+at the tuba's pitch whatever its shape does, and pushed by the horn's
+fundamental so it locks to it, like an analog oscillator being sync-dragged by
+the player. Low mu = round sine; high mu = buzzy, square-ish relaxation
+wave. mu breathes on each bar step for an organic, liquid motion.
+
+Source: Weingartner, DAFx-25 paper 68 §2.1.1 (van der Pol), §3.1–3.2
+(period/amplitude normalisation, offline lookup table, substeps); Neukom,
+SMC-18 §4.3 (control by external forces).
+
+PARAMETERS (6 + output gain)
+
+1. mu — 0.1…8, default 2.5
+   Nonlinearity. 0.1 = near-sine sub; 1–3 = warm, odd-harmonic hollow
+   bass; 5–8 = hard relaxation buzz with a "snap" in each cycle.
+
+2. mu_sweep — 0…100 %, default 40 %
+   On each bar step mu falls towards a sine and climbs back.
+   0 = static timbre.
+
+3. sweep_div — 1…16 (stepped), default 1
+   Breaths per bar.
+
+4. lock — 0…100 %, default 50 %
+   How hard the horn's fundamental drives the oscillator. 0 = free-running
+   at f0 (it can drift a few cents against the horn); 25 % and up locks it
+   to the horn (in simulation it captured a 46-cent offset), so it holds a
+   steady phase against the dry note. Very high values bend the waveform
+   towards the horn's.
+
+5. tone_hz — 200…12000 Hz, default 3500 Hz
+   Two-pole lowpass on the voice.
+
+6. mix — 0…100 %, default 100 %
+   Dry/wet crossfade. With lock up, the voice is entrained to the horn, so
+   the blend does not beat.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (mu breathing). If held, an internal 2 s bar (120 BPM)
+  takes over.
+- in5: phase-locked fundamental sine (the driving force). If static, an
+  internal sine at f0 is used.
+- in6: smoothed tuba envelope (gate). If static, an internal peak follower
+  is used.
+- out1 / out2: stereo (voice centred).
+
+NOTES
+- Without lock, tuning is within about 5 cents up to 200 Hz for every mu
+  (simulated); at 500 Hz and high mu it can be up to about 20 cents off.
+- Gated by the envelope; silent when the horn is.
+- No safety limiter.

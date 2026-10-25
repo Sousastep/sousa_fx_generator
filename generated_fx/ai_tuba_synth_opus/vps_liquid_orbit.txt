@@ -1,0 +1,184 @@
+// ============================================================================
+// vps_liquid_orbit.txt — vector phaseshaping on the tuba's own phase, with the
+//                        inflection point orbiting a bar-synced Lissajous path
+//
+// From: J. Kleimola, V. Lazzarini, J. Timoney, V. Välimäki, "Vector
+//       Phaseshaping Synthesis", DAFx-11 §3 eq. 6 (phaseshaper p = (d, v)),
+//       §3.1 eqs. 8-10 (two-oscillator crossfade for non-integral formants),
+//       §4.3 (Lissajous modulation of the inflection vector);
+//       V. Lazzarini, J. Timoney, J. Pekonen, V. Välimäki, "Adaptive Phase
+//       Distortion Synthesis",
+//       DAFx-09 paper 12 (phase distortion driven by an external signal).
+//
+// The phaseshaper is applied to the tuba's phase ramp, so the voice is
+// pitch- and phase-locked to the horn by construction. p = (0.5, 0.5) is the
+// identity and gives exactly sin(2*pi*phase), the horn's fundamental; moving
+// p away from the centre adds harmonics/formants. The orbit of p is locked to
+// the bar (rate 1/4 .. 4 cycles per bar), giving a slow, liquid timbre motion.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor. Held (no movement for 100 ms) -> internal
+//        2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1 (the phase that gets shaped). Static ->
+//        internal ramp at f0, continued from the last tracked phase.
+//   in6: pitch confidence 0..1. Low confidence fades the voice back to the
+//        plain fundamental. Static -> treated as 1.
+// Outlets:
+//   out1 / out2: stereo (dry keeps its image, voice is centred)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Inflection x (d)
+@param({ min: 0.05, max: 0.95 }) d = 0.3;
+// Inflection y (v): formant height
+@param({ min: 0.5, max: 4 }) v = 2;
+// Orbit depth
+@param({ min: 0, max: 100 }) orbit = 35;
+// Orbit rate: 1/4, 1/2, 1, 2, 3, 4 cycles per bar (snaps)
+@param({ min: 0.25, max: 4 }) orbit_per_bar = 1;
+// Lissajous ratio (v axis turns this many times per d-axis turn)
+@param({ min: 1, max: 4 }) lissajous_ratio = 2;
+// Tone (2-pole lowpass)
+@param({ min: 200, max: 12000 }) tone_hz = 4000;
+// Wet
+@param({ min: 0, max: 100 }) wet = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+@state prevBarPh = 0.0;
+@state barCount = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+
+@state prevConfIn = 0.0;
+@state confHold = 0.0;
+
+@state envInt = 0.0;
+@state lp1 = new onepole();
+@state lp2 = new onepole();
+
+// VPS phaseshaper (DAFx-11 eq. 6), output cos(2*pi*P) with the -1 sign of
+// eq. 1 folded into a quarter-cycle input offset (see main code).
+function vps(x: number, dd: number, vv: number): number {
+	let pp = 0.0;
+	if (x < dd) {
+		pp = vv * x / dd;
+	} else {
+		pp = (1.0 - vv) * (x - dd) / (1.0 - dd) + vv;
+	}
+	return 0.0 - cos(2.0 * pi * pp);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+let confIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let inc = clamp(f0Smooth, 20.0, 1000.0) / sr;
+
+// --- Bar phase: hold-latched in4, else internal 2 s bar; 4-bar position -----
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+if (barPh < prevBarPh - 0.5) {
+	barCount += 1.0;
+	if (barCount >= 4.0) {
+		barCount = 0.0;
+	}
+}
+prevBarPh = barPh;
+let pos4 = barCount + barPh;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + inc, 0.0, 1.0);
+}
+
+// --- Confidence: in6 while it moves, else 1 ---------------------------------
+if (abs(confIn - prevConfIn) > 0.0000001) {
+	confHold = 0.1 * sr;
+} else if (confHold > 0.0) {
+	confHold -= 1.0;
+}
+prevConfIn = confIn;
+let conf = (confHold > 0.0) ? clamp(confIn, 0.0, 1.0) : 1.0;
+
+// --- Internal envelope gate (quiet when the horn is quiet) -----------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.003 * sr));
+let rel = 1.0 - exp(-1.0 / (0.080 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+let gate = clamp(sqrt(maximum(envInt, 0.0)) * 1.6, 0.0, 1.0);
+
+// --- Bar-locked Lissajous orbit of p = (d, v) (DAFx-11 §4.3) ---------------
+let opb = clamp(orbit_per_bar, 0.25, 4.0);
+let rate = 4.0;
+if (opb < 0.375) {
+	rate = 0.25;
+} else if (opb < 0.75) {
+	rate = 0.5;
+} else if (opb < 1.5) {
+	rate = 1.0;
+} else if (opb < 2.5) {
+	rate = 2.0;
+} else if (opb < 3.5) {
+	rate = 3.0;
+}
+let theta = wrap(pos4 * rate, 0.0, 1.0);
+let lr = round(clamp(lissajous_ratio, 1.0, 4.0));
+let od = clamp(orbit, 0.0, 100.0) * 0.01;
+let dNow = clamp(d + od * 0.35 * cos(2.0 * pi * theta), 0.02, 0.98);
+let vNow = clamp(v + od * 1.5 * sin(2.0 * pi * wrap(lr * theta, 0.0, 1.0)), 0.5, 4.5);
+
+// --- Two-oscillator crossfade on the half-integer v grid (eqs. 9-10) -------
+let twoV = 2.0 * vNow;
+let vLo = floor(twoV) * 0.5;
+let aMix = twoV - floor(twoV);
+// quarter-cycle offset: vps(.., 0.5, 0.5) = -cos(2pi(ph + 0.25)) = sin(2pi ph)
+let shPh = wrap(ownPh + 0.25, 0.0, 1.0);
+let s1 = vps(shPh, dNow, vLo);
+let s2 = vps(shPh, dNow, vLo + 0.5);
+let vpsOut = (1.0 - aMix) * s1 + aMix * s2;
+
+// --- Confidence fades back to the bare fundamental --------------------------
+let fund = sin(2.0 * pi * ownPh);
+let voice = linearinterp(conf, fund, vpsOut);
+let tone = clamp(tone_hz, 200.0, minimum(12000.0, sr * 0.45));
+let voiceF = lp2.next(lp1.next(voice, tone), tone) * gate * 0.7;
+
+// --- Wet: phase-locked crossfade (voice fundamental is in phase with in5) ---
+let w = clamp(wet, 0.0, 100.0) * 0.01;
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = linearinterp(w, xL, voiceF) * outGain;
+out2 = linearinterp(w, xR, voiceF) * outGain;

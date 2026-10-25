@@ -1,0 +1,62 @@
+================================================================================
+bitwise_logic_bass — Parameter Information
+================================================================================
+
+WHAT IT IS
+A lo-fi digital bass made by combining two sine waves bit by bit (XOR, AND or
+OR) instead of adding or multiplying them. Both sines run on the tuba's phase,
+the second at a simple ratio, so the result is always a steady tone at the
+horn's pitch: buzzy pulses, rectified saws, gritty steps. The second sine's
+phase drifts out and back over each bar, which flips chunks of the waveform
+in and out, a rhythmic "computer bass" animation for trip-hop and space bass.
+
+Source: Kleimola, DAFx-08 paper 13 §2 (bitwise logical modulation), §3.2
+(sign rule), §3.3–3.5 (amount, ratio, phase offset), §3.8 (XOR/OR/AND).
+
+PARAMETERS (7 + output gain)
+
+1. op — 0…3 (stepped), default 0
+   0 = XOR (full-wave rectified, an octave-up flavour), 1 = AND,
+   2 = OR (half-wave, keeps a strong fundamental), 3 = XOR with the sign
+   rule broken (no octave shift, sits on the horn's pitch).
+
+2. ratio — 0…5 (stepped), default 1
+   Second sine's ratio: 0 = 1, 1 = 2, 2 = 3/2, 3 = 3, 4 = 4, 5 = 1/2.
+   3/2 and 1/2 add a sub-octave period (deeper, growlier).
+
+3. mod_amount — 0…100 %, default 50 %
+   Level of the second sine (the paper's A2). Low = sine decorated with
+   small steps; high = dense, square-ish buzz. With op = AND at 0 % the
+   output is silent.
+
+4. bits — 2…12 (stepped), default 6
+   Word length. 2–4 = crunchy staircase; 10–12 = clean edges.
+
+5. phase_sweep — 0…100 %, default 50 %
+   How far the second sine's phase swings (up to one full cycle) and back
+   over each bar.
+
+6. tone_hz — 200…12000 Hz, default 2500 Hz
+   Two-pole lowpass (also tames the deliberate aliasing).
+
+7. wet — 0…100 %, default 100 %
+   Dry/wet crossfade. The voice repeats exactly with the horn's period
+   (or twice it for 3/2 and 1/2), so the blend never beats.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (phase sweep). If held, an internal 2 s bar (120 BPM)
+  takes over.
+- in5: phase-locked tuba phasor. If static, an internal ramp at f0 carries
+  on from the last phase.
+- in6: pitch confidence. Low confidence fades to the plain fundamental
+  sine. If static, treated as 1.
+- out1 / out2: stereo (voice centred).
+
+NOTES
+- Gated by an internal envelope follower; silent when the horn is.
+- No safety limiter.
