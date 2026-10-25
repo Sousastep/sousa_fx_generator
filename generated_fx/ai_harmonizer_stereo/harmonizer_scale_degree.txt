@@ -12,16 +12,21 @@
 // degree, each voice's target degree is that many steps above it, and its
 // PSOLA stream is re-spaced at that interval. As the horn moves in the scale
 // both voices move with it, so a third and a fifth stay a third and a fifth of
-// the key. degree2 = 0 switches the second voice off.
+// the key; a chromatic note borrows the intervals of its nearest degree, so the
+// voices move in parallel with it (an octave stays an octave). degree2 = 0
+// switches the second voice off. Both voices read the mono sum of the input;
+// grains start at the newest mark (latency 0..1 f0 period) and keep the length
+// they were born with, so a note change never truncates a live window.
 //
 // tuning = 1 places each voice on a 5-limit just ratio above the horn itself
 // (3/2 for a fifth, 5/4 for a major third, 6/5 for a minor third, ...), so the
 // two pitch-lock and never beat; tuning = 0 uses equal temperament, where a
 // third above the horn sits about 14 cents sharp of the pure ratio.
-// in1/in2: stereo audio
+// in1/in2: stereo audio (in2 silent for 250 ms -> in1 is used for both)
 // in3: tuba f0 in Hz; 0 (or anything outside 20..1200 Hz) holds the last valid
 //      value, initialised to a fixed 82 Hz
-// in4: one-bar phasor 0..1; frozen at 0 the drift free-runs internally
+// in4: one-bar phasor 0..1 (exception to the Hz contract); 100 ms after it
+//      stops moving the drift runs from an internal 0.13 Hz oscillator
 // out1/out2: stereo out (dry crossfaded with the harmony voices)
 // ============================================================================
 
@@ -42,18 +47,20 @@
 // Tuning: 0 = equal temperament, 1 = just intonation
 @param({ min: 0.0, max: 1.0 }) tuning = 1.0;
 
-@state bufL = new FixedSampleArray(16384);
-@state bufR = new FixedSampleArray(16384);
+@state buf = new FixedSampleArray(16384);
 @state winTab = new FixedSampleArray(1025);
 @state scaleTab = new FixedIntArray(35);
 @state jiTab = new FixedSampleArray(13);
 @state aStart = new FixedIntArray(12);
 @state aAge = new FixedIntArray(12);
+@state aLen = new FixedIntArray(12);
 @state bStart = new FixedIntArray(12);
 @state bAge = new FixedIntArray(12);
+@state bLen = new FixedIntArray(12);
 @state wi: Int = 0;
 @state markIdx: Int = 0;
-@state gLenI: Int = 256;
+@state gLenA: Int = 256;
+@state gLenB: Int = 256;
 @state slotA: Int = 0;
 @state slotB: Int = 0;
 @state f0Hold = 0.0;
@@ -65,6 +72,8 @@
 @state v2mix = 0.0;
 @state v2K = 0.005;
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
 @state freeLfo = new phasor();
 @state srCached = 0.0;
 @state glideCached = -1.0;
@@ -77,8 +86,10 @@ function init() {
 	for (let g = 0; g < 12; g++) {
 		aStart[g] = 0;
 		aAge[g] = 100000;
+		aLen[g] = 0;
 		bStart[g] = 0;
 		bAge[g] = 100000;
+		bLen[g] = 0;
 	}
 	// major, natural minor, dorian, mixolydian, harmonic minor
 	scaleTab[0] = 0;  scaleTab[1] = 2;  scaleTab[2] = 4;  scaleTab[3] = 5;  scaleTab[4] = 7;  scaleTab[5] = 9;  scaleTab[6] = 11;
@@ -104,7 +115,14 @@ if (srCached != sr || glideCached != glide_ms) {
 }
 
 let xL = in1;
-let xR = in2;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pIn = in3;
 let barIn = in4;
 
@@ -117,7 +135,8 @@ let period = sr / f0;
 // --- 2. f0 -> scale degree -> the two intervals in semitones ---
 let midi = 69.0 + 12.0 * log(f0 / 440.0) / log(2.0);
 let noteNum = floor(midi + 0.5);
-let rel = wrap(noteNum - clamp(key, 0.0, 11.0), 0.0, 12.0);
+let keyI: Int = clamp(floor(clamp(key, 0.0, 11.0) + 0.5), 0.0, 11.0);
+let rel = wrap(noteNum - keyI, 0.0, 12.0);
 let miI: Int = clamp(floor(clamp(mode, 0.0, 4.0) + 0.5), 0.0, 4.0);
 let bestI: Int = 0;
 let bestD = 99.0;
@@ -143,16 +162,22 @@ let tIdx2: Int = floor(total2F - 7.0 * octUp2);
 let interval2St = scaleTab[miI * 7 + tIdx2] - scaleTab[miI * 7 + bestI] + 12.0 * octUp2;
 
 // --- 3. intervals + bar-rate drift (opposite signs) -> read ratios ---
-let barMoving = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// Bar phasor counts as active for 100 ms after it last moved (a constant in4 must not freeze the drift)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let driftPhase = barMoving ? wrap(barIn, 0.0, 1.0) : freeLfo.next(0.13);
+let freePh = freeLfo.next(0.13);
+let driftPhase = (barHold > 0.0) ? wrap(barIn, 0.0, 1.0) : freePh;
 let driftSemis = 0.01 * clamp(drift_cents, 0.0, 25.0) * sin(2.0 * pi * driftPhase);
 let idx1: Int = clamp(floor(interval1St + 0.5), 0.0, 12.0);
 let idx2: Int = clamp(floor(interval2St + 0.5), 0.0, 12.0);
-let driftRatio1 = pow(2.0, driftSemis / 12.0);
-let driftRatio2 = pow(2.0, -driftSemis / 12.0);
-let etRatio1 = pow(2.0, interval1St / 12.0) * driftRatio1;
-let etRatio2 = pow(2.0, interval2St / 12.0) * driftRatio2;
+let driftRatio1 = exp2(driftSemis / 12.0);
+let driftRatio2 = exp2((0.0 - driftSemis) / 12.0);
+let etRatio1 = exp2(interval1St / 12.0) * driftRatio1;
+let etRatio2 = exp2(interval2St / 12.0) * driftRatio2;
 let jiRatio1 = jiTab[idx1] * driftRatio1;
 let jiRatio2 = jiTab[idx2] * driftRatio2;
 let useJi = (clamp(tuning, 0.0, 1.0) >= 0.5) ? 1.0 : 0.0;
@@ -164,13 +189,14 @@ ratioB += (ratio2 - ratioB) * ratioK;
 // --- 4. marks every tuba period, grains every P/ratio per voice ---
 let hopA = maximum(period / maximum(ratioA, 0.25), 8.0);
 let hopB = maximum(period / maximum(ratioB, 0.25), 8.0);
-let lf = 2.0 * maximum(period, maximum(hopA, hopB)) + 0.05 * period;
-lf = clamp(lf, 64.0, 10000.0);
-let lInt: Int = floor(lf);
-gLenI = lInt;
+let lfA = clamp(2.0 * maximum(period, hopA) + 0.05 * period, 64.0, 10000.0);
+let lfB = clamp(2.0 * maximum(period, hopB) + 0.05 * period, 64.0, 10000.0);
+let lIntA: Int = floor(lfA);
+let lIntB: Int = floor(lfB);
+gLenA = lIntA;
+gLenB = lIntB;
 
-bufL[wi] = xL;
-bufR[wi] = xR;
+buf[wi] = 0.5 * (xL + xR);
 
 markAcc += 1.0;
 if (markAcc >= period) {
@@ -181,8 +207,9 @@ if (markAcc >= period) {
 synA += 1.0;
 if (synA >= hopA) {
 	synA -= hopA;
-	aStart[slotA] = (markIdx - gLenI + 16384) & 16383;
+	aStart[slotA] = markIdx;
 	aAge[slotA] = 0;
+	aLen[slotA] = gLenA;
 	slotA = (slotA + 1) % 12;
 }
 
@@ -190,8 +217,9 @@ if (v2on > 0.5) {
 	synB += 1.0;
 	if (synB >= hopB) {
 		synB -= hopB;
-		bStart[slotB] = (markIdx - gLenI + 16384) & 16383;
+		bStart[slotB] = markIdx;
 		bAge[slotB] = 0;
+		bLen[slotB] = gLenB;
 		slotB = (slotB + 1) % 12;
 	}
 }
@@ -201,11 +229,12 @@ let accA = 0.0;
 let wsumA = 0.0;
 for (let g = 0; g < 12; g++) {
 	let ag = aAge[g];
-	if (ag < gLenI) {
-		let xi: Int = floor(ag * 1024.0 / gLenI);
+	let gl = aLen[g];
+	if (ag < gl) {
+		let xi: Int = floor(ag * 1024.0 / gl);
 		if (xi > 1024) { xi = 1024; }
 		let wv = winTab[xi];
-		accA += wv * bufL[(aStart[g] + ag) & 16383];
+		accA += wv * buf[(aStart[g] + ag) & 16383];
 		wsumA += wv;
 		aAge[g] = ag + 1;
 	}
@@ -216,11 +245,12 @@ let accB = 0.0;
 let wsumB = 0.0;
 for (let g = 0; g < 12; g++) {
 	let ag = bAge[g];
-	if (ag < gLenI) {
-		let xi: Int = floor(ag * 1024.0 / gLenI);
+	let gl = bLen[g];
+	if (ag < gl) {
+		let xi: Int = floor(ag * 1024.0 / gl);
 		if (xi > 1024) { xi = 1024; }
 		let wv = winTab[xi];
-		accB += wv * bufR[(bStart[g] + ag) & 16383];
+		accB += wv * buf[(bStart[g] + ag) & 16383];
 		wsumB += wv;
 		bAge[g] = ag + 1;
 	}
@@ -228,11 +258,13 @@ for (let g = 0; g < 12; g++) {
 wi = (wi + 1) & 16383;
 
 // --- 7. both voices, spread slightly apart, then dry/wet ---
+// Equal-power sum: two different intervals keep the level of one voice, a
+// unison stack is +3 dB
 let v1 = 0.0;
 let v2 = 0.0;
 if (wsumA > 0.000001) { v1 = accA / wsumA; }
 if (wsumB > 0.000001) { v2 = accB / wsumB * v2mix; }
-let nv = 1.0 + v2mix;
+let nv = 1.0 + 0.41421356 * v2mix;
 let sum = v1 + v2;
 let dif = v1 - v2;
 let sp = 0.6 * v2mix;

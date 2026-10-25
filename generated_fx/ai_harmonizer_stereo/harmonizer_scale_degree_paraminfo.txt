@@ -20,24 +20,29 @@ a static C-major scale would put it at 32/27 (294.1 cents). A doubling wants the
 pure interval; set tuning 0 for equal temperament.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
+- in1 / in2: Stereo Audio Input (Tuba). Both voices are made from the mono sum
+  (L+R)/2; the dry signal keeps its stereo. If in2 stays silent for 250 ms,
+  in1 is used for both sides.
 - in3: Tuba f0 in Hz. 0 or out-of-range (outside 20..1200 Hz) holds the last
   valid value; it starts at a fixed 82 Hz (the tuba's low E), so the effect is
   usable before the tracker locks. in3 is never divided by and never treated as
   1 Hz.
-- in4: One-Bar Phasor [0..1]. Frozen at 0 the drift oscillator free-runs.
+- in4: One-Bar Phasor [0..1] (an exception to the repo's Hz convention). Sets
+  the drift phase, one cycle per bar; 100 ms after it stops moving (unpatched,
+  frozen, or held at any constant), an internal slow oscillator (0.13 Hz,
+  ~7.7 s per cycle) takes over.
 - out1 / out2: Stereo Output (dry crossfaded with the harmony voices)
 
 PARAMETERS (8)
 
 1. key
    - Range: 0 to 11 semitones above C (Default: 0 = C)
-   - Taper: Linear chromatic index (0 C, 1 C#, 2 D, ... 11 B).
+   - Taper: Rounded to the nearest semitone (0 C, 1 C#, 2 D, ... 11 B).
    - Function: The key of the scale used to place both voices.
 
 2. mode
    - Range: 0 to 4 (Default: 0)
-   - Taper: Index. 0 major, 1 natural minor, 2 dorian, 3 mixolydian,
+   - Taper: Index, rounded. 0 major, 1 natural minor, 2 dorian, 3 mixolydian,
      4 harmonic minor.
    - Function: The scale type. The leading tone of harmonic minor gives the
      voices a raised seventh against the tonic.
@@ -47,8 +52,11 @@ PARAMETERS (8)
    - Taper: Integer scale steps above the played note.
    - Function: Voice 1's distance up the scale. 1 = the next scale tone (a
      second above), 2 = a diatonic third, 4 = a diatonic fifth, 7 = the octave.
-     Notes played between scale tones are snapped to the nearest degree before
-     the interval is chosen, so the voice never leaves the key.
+     A chromatic note (one not in the key) is snapped to the nearest degree
+     (the lower one on a tie) and borrows that degree's interval, so the voice
+     moves in parallel with the horn and stays consonant with it (an octave
+     stays an octave) — on that note the voice is out of the key just as the
+     horn is.
 
 4. degree2
    - Range: 0 to 7 scale steps (Default: 4)
@@ -56,15 +64,17 @@ PARAMETERS (8)
    - Function: Voice 2's distance up the scale, 0 switches it off. With degree 2
      and degree2 4 the effect sings a diatonic third and fifth together; set
      degree2 7 for an octave, or degree2 2 for a two-voice third. The same value
-     as degree stacks both voices in unison (about 3 dB louder). Switching it
-     off fades voice 2 out over 20 ms instead of cutting a grain.
+     as degree stacks both voices in unison (3 dB louder; with drift_cents > 0
+     they beat as a slow chorus instead). Switching it off fades voice 2 out
+     over 20 ms instead of cutting a grain.
 
 5. mix
    - Range: 0 to 100 % (Default: 40)
    - Taper: Linear dry-to-harmony crossfade.
    - Function: Balance between the tuba and the harmony voices. The two voices
-     are summed first, so the dry/wet balance does not change when degree2 is
-     switched.
+     are summed at equal power first, so the dry/wet balance does not change
+     when degree2 is switched on at a different interval. With both voices on,
+     voice 1 leans left and voice 2 right (60 % spread).
 
 6. glide_ms
    - Range: 5 to 200 ms (Default: 40)
@@ -95,7 +105,11 @@ PORT NOTES
 - The played note is snapped to the nearest key degree only to choose the
   intervals; the shifts are then applied to the real incoming f0, so the
   player's intonation and vibrato come through in both voices.
-- Voices share one grain engine and one analysis-mark clock; each voice costs a
-  second grain stream, so degree2 = 0 is also the cheapest setting.
-- Octave-up shifts keep only the even source harmonics, so a voice spread is
-  quieter than the dry horn; balance with mix.
+- Voices share one analysis-mark clock; each voice is its own grain stream with
+  its own grain length, so switching degree2 never alters voice 1. With
+  degree2 = 0 no new voice-2 grains are started.
+- Each grain keeps the length it started with, so a note change on in3 never
+  cuts a window short (no splice clicks on note changes).
+- Delay through the voices is 0 to 1 tuba period (0-12 ms at 82 Hz).
+- Octave-up shifts keep only the even source harmonics, so an octave voice is
+  about 6 dB quieter than the dry horn; balance with mix.

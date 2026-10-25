@@ -3,25 +3,30 @@ harmonizer_minishift_doubler — Parameter Information
 ================================================================================
 
 OVERVIEW
-A microshift (tm Soundtoys) / micropitch (tm Eventide) style doubler: 
-the audio input is copied twice and each copy is
-pitch-shifted by a few cents in opposite directions, one per side. Unlike a
-chorus there is no wobbling modulation — the detune is a constant offset — so
-the copies beat slowly against the dry audio and against each other (DAFx-08
-Paper 30 Sec. 3-4), and because the two sides drift apart in pitch they
-decorrelate, which is what produces the width (DAFx-24 Paper 92 Sec. 1). The
+A microshift (Soundtoys) / micropitch (Eventide) style doubler: the audio
+input is copied twice and each copy is pitch-shifted by a few cents in
+opposite directions, one per side. Unlike a chorus the detune is a fixed
+pitch offset rather than a delay-time wobble (motion only breathes its size
+slowly, and can be set to 0), so the copies beat slowly against the dry
+audio and against each other (DAFx-08 Paper 30 Sec. 3-4), and because the
+two sides drift apart in pitch they decorrelate, which is what produces the
+width (DAFx-24 Paper 92 Sec. 1). The
 result is a thick, wide double with no audible pitch of its own, made for a
 live bass that has to fill a big rig.
 
 INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input. Voice A shifts the left input up, voice
-  B shifts the right input down.
+  B shifts the right input down. If in2 stays silent for 250 ms, in1 is used
+  for both sides.
 - in3: Pitch f0 in Hz, used only to size the grains so the splices land on a
-  period. 0 or out-of-range (outside 20..1200 Hz) holds the last valid value,
-  starting at fallback_hz. There is no pitch tracker and in3 is never divided
-  by.
-- in4: One-Bar Phasor [0..1]. Drives the detune breathing; frozen at 0 the
-  effect is a static microshift (the breathing oscillator free-runs).
+  period. 0 or out-of-range (outside 20..1200 Hz) holds the last valid value;
+  until the first valid value arrives fallback_hz is used (and follows the
+  knob). There is no pitch tracker and in3 is never divided by.
+- in4: One-Bar Phasor [0..1] (an exception to the repo's Hz convention).
+  Drives the detune breathing, one cycle per bar. 100 ms after in4 stops
+  moving (unpatched, frozen, or held at any constant), an internal slow
+  oscillator (0.13 Hz, ~7.7 s per cycle) drives it instead; set motion to 0
+  for a completely static microshift.
 - out1 / out2: Stereo Output (dry crossfaded with the doubled pair)
 
 PARAMETERS (6)
@@ -39,7 +44,8 @@ PARAMETERS (6)
    - Taper: Linear.
    - Function: Delays the doubled pair behind the dry signal, so the copies read
      as a second instrument rather than as a comb on top of the first. Very small
-     values (0-3 ms) are the tightest, most comb-like doubling.
+     values (0-3 ms) are the tightest, most comb-like doubling. The grains
+     themselves add between 0 and one f0 period on top (0-12 ms at 82 Hz).
 
 3. width
    - Range: 0 to 100 % (Default: 70)
@@ -56,19 +62,26 @@ PARAMETERS (6)
 5. motion
    - Range: 0 to 100 % (Default: 20)
    - Taper: Linear depth, one bar per cycle.
-   - Function: Breathes the detune in opposite directions on the two sides, so
-     the width opens and closes once per bar instead of sitting still. At 0 the
-     detune is constant. The phase comes from in4 when the phasor moves,
-     otherwise from an internal slow oscillator.
+   - Function: Breathes the detune spread: both voices move apart and back
+     together (A up/B down, then towards unison) by up to this % of
+     detune_cents, so the width opens and closes once per bar instead of
+     sitting still. At 100 the spread swings between unison and twice
+     detune_cents. At 0 the detune is constant. The phase comes from in4 when
+     the phasor moves, otherwise from the internal slow oscillator.
 
 6. fallback_hz
    - Range: 40 to 300 Hz (Default: 82)
    - Taper: Linear.
    - Function: f0 assumed until in3 first reports a pitch; it only sets the grain
-     length, so the effect is fully usable with no tracker at all.
+     length, so the effect is fully usable with no tracker at all (set it near
+     the register you play in). Once in3 has reported a pitch, the last valid
+     pitch is held and this knob is ignored.
 
 PORT NOTES
-- No pitch tracking and no modulation LFO: the detune is constant, which is what
-  separates this from the chorus effects in this repo.
+- No pitch tracking and no delay-time modulation: the detune is a pitch offset
+  (optionally breathing via motion), which is what separates this from the
+  chorus effects in this repo.
+- Each grain keeps the length it started with, so a note change on in3 never
+  cuts a window short (no splice clicks on note changes).
 - At detune_cents = 0 the two voices are identical and the wet is just a delayed
   copy of the dry; use mix or a non-zero detune.

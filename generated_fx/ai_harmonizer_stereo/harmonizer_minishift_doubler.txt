@@ -1,5 +1,5 @@
 // ============================================================================
-// harmonizer_minipitch_doubler.txt
+// harmonizer_minishift_doubler.txt
 // Doubles the input with two mini-detuned voices for stereo width and
 // thickness.
 // From: M. Hoffman & P. Cook, "Real-Time Dissonancizers: Two Dissonance-
@@ -9,12 +9,15 @@
 //       Sec. 1 (decorrelation between the channels is what creates width).
 //       The pitch engine is the PSOLA grain re-spacing of DAFx-11 Paper 52
 //       Sec. 4.1-4.2: two voices at +/- detune_cents, one per side.
-// in1/in2: stereo audio
+// in1/in2: stereo audio (in2 silent for 250 ms -> in1 is used for both)
 // in3: tuba f0 in Hz, used only for the grain length (no pitch tracking);
-//      0 (or anything outside 20..1200 Hz) holds the last valid value,
-//      initialised to fallback_hz
-// in4: one-bar phasor 0..1 -> detune breathing; frozen at 0 the effect is a
-//      static minishift (motion free-runs internally)
+//      0 (or anything outside 20..1200 Hz) holds the last valid value;
+//      fallback_hz is used live until the first valid value arrives
+// in4: one-bar phasor 0..1 -> detune breathing (exception to the Hz
+//      contract); 100 ms after in4 stops moving an internal 0.13 Hz
+//      oscillator drives the breathing (motion = 0 for a static minishift)
+// Latency of the doubled pair: pre_delay_ms + 0..1 f0 period (grains start
+// at the newest analysis mark)
 // out1/out2: stereo out
 // ============================================================================
 
@@ -36,20 +39,25 @@
 @state winTab = new FixedSampleArray(1025);
 @state aStart = new FixedIntArray(12);
 @state aAge = new FixedIntArray(12);
+@state aLen = new FixedIntArray(12);
 @state bStart = new FixedIntArray(12);
 @state bAge = new FixedIntArray(12);
+@state bLen = new FixedIntArray(12);
 @state wi: Int = 0;
 @state markIdx: Int = 0;
 @state gLenI: Int = 256;
 @state slotA: Int = 0;
 @state slotB: Int = 0;
 @state f0Hold = 0.0;
+@state haveF0: Int = 0;
 @state markAcc = 0.0;
 @state synA = 0.0;
 @state synB = 0.0;
 @state ratioA = 1.0;
 @state ratioB = 1.0;
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
 @state freeLfo = new phasor();
 @state srCached = 0.0;
 @state ratioK = 0.01;
@@ -61,8 +69,10 @@ function init() {
 	for (let g = 0; g < 12; g++) {
 		aStart[g] = 0;
 		aAge[g] = 100000;
+		aLen[g] = 0;
 		bStart[g] = 0;
 		bAge[g] = 100000;
+		bLen[g] = 0;
 	}
 }
 
@@ -73,23 +83,40 @@ if (srCached != sr) {
 }
 
 let xL = in1;
-let xR = in2;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pIn = in3;
 let barIn = in4;
 
 // --- 1. f0 conditioning: hold the last valid value, never divide by in3 ---
-if (pIn > 20.0 && pIn < 1200.0) { f0Hold = pIn; }
-if (f0Hold <= 0.0) { f0Hold = clamp(fallback_hz, 40.0, 300.0); }
-let period = sr / clamp(f0Hold, 40.0, 1200.0);
+if (pIn > 20.0 && pIn < 1200.0) {
+	f0Hold = pIn;
+	haveF0 = 1;
+}
+let f0 = haveF0 ? f0Hold : clamp(fallback_hz, 40.0, 300.0);
+let period = sr / clamp(f0, 40.0, 1200.0);
 
-// --- 2. opposite detunes, with optional bar-rate breathing ---
-let barMoving = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// --- 2. opposite detunes; motion breathes the spread between them ---
+// Bar phasor counts as active for 100 ms after it last moved (a constant in4 must not freeze the breathing)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let driftPhase = barMoving ? wrap(barIn, 0.0, 1.0) : freeLfo.next(0.13);
+let freePh = freeLfo.next(0.13);
+let driftPhase = (barHold > 0.0) ? wrap(barIn, 0.0, 1.0) : freePh;
 let det = clamp(detune_cents, 0.0, 40.0);
 let wob = 0.01 * clamp(motion, 0.0, 100.0) * det * sin(2.0 * pi * driftPhase);
-let rA = pow(2.0, (det + wob) / 1200.0);
-let rB = pow(2.0, (-det + wob) / 1200.0);
+let spread = det + wob;
+let rA = exp2(spread / 1200.0);
+let rB = exp2((0.0 - spread) / 1200.0);
 ratioA += (rA - ratioA) * ratioK;
 ratioB += (rB - ratioB) * ratioK;
 
@@ -103,6 +130,9 @@ gLenI = lInt;
 let preSamps: Int = floor(clamp(pre_delay_ms, 0.0, 30.0) * 0.001 * sr);
 
 // --- 3. analysis marks every tuba period; two synthesis grain streams ---
+// A grain reads forward at unity speed, so it may start at the newest mark
+// (start <= write index is all that is required); each grain keeps the
+// length it was born with so a note change never truncates a live window.
 bufL[wi] = xL;
 bufR[wi] = xR;
 
@@ -115,16 +145,18 @@ if (markAcc >= period) {
 synA += 1.0;
 if (synA >= hopA) {
 	synA -= hopA;
-	aStart[slotA] = (markIdx - gLenI - preSamps + 16384) & 16383;
+	aStart[slotA] = (markIdx - preSamps + 16384) & 16383;
 	aAge[slotA] = 0;
+	aLen[slotA] = gLenI;
 	slotA = (slotA + 1) % 12;
 }
 
 synB += 1.0;
 if (synB >= hopB) {
 	synB -= hopB;
-	bStart[slotB] = (markIdx - gLenI - preSamps + 16384) & 16383;
+	bStart[slotB] = (markIdx - preSamps + 16384) & 16383;
 	bAge[slotB] = 0;
+	bLen[slotB] = gLenI;
 	slotB = (slotB + 1) % 12;
 }
 
@@ -135,8 +167,9 @@ let wsumA = 0.0;
 let wsumB = 0.0;
 for (let g = 0; g < 12; g++) {
 	let ag = aAge[g];
-	if (ag < gLenI) {
-		let xi: Int = floor(ag * 1024.0 / gLenI);
+	let gl = aLen[g];
+	if (ag < gl) {
+		let xi: Int = floor(ag * 1024.0 / gl);
 		if (xi > 1024) { xi = 1024; }
 		let wv = winTab[xi];
 		let idx = (aStart[g] + ag) & 16383;
@@ -149,8 +182,9 @@ for (let g = 0; g < 12; g++) {
 // --- 5. voice B ---
 for (let g = 0; g < 12; g++) {
 	let ag = bAge[g];
-	if (ag < gLenI) {
-		let xi: Int = floor(ag * 1024.0 / gLenI);
+	let gl = bLen[g];
+	if (ag < gl) {
+		let xi: Int = floor(ag * 1024.0 / gl);
 		if (xi > 1024) { xi = 1024; }
 		let wv = winTab[xi];
 		let idx = (bStart[g] + ag) & 16383;
