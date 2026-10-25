@@ -36,7 +36,8 @@ PARAMETERS (9 total)
    brickwall limiting.
 
 5. tc_mode         [1.0 .. 6.0, default: 5.0]
-   Six-way Fairchild Time-Constant selector (Table 3):
+   Six-way Fairchild Time-Constant selector (Table 3); continuous, snaps to
+   the nearest position:
    - 1..4: Single-RC release (100 ms, 300 ms, 880 ms, 1.76 s).
    - 5: Dual-RC program-dependent release (CT + CU).
    - 6: Triple-RC dual-memory auto-release (CT + CU + CV) for fast transient
@@ -47,8 +48,14 @@ PARAMETERS (9 total)
    (Raffensperger Sec. 6, Fig. 13).
 
 7. lat_vert_mode   [0.0 .. 1.0, default: 0.35]
-   Continuous blend between Left/Right independent feedback limiting (0.0) and
-   Lateral/Vertical (Mid-Side) matrixed limiting (1.0).
+   Crossfade between Left/Right independent feedback limiting (0.0) and
+   Lateral/Vertical (Mid-Side) limiting (1.0), as on the 670's mode switch.
+   In between, both limiter pairs run and their outputs are blended, so the
+   image stays centred at every setting. In Lateral/Vertical mode a centred
+   (mono) source lands entirely in the Lateral channel, about 3 dB hotter, so
+   it limits a little harder than in Left/Right mode; a hit in the middle
+   ducks the centre while the sides (room, chorus width) stay up.
+   CPU: 0.0 or 1.0 runs one limiter pair; anything in between runs two.
 
 8. mix             [0.0 .. 1.0, default: 1.0]
    Dry/wet parallel NY-compression blend.
@@ -57,3 +64,18 @@ PARAMETERS (9 total)
    Output trim, a plain gain stage after the feedback tap and the dry/wet
    blend, so it makes the effect up or down in level without feeding back into
    the sidechain.
+
+INLETS / OUTLETS
+----------------
+- in1 / in2: stereo audio. If in2 stays silent for 250 ms, in1 is used for both
+  sides (so a mono patch into in1 works).
+- in3 / in4: not used.
+- out1 / out2: stereo.
+
+NOTES
+-----
+- Params 1 and 9 (input/output gain) were added on request on top of the
+  8-parameter guideline; they are plain trims and do not change the model.
+- Earlier versions blended the L/R and M/S matrices directly, which left the
+  right side quieter on mono input at the default 0.35 (several dB, more under
+  heavy limiting); the two-pair crossfade replaces that.

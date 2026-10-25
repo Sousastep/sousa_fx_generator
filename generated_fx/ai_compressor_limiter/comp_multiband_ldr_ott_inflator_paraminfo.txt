@@ -10,11 +10,19 @@ TYPE:   Stereo 3-Band Relative-Level (LDR) Upward/Downward "OTT" Microdynamics
 OVERVIEW
 --------
 Implements the multiband extension of Nercessian et al. (DAFx-2022, p. 4), where
-a phase-coherent 3-band crossover splits the stereo input into Low, Mid, and High
+a 3-band crossover splits the stereo input into Low, Mid, and High
 sub-bands x_k[n], each equipped with its own frequency-scaled relative-level
 meter L_k[n] = a_short,k[n] / a_long,k[n] and manipulation exponent m_k. Setting
 m_k < 1.0 produces threshold-free "OTT"-style upward sustain inflation and peak
 clamping in that band; setting m_k > 1.0 produces band-specific transient snap.
+
+The crossover is first-order complementary (each split is a one-pole lowpass
+and input-minus-lowpass), so the three bands always sum back to the input with
+equal gains, but the bands overlap gently (6 dB/oct) rather than splitting
+sharply. Each band's detector is stereo-linked (one gain per band for both
+sides). Per band, gain changes are capped at +/-26 dB, plus an automatic makeup
+of 2 dB x (1 - m_k) (clamped to -4..+4.5 dB). The processing fades out as a
+band's level falls from -50 to -70 dBFS RMS, so silence is not pumped up.
 
 PARAMETERS (8 total)
 --------------------
@@ -34,10 +42,28 @@ PARAMETERS (8 total)
    Mid-to-High complementary crossover frequency in Hz.
 
 6. speed_scale     [0.1 .. 3.0, default: 1.0]
-   Global multiplier scaling the sub-band attack, release, and macro time constants.
+   Global speed multiplier: the band attack, release and macro time constants
+   are divided by it (2 = twice as fast, 0.5 = half as fast). At 1.0:
+   low 12 ms / 140 ms / 1.4 s, mid 4 ms / 75 ms / 0.85 s,
+   high 1.2 ms / 40 ms / 0.48 s (attack / release / macro window).
 
 7. tilt_db         [-12.0 .. 12.0 dB, default: 1.5]
-   Post-compression spectral tilt balancing Low vs. High sub-band output levels.
+   Post-compression spectral tilt: the high band is raised by half this value
+   and the low band lowered by half (positive = brighter, negative = darker;
+   the default +1.5 dB is -0.75 dB low / +0.75 dB high).
 
 8. mix             [0.0 .. 1.0, default: 1.0]
    Dry/wet parallel multiband inflation blend.
+
+INLETS / OUTLETS
+----------------
+- in1 / in2: stereo audio. If in2 stays silent for 250 ms, in1 is used for both
+  sides (so a mono patch into in1 works).
+- in3 / in4: not used.
+- out1 / out2: stereo.
+
+NOTES
+-----
+- The summed output passes a gentle saturator (-0.6 dB at 0 dBFS, rounding off
+  toward about +8 dBFS). It is soft clipping, not a hard ceiling: heavy upward
+  settings can still exceed 0 dBFS, so follow with a limiter for a ceiling.

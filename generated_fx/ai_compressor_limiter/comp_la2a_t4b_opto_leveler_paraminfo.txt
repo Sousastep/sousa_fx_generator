@@ -14,7 +14,10 @@ Emulates the Teletronix LA-2A / Tube-Tech CL 1B electro-optical leveling
 amplifier. The sidechain drives an electro-luminescent panel coupled to a CdS
 photoresistor (T4B cell) with program-dependent attack (~10 ms, accelerating on
 transient bursts) and a two-stage release (60 ms initial fast decay followed by
-a 0.5-4.5 s photoconductive memory tail governed by integrated cell exposure).
+a 0.55-4.95 s photoconductive memory tail governed by integrated cell exposure).
+The sidechain level passes through a short electro-luminescent panel
+persistence (1 ms rise, 30 ms fall) so the gain does not ripple with each
+cycle of a low note. Stereo-linked: one gain for both sides.
 Includes the front-panel R37 sidechain high-frequency pre-emphasis control and
 an asymmetric 12AX7/12BH7 vacuum-tube make-up amplifier stage.
 
@@ -22,6 +25,8 @@ PARAMETERS (7 total)
 --------------------
 1. peak_reduction  [0.0 .. 100.0, default: 58.0]
    Main LA-2A Peak Reduction dial controlling optical sidechain sensitivity.
+   Sets the threshold from 0 dBFS (0) down to -42 dBFS (100); the default 58
+   is about -24 dBFS. 0 = no gain reduction.
 
 2. limit_mode      [0.0 .. 1.0, default: 0.25]
    Morphs continuously between Compress mode (~3.2:1, wide 18 dB knee) and
@@ -33,13 +38,25 @@ PARAMETERS (7 total)
 
 4. cell_memory     [0.0 .. 1.0, default: 0.65]
    Controls the depth and persistence of the T4B CdS photocell slow-release
-   memory tail (0.5 s to 4.5 s).
+   memory tail. The tail lengthens with how hard and how long the cell has
+   been driven: 0.55 s after light use, up to 1.75 s (memory 0) .. 4.95 s
+   (memory 1) after sustained heavy reduction. At 0 the slow tail is not
+   mixed in at all and only the 60 ms release remains.
 
 5. tube_warmth     [0.0 .. 1.0, default: 0.45]
    Asymmetric 2nd/3rd harmonic saturation of the 12AX7/12BH7 output amplifier.
+   Adds up to ~+1 dB of level at the default and more as it rises.
 
 6. makeup_db       [-12.0 .. 24.0 dB, default: 6.0]
-   Output Gain dial driving the vacuum-tube make-up amplifier.
+   Output Gain dial driving the vacuum-tube make-up amplifier (before the tube
+   stage, so more makeup also means more tube saturation).
 
 7. mix             [0.0 .. 1.0, default: 1.0]
    Dry/wet parallel leveling blend.
+
+INLETS / OUTLETS
+----------------
+- in1 / in2: stereo audio. If in2 stays silent for 250 ms, in1 is used for both
+  sides (so a mono patch into in1 works).
+- in3 / in4: not used.
+- out1 / out2: stereo.

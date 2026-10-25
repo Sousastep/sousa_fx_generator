@@ -3,7 +3,11 @@
 // Stereo Lookahead Order-Statistic (Running-Max) + Boxcar Peak Limiter
 // Based on Perttu Hamalainen (DAFx-2002, "Smoothing of the Control Signal
 // without Clipped Output in Digital Peak Limiters", Section 3, Eqs. 6-21, Fig. 4)
-// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// Inlets:
+//   in1 / in2: stereo audio (if in2 stays silent for 250 ms, in1 feeds both sides)
+//   in3 / in4: not used
+// Outlets:
+//   out1 / out2: stereo, delayed by lookahead_samp + boxcar_smooth samples
 // ============================================================================
 
 @param({ min: 0.0, max: 30.0 }) drive_db = 9.0;
@@ -14,25 +18,44 @@
 @param({ min: 0.0, max: 1.0 }) pump_character = 0.35;
 @param({ min: 0.0, max: 1.0 }) mix = 1.0;
 
-// Audio lookahead delay lines z^{-N} (Fig. 4)
+// Audio lookahead delay lines z^{-(N+M)} (Fig. 4; the extra M samples cover the
+// averaging filter's rise time, so the smoothed envelope is already at the
+// peak's level when the peak reaches the output)
 @state dly_L = new delay(256);
 @state dly_R = new delay(256);
 
-// Sidechain delay line for recursive M-point moving average (Eq. 21)
-@state emax_dly = new delay(128);
+// e_max history for the exact M-point moving average (Eqs. 17, 21)
+@state em_hist = new FixedSampleArray(64);
+@state em_pos: Int = 0;
+@state box_sum = 0.0;
+@state last_M: Int = 0;
 
-// Running-max 8-stage cascaded peak-hold buckets covering N lookahead samples
+// Running-max 8-stage cascaded peak-hold buckets covering N + M + 1 samples
 @state hold_val = new FixedSampleArray(8);
 @state hold_cnt: Int = 0;
 
-// Envelope states e_max(n-1) and recursive moving average e_ave(n-1) (Eqs. 7, 19, 21)
+// Envelope states e_max(n-1) and moving average e_ave (Eqs. 7, 17)
 @state e_max_state = 0.0;
 @state e_ave_state = 0.0;
 @state pump_LP = 0.0;
 
+// Attack coefficient and beta depend only on N: recomputed when it changes
+@state last_N: Int = 0;
+@state a_att = 0.0;
+@state beta = 0.0;
+
+@state in2Hold = 0.0;
+
 let sr_safe = maximum(samplerate(), 8000.0);
 let dryL = in1;
-let dryR = (abs(in2) > 0.0000001) ? in2 : in1;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in in1 for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr_safe;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let dryR = (in2Hold > 0.0) ? in2 : dryL;
 
 // Input drive & ceiling threshold
 let drv = dbtoa(clamp(drive_db, 0.0, 30.0));
@@ -42,36 +65,36 @@ let xR = dryR * drv;
 let thresh = dbtoa(clamp(ceiling_db, -18.0, -0.05));
 let N: Int = floor(clamp(lookahead_samp, 4.0, 128.0));
 let M: Int = floor(clamp(boxcar_smooth, 1.0, 64.0));
+let D: Int = N + M;
 
-// Delay audio signals by N samples using .next(v, N) so RNBO delay reader steps every sample!
-// y(n) = x(n - N) * g(n) (Eq. 5)
-let xL_delayed = dly_L.next(xL, N);
-let xR_delayed = dly_R.next(xR, N);
+// Delay audio signals by N + M samples using .next(v, D) so RNBO delay reader steps every sample!
+// y(n) = x(n - N - M) * g(n) (Eq. 5, extended for the averaging filter)
+let xL_delayed = dly_L.next(xL, D);
+let xR_delayed = dly_R.next(xR, D);
 
 // Instantaneous stereo peak |x(n)|
 let abs_x = maximum(abs(xL), abs(xR));
 
-// Hamalainen Eq. 16: Choose attack coefficient a for N lookahead samples
-// with max overshoot alpha_max = 1.015 so e(n+N) >= |x(n)| without clipping
-let n_plus_1 = maximum(N + 1.0, 2.0);
-let a_att = 1.0 - pow(0.0148, 1.0 / n_plus_1);
+if (N != last_N) {
+	last_N = N;
+	// Hamalainen Eq. 16: attack coefficient a for N lookahead samples
+	// with max overshoot alpha_max = 1.015 (beta = 1 - 1/1.015 = 0.0148)
+	a_att = 1.0 - pow(0.0148, 1.0 / (N + 1.0));
+	// beta = (1 - a)^(N + 1): what is left of the old envelope after N + 1 steps
+	beta = pow(1.0 - a_att, N + 1.0);
+}
 
-// Hamalainen Eq. 20: Average beta over M-point moving average filter
-let m_safe = maximum(M, 1.0);
-let beta_N = pow(1.0 - a_att, n_plus_1);
-let beta_avg = pow(1.0 - a_att, maximum(n_plus_1 - 0.5 * (m_safe - 1.0), 1.0));
-let beta = clamp(0.5 * (beta_N + beta_avg), 0.0, 0.96);
-
-// Clipping control block c(n) (Hamalainen Eq. 14 & Eq. 19):
-// Aims slightly higher than |x(n)| so the 1-pole + boxcar envelope is guaranteed
-// to reach |x(n)| within N samples without overshooting into clipping
-let denom = maximum(1.0 - beta, 0.02);
-let c_target = (abs_x - beta * e_ave_state) / denom;
+// Clipping control block c(n) (Hamalainen Eq. 14):
+// aims slightly higher than |x(n)| so the 1-pole attack lands exactly on |x(n)|
+// after N + 1 samples (overshoot at most 1.5 %, about 0.13 dB)
+let c_target = (abs_x - beta * e_max_state) / (1.0 - beta);
 let c_n = maximum(abs_x, c_target);
 
-// Order-Statistics Running Max Filter x_max(n) = max[c(n-N), ..., c(n)] (Eq. 6)
-// Implemented via 8 rotating sub-window max buckets covering N samples
-let sub_len: Int = maximum(1, floor(N * 0.125 + 0.875));
+// Order-Statistics Running Max Filter x_max(n) = max[c(n-K), ..., c(n)] (Eq. 6),
+// via 8 rotating sub-window max buckets. Coverage is between 7*sub_len + 1 and
+// 8*sub_len samples; sub_len = ceil((N + M + 1) / 7) keeps it >= N + M + 1, so
+// c(n) is held for the attack (N + 1) and the averaging rise (M) both.
+let sub_len: Int = floor((N + M + 7) / 7);
 hold_cnt = hold_cnt + 1;
 if (hold_cnt >= sub_len) {
 	hold_cnt = 0;
@@ -99,22 +122,51 @@ let a_rel = 1.0 - exp(-1.0 / (tau_rel * sr_safe));
 let a_coeff = (x_max > e_max_state) ? a_att : a_rel;
 e_max_state = a_coeff * x_max + (1.0 - a_coeff) * e_max_state;
 
-// M-point Averaging Filter after level detection (Eq. 17 & recursive form Eq. 21)
-// Use emax_dly.next(v, M) so the delay buffer advances properly!
-let emax_old = emax_dly.next(e_max_state, M);
-let box_step = (e_max_state - emax_old) / m_safe;
-// Leaky recursive boxcar integration (prevents float drift while smoothing corners)
-e_ave_state = maximum(0.0, 0.9992 * (e_ave_state + box_step) + 0.0008 * e_max_state);
+// M-point Averaging Filter after level detection (Eq. 17, recursive form Eq. 21).
+// Exact running sum over the last M values of e_max. It is re-summed from the
+// history every 64 samples and whenever M changes, so neither rounding drift nor
+// a live boxcar_smooth change can leave it offset. (The old leaky integrator
+// sagged below the true average after each release, which let peaks through to
+// the instant fail-safe below, i.e. hard limiting.)
+let old_idx: Int = em_pos - M;
+if (old_idx < 0) {
+	old_idx = old_idx + 64;
+}
+let em_old = em_hist[old_idx];
+em_hist[em_pos] = e_max_state;
+if (em_pos == 0 || M != last_M) {
+	last_M = M;
+	box_sum = 0.0;
+	for (let k: Int = 0; k < M; k++) {
+		let idx: Int = em_pos - k;
+		if (idx < 0) {
+			idx = idx + 64;
+		}
+		box_sum = box_sum + em_hist[idx];
+	}
+} else {
+	box_sum = box_sum + e_max_state - em_old;
+}
+em_pos = em_pos + 1;
+if (em_pos >= 64) {
+	em_pos = 0;
+}
+e_ave_state = maximum(0.0, box_sum / M);
 
-// Ensure fail-safe non-clipping envelope bound: e_env >= max(e_ave, |x(n-N)|) (Eq. 5)
+// Fail-safe non-clipping envelope bound: e_env >= max(e_ave, |x(n-N-M)|) (Eq. 5).
+// With the delays above the smooth envelope already covers every peak; this only
+// guards against edge cases (e.g. lookahead changed mid-note).
 let abs_delayed = maximum(abs(xL_delayed), abs(xR_delayed));
 let e_env = maximum(e_ave_state, abs_delayed);
 
-// Optional musical "pump_character" resonant envelope under-swing on release
+// Optional musical "pump_character" envelope over-hang on release only: the
+// 45 ms lowpassed envelope is added where it sits above the envelope (after a
+// peak), deepening and lengthening the duck. Applying it on the rise as well
+// lowered the envelope on every attack and handed the peak to the fail-safe.
 let p_amt = clamp(pump_character, 0.0, 1.0);
 let g_pump = 1.0 - exp(-1.0 / (0.045 * sr_safe));
 pump_LP = pump_LP + g_pump * (e_env - pump_LP);
-let e_shaped = maximum(e_env + 0.45 * p_amt * (pump_LP - e_env), abs_delayed);
+let e_shaped = e_env + 0.45 * p_amt * maximum(0.0, pump_LP - e_env);
 
 // Gain processor g(n) = min(1, threshold / e(n)) (Hamalainen Eq. 3)
 let g_n = (e_shaped > thresh) ? (thresh / maximum(e_shaped, 0.000001)) : 1.0;

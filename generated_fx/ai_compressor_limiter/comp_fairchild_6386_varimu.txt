@@ -3,7 +3,11 @@
 // Stereo Fairchild 670 / 6386 Remote-Cutoff Triode Variable-Mu Feedback Limiter
 // Based on Raffensperger (DAFx-2012, "Toward a Wave Digital Filter Model of
 // the Fairchild 670 Limiter", Eqs. 1, 10-14, Fig. 8, Table 3)
-// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// Inlets:
+//   in1 / in2: stereo audio (if in2 stays silent for 250 ms, in1 feeds both sides)
+//   in3 / in4: not used
+// Outlets:
+//   out1 / out2: stereo, dry/wet by mix
 // ============================================================================
 
 @param({ min: -24.0, max: 36.0 }) input_gain_db = 0.0;
@@ -16,20 +20,35 @@
 @param({ min: 0.0, max: 1.0 }) mix = 1.0;
 @param({ min: -24.0, max: 36.0 }) output_gain_db = 0.0;
 
+// Two complete limiter pairs: Left/Right and Lateral/Vertical (Mid/Side).
+// lat_vert_mode crossfades their outputs. (Blending the L/R and M/S matrices
+// themselves cannot work with independent per-channel gain reduction: at the
+// old default 0.35 mono input came out several dB quieter on the right, and
+// the blended matrix is singular at 0.5.)
+
 // Feedback output state (unit delay breaking feedback loop, Eq. 13)
 @state y_prev_L = 0.0;
 @state y_prev_R = 0.0;
+@state y_prev_M = 0.0;
+@state y_prev_S = 0.0;
 
 // 3-Capacitor sidechain network states (CT fast, CU medium, CV slow memory, Fig. 8)
-// Channel 1 (Left or Mid/Lateral)
-@state v_ct_1 = 0.0;
-@state v_cu_1 = 0.0;
-@state v_cv_1 = 0.0;
-
-// Channel 2 (Right or Side/Vertical)
-@state v_ct_2 = 0.0;
-@state v_cu_2 = 0.0;
-@state v_cv_2 = 0.0;
+// Left
+@state v_ct_L = 0.0;
+@state v_cu_L = 0.0;
+@state v_cv_L = 0.0;
+// Right
+@state v_ct_R = 0.0;
+@state v_cu_R = 0.0;
+@state v_cv_R = 0.0;
+// Mid / Lateral
+@state v_ct_M = 0.0;
+@state v_cu_M = 0.0;
+@state v_cv_M = 0.0;
+// Side / Vertical
+@state v_ct_S = 0.0;
+@state v_cu_S = 0.0;
+@state v_cv_S = 0.0;
 
 // Transformer DC-blocking & high-frequency inductive roll-off states
 @state dc_x_L = 0.0;
@@ -39,6 +58,8 @@
 @state hf_lp_L = 0.0;
 @state hf_lp_R = 0.0;
 
+@state in2Hold = 0.0;
+
 // Helper: Raffensperger Eq. 10 Class-B sidechain crossover nonlinearity
 function fairchild_stage1(vpot: number, phi_dc_prime: number): number {
 	let a = clamp(vpot - phi_dc_prime, -40.0, 40.0);
@@ -46,6 +67,15 @@ function fairchild_stage1(vpot: number, phi_dc_prime: number): number {
 	let num = log(1.0 + exp(a));
 	let den = log(1.0 + exp(b));
 	return num - den;
+}
+
+// Helper: Stage 1-3 sidechain voltage and germanium diode-bridge current (Raffensperger Eqs. 10-14)
+function sidechain_current(fb: number, sc_scale: number, phi_dc_prime: number, v_ct: number): number {
+	let v_st1 = fairchild_stage1(fb * sc_scale, phi_dc_prime);
+	let v_st3 = clamp(8.4 * v_st1, -100.0, 100.0);
+	let v_diff = abs(v_st3) - v_ct;
+	let i_nom = 0.008 * log(1.0 + exp(clamp(4.0 * v_diff - 1.2, -20.0, 30.0)));
+	return clamp(i_nom, 0.0, 0.5);
 }
 
 // Helper: Push-Pull 6386 remote-cutoff variable-mu triode amplifier (Raffensperger Sec. 2 & 6)
@@ -73,27 +103,25 @@ let dt = 1.0 / sr_safe;
 // Input trim (plain gain stage, ahead of the transformer/6386 drive)
 let g_in = dbtoa(clamp(input_gain_db, -24.0, 36.0));
 let dryL = in1 * g_in;
-let dryR = ((abs(in2) > 0.0000001) ? in2 : in1) * g_in;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in in1 for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr_safe;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let dryR = ((in2Hold > 0.0) ? in2 : in1) * g_in;
 
 // Input transformer step gain
 let in_gain = dbtoa(clamp(drive_db, 0.0, 24.0));
 let xL = dryL * in_gain;
 let xR = dryR * in_gain;
 
-// Continuous blend between Left/Right (0) and Lateral/Vertical Mid-Side (1)
+// Crossfade between Left/Right (0) and Lateral/Vertical Mid-Side (1).
+// A pair whose weight is 0 is not computed (lv = 0 or 1 costs one pair; in
+// between costs two). Its state is held, and it re-enters at a tiny weight.
 let lv = clamp(lat_vert_mode, 0.0, 1.0);
 let inv_sqrt2 = 0.7071067811865475;
-let mid_in = (xL + xR) * inv_sqrt2;
-let side_in = (xL - xR) * inv_sqrt2;
-
-let ch1_in = (1.0 - lv) * xL + lv * mid_in;
-let ch2_in = (1.0 - lv) * xR + lv * side_in;
-
-// Feedback signals from previous sample (in L/R or M/S space)
-let mid_prev = (y_prev_L + y_prev_R) * inv_sqrt2;
-let side_prev = (y_prev_L - y_prev_R) * inv_sqrt2;
-let fb1 = (1.0 - lv) * y_prev_L + lv * mid_prev;
-let fb2 = (1.0 - lv) * y_prev_R + lv * side_prev;
 
 // Sidechain AC and DC threshold controls (Raffensperger Eq. 10, Fig. 9 & 12)
 // phi_dc sets Class-B crossover bias (soft vari-mu knee at 0 -> hard limiting knee at 1)
@@ -102,21 +130,6 @@ let phi_ac = clamp(ac_thresh, 0.0, 1.0);
 let phi_dc = clamp(dc_knee, 0.0, 1.0);
 let phi_dc_prime = 1.2 + 9.5 * phi_dc;
 let sc_scale = (1.5 + 22.0 * pow(phi_ac, 1.25)) * (1.0 + 0.55 * phi_dc);
-
-// Stage 1-3 sidechain voltage and germanium diode-bridge current (Raffensperger Eqs. 10-14)
-// Channel 1:
-let v_st1_1 = fairchild_stage1(fb1 * sc_scale, phi_dc_prime);
-let v_st3_1 = clamp(8.4 * v_st1_1, -100.0, 100.0);
-let v_diff_1 = abs(v_st3_1) - v_ct_1;
-let i_nom_1 = 0.008 * log(1.0 + exp(clamp(4.0 * v_diff_1 - 1.2, -20.0, 30.0)));
-let i_sc_1 = clamp(i_nom_1, 0.0, 0.5);
-
-// Channel 2:
-let v_st1_2 = fairchild_stage1(fb2 * sc_scale, phi_dc_prime);
-let v_st3_2 = clamp(8.4 * v_st1_2, -100.0, 100.0);
-let v_diff_2 = abs(v_st3_2) - v_ct_2;
-let i_nom_2 = 0.008 * log(1.0 + exp(clamp(4.0 * v_diff_2 - 1.2, -20.0, 30.0)));
-let i_sc_2 = clamp(i_nom_2, 0.0, 0.5);
 
 // Fairchild 670 6-position Time Constant network (Fig. 8 & Table 3)
 // Exact RC values from Table 3:
@@ -154,36 +167,72 @@ let charge_scale = 2800.0 / c_t;
 let g_cu = (sel >= 4.5) ? (1.0 / (0.10 * c_t)) : 0.0;
 let g_cv = (sel >= 5.5) ? (1.0 / (0.10 * c_t)) : 0.0;
 
-// Update 3-capacitor network for Channel 1 (Fig. 8)
-let d_ct_1 = i_sc_1 * charge_scale - (v_ct_1 / tau_rel_fast) - g_cu * (v_ct_1 - v_cu_1) - g_cv * (v_ct_1 - v_cv_1);
-v_ct_1 = clamp(v_ct_1 + dt * d_ct_1, 0.0, 60.0);
-let d_cu_1 = (sel >= 4.5) ? ((v_ct_1 - v_cu_1) / 0.80) : (0.0 - v_cu_1 / 1.50);
-v_cu_1 = clamp(v_cu_1 + dt * d_cu_1, 0.0, 60.0);
-let d_cv_1 = (sel >= 5.5) ? ((v_ct_1 - v_cv_1) / 2.00) : (0.0 - v_cv_1 / 3.00);
-v_cv_1 = clamp(v_cv_1 + dt * d_cv_1, 0.0, 60.0);
-
-// Update 3-capacitor network for Channel 2 (Fig. 8)
-let d_ct_2 = i_sc_2 * charge_scale - (v_ct_2 / tau_rel_fast) - g_cu * (v_ct_2 - v_cu_2) - g_cv * (v_ct_2 - v_cv_2);
-v_ct_2 = clamp(v_ct_2 + dt * d_ct_2, 0.0, 60.0);
-let d_cu_2 = (sel >= 4.5) ? ((v_ct_2 - v_cu_2) / 0.80) : (0.0 - v_cu_2 / 1.50);
-v_cu_2 = clamp(v_cu_2 + dt * d_cu_2, 0.0, 60.0);
-let d_cv_2 = (sel >= 5.5) ? ((v_ct_2 - v_cv_2) / 2.00) : (0.0 - v_cv_2 / 3.00);
-v_cv_2 = clamp(v_cv_2 + dt * d_cv_2, 0.0, 60.0);
-
-// Apply 6386 Push-Pull Variable-Mu Amplifier to Ch1 & Ch2
 let harm = clamp(tube_harmonics, 0.0, 1.0);
-let y_ch1 = varimu_6386_amp(ch1_in, v_ct_1, harm);
-let y_ch2 = varimu_6386_amp(ch2_in, v_ct_2, harm);
 
-// Decode back from Lateral/Vertical (M/S) if engaged
-let ms_out_L = (y_ch1 + y_ch2) * inv_sqrt2;
-let ms_out_R = (y_ch1 - y_ch2) * inv_sqrt2;
-let wetL = (1.0 - lv) * y_ch1 + lv * ms_out_L;
-let wetR = (1.0 - lv) * y_ch2 + lv * ms_out_R;
+let wetL = 0.0;
+let wetR = 0.0;
 
-// Store feedback output state
-y_prev_L = wetL;
-y_prev_R = wetR;
+// --- Left/Right pair --------------------------------------------------------
+if (lv < 1.0) {
+	// Update 3-capacitor network for Left (Fig. 8)
+	let i_sc_L = sidechain_current(y_prev_L, sc_scale, phi_dc_prime, v_ct_L);
+	let d_ct_L = i_sc_L * charge_scale - (v_ct_L / tau_rel_fast) - g_cu * (v_ct_L - v_cu_L) - g_cv * (v_ct_L - v_cv_L);
+	v_ct_L = clamp(v_ct_L + dt * d_ct_L, 0.0, 60.0);
+	let d_cu_L = (sel >= 4.5) ? ((v_ct_L - v_cu_L) / 0.80) : (0.0 - v_cu_L / 1.50);
+	v_cu_L = clamp(v_cu_L + dt * d_cu_L, 0.0, 60.0);
+	let d_cv_L = (sel >= 5.5) ? ((v_ct_L - v_cv_L) / 2.00) : (0.0 - v_cv_L / 3.00);
+	v_cv_L = clamp(v_cv_L + dt * d_cv_L, 0.0, 60.0);
+
+	// Update 3-capacitor network for Right (Fig. 8)
+	let i_sc_R = sidechain_current(y_prev_R, sc_scale, phi_dc_prime, v_ct_R);
+	let d_ct_R = i_sc_R * charge_scale - (v_ct_R / tau_rel_fast) - g_cu * (v_ct_R - v_cu_R) - g_cv * (v_ct_R - v_cv_R);
+	v_ct_R = clamp(v_ct_R + dt * d_ct_R, 0.0, 60.0);
+	let d_cu_R = (sel >= 4.5) ? ((v_ct_R - v_cu_R) / 0.80) : (0.0 - v_cu_R / 1.50);
+	v_cu_R = clamp(v_cu_R + dt * d_cu_R, 0.0, 60.0);
+	let d_cv_R = (sel >= 5.5) ? ((v_ct_R - v_cv_R) / 2.00) : (0.0 - v_cv_R / 3.00);
+	v_cv_R = clamp(v_cv_R + dt * d_cv_R, 0.0, 60.0);
+
+	// Apply 6386 Push-Pull Variable-Mu Amplifier
+	let y_L = varimu_6386_amp(xL, v_ct_L, harm);
+	let y_R = varimu_6386_amp(xR, v_ct_R, harm);
+	// Store feedback output state
+	y_prev_L = y_L;
+	y_prev_R = y_R;
+	wetL = (1.0 - lv) * y_L;
+	wetR = (1.0 - lv) * y_R;
+}
+
+// --- Lateral/Vertical (Mid/Side) pair ---------------------------------------
+if (lv > 0.0) {
+	let mid_in = (xL + xR) * inv_sqrt2;
+	let side_in = (xL - xR) * inv_sqrt2;
+
+	// Update 3-capacitor network for Mid (Fig. 8)
+	let i_sc_M = sidechain_current(y_prev_M, sc_scale, phi_dc_prime, v_ct_M);
+	let d_ct_M = i_sc_M * charge_scale - (v_ct_M / tau_rel_fast) - g_cu * (v_ct_M - v_cu_M) - g_cv * (v_ct_M - v_cv_M);
+	v_ct_M = clamp(v_ct_M + dt * d_ct_M, 0.0, 60.0);
+	let d_cu_M = (sel >= 4.5) ? ((v_ct_M - v_cu_M) / 0.80) : (0.0 - v_cu_M / 1.50);
+	v_cu_M = clamp(v_cu_M + dt * d_cu_M, 0.0, 60.0);
+	let d_cv_M = (sel >= 5.5) ? ((v_ct_M - v_cv_M) / 2.00) : (0.0 - v_cv_M / 3.00);
+	v_cv_M = clamp(v_cv_M + dt * d_cv_M, 0.0, 60.0);
+
+	// Update 3-capacitor network for Side (Fig. 8)
+	let i_sc_S = sidechain_current(y_prev_S, sc_scale, phi_dc_prime, v_ct_S);
+	let d_ct_S = i_sc_S * charge_scale - (v_ct_S / tau_rel_fast) - g_cu * (v_ct_S - v_cu_S) - g_cv * (v_ct_S - v_cv_S);
+	v_ct_S = clamp(v_ct_S + dt * d_ct_S, 0.0, 60.0);
+	let d_cu_S = (sel >= 4.5) ? ((v_ct_S - v_cu_S) / 0.80) : (0.0 - v_cu_S / 1.50);
+	v_cu_S = clamp(v_cu_S + dt * d_cu_S, 0.0, 60.0);
+	let d_cv_S = (sel >= 5.5) ? ((v_ct_S - v_cv_S) / 2.00) : (0.0 - v_cv_S / 3.00);
+	v_cv_S = clamp(v_cv_S + dt * d_cv_S, 0.0, 60.0);
+
+	let y_M = varimu_6386_amp(mid_in, v_ct_M, harm);
+	let y_S = varimu_6386_amp(side_in, v_ct_S, harm);
+	y_prev_M = y_M;
+	y_prev_S = y_S;
+	// Decode back from Lateral/Vertical (M/S)
+	wetL = wetL + lv * (y_M + y_S) * inv_sqrt2;
+	wetR = wetR + lv * (y_M - y_S) * inv_sqrt2;
+}
 
 // Output transformer gentle high-frequency silk & DC block (using lowercase pi!)
 let g_hf = 1.0 - exp(-2.0 * pi * 16500.0 / sr_safe);

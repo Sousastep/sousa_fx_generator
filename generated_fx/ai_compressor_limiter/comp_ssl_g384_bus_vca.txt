@@ -3,7 +3,11 @@
 // Stereo SSL Logic FX G384 / 4000 G-Bus VCA Glue Compressor
 // Based on Thompson & Heilemann (DAFx-2026, "Evaluating Dynamic Range
 // Compressor Models Using Control-Voltage Measurements", Sec. 3, 4.1)
-// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// Inlets:
+//   in1 / in2: stereo audio (if in2 stays silent for 250 ms, in1 feeds both sides)
+//   in3 / in4: not used
+// Outlets:
+//   out1 / out2: stereo, dry/wet by mix
 // ============================================================================
 
 @param({ min: -24.0, max: 36.0 }) input_gain_db = 0.0;
@@ -25,6 +29,8 @@
 @state cv_fast_db = 0.0;
 @state cv_slow_db = 0.0;
 @state cv_att_db = 0.0;
+
+@state in2Hold = 0.0;
 
 // Helper: Ratio-dependent knee static gain computer (SSL G384 DBX 2151 sidechain VCA)
 // At 2:1 knee is wide & gentle; at 4:1 moderate; at 10:1 tight hard knee
@@ -62,7 +68,14 @@ let sr_safe = max(samplerate(), 8000.0);
 // Input trim (plain gain stage, outside the detector)
 let g_in = dbtoa(clamp(input_gain_db, -24.0, 36.0));
 let dryL = in1 * g_in;
-let dryR = ((abs(in2) > 1e-18) ? in2 : in1) * g_in;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in in1 for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+    in2Hold = 0.25 * sr_safe;
+} else if (in2Hold > 0.0) {
+    in2Hold -= 1.0;
+}
+let dryR = ((in2Hold > 0.0) ? in2 : in1) * g_in;
 
 // 1st-order sidechain high-pass filter (20 Hz to 350 Hz)
 let fc_sc = clamp(sc_hpf_hz, 20.0, 350.0);
@@ -92,11 +105,12 @@ let alpha_rel_man = 1.0 - exp(-1.0 / (tau_rel_manual * sr_safe));
 let alpha_rel_fast = 1.0 - exp(-1.0 / (0.075 * sr_safe));
 let alpha_rel_slow = 1.0 - exp(-1.0 / (1.250 * sr_safe));
 let alpha_charge_slow = 1.0 - exp(-1.0 / (0.180 * sr_safe));
+let auto_blend = clamp(auto_release, 0.0, 1.0);
 
 if (target_atten_db > cv_fast_db) {
     cv_fast_db = cv_fast_db + alpha_att * (target_atten_db - cv_fast_db);
 } else {
-    let a_r = (1.0 - auto_release) * alpha_rel_man + auto_release * alpha_rel_fast;
+    let a_r = (1.0 - auto_blend) * alpha_rel_man + auto_blend * alpha_rel_fast;
     cv_fast_db = cv_fast_db + a_r * (target_atten_db - cv_fast_db);
 }
 
@@ -107,7 +121,6 @@ if (target_atten_db > cv_slow_db) {
 }
 
 // In AUTO mode, the effective release voltage is the max/blend of fast and slow RC poles
-let auto_blend = clamp(auto_release, 0.0, 1.0);
 let dual_pole_db = max(cv_fast_db, 0.68 * cv_slow_db);
 cv_att_db = (1.0 - auto_blend) * cv_fast_db + auto_blend * dual_pole_db;
 

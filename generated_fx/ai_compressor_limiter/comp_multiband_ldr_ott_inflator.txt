@@ -4,7 +4,11 @@
 // Based on Nercessian, McClellan & Lukin (DAFx-2022, "A Direct Microdynamics
 // Adjusting Processor with Matching Paradigm and Differentiable Implementation",
 // Section 3 Multiband Extension, p. 4, Eqs. 7-12)
-// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// Inlets:
+//   in1 / in2: stereo audio (if in2 stays silent for 250 ms, in1 feeds both sides)
+//   in3 / in4: not used
+// Outlets:
+//   out1 / out2: stereo, dry/wet by mix
 // ============================================================================
 
 @param({ min: 0.0, max: 2.5 }) low_micro_m = 0.25;
@@ -16,7 +20,8 @@
 @param({ min: -12.0, max: 12.0 }) tilt_db = 1.5;
 @param({ min: 0.0, max: 1.0 }) mix = 1.0;
 
-// Linkwitz-Riley-style 1st-order complementary crossover states (L & R)
+// 1st-order complementary crossover states (L & R): low = LP(x), high = x - low
+// at each split, so the bands sum back to x exactly (gentle 6 dB/oct overlap)
 @state lp1_L = 0.0;
 @state lp1_R = 0.0;
 @state lp2_L = 0.0;
@@ -34,6 +39,21 @@
 @state sh_high = 0.0001;
 @state lg_high = 0.0001;
 
+@state in2Hold = 0.0;
+
+// Ballistic coefficients, recomputed only when the rate or speed_scale changes
+@state last_sr = 0.0;
+@state last_spd = 0.0;
+@state a_up_low = 0.0;
+@state a_dn_low = 0.0;
+@state a_lg_low = 0.0;
+@state a_up_mid = 0.0;
+@state a_dn_mid = 0.0;
+@state a_lg_mid = 0.0;
+@state a_up_high = 0.0;
+@state a_dn_high = 0.0;
+@state a_lg_high = 0.0;
+
 // Helper: Per-band relative-level gain L_k[n]^((m_k - 1)/2) (DAFx-2022 Sec. 3 p. 4)
 function band_ldr_gain(a_sh: number, a_lg: number, m_k: number): number {
     let eps = 1e-9;
@@ -49,9 +69,16 @@ function band_ldr_gain(a_sh: number, a_lg: number, m_k: number): number {
 
 let sr_safe = max(samplerate(), 8000.0);
 let dryL = in1;
-let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in dryL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+    in2Hold = 0.25 * sr_safe;
+} else if (in2Hold > 0.0) {
+    in2Hold -= 1.0;
+}
+let dryR = (in2Hold > 0.0) ? in2 : dryL;
 
-// 3-Band phase-coherent complementary split
+// 3-Band complementary split (perfect reconstruction when all band gains are equal)
 let f_lo = clamp(xover_low_hz, 60.0, 450.0);
 let f_hi = clamp(xover_high_hz, 1200.0, 7000.0);
 let g_lo = 1.0 - exp(-2.0 * PI * f_lo / sr_safe);
@@ -75,17 +102,21 @@ let band_high_R = rem_R - band_mid_R;
 // Band-specific ballistic time constants scaled by speed_scale (DAFx-2022 p. 4)
 // Low band responds slower to avoid bass intermodulation; High band responds ultra-fast
 let spd = clamp(speed_scale, 0.1, 3.0);
-let a_up_low = 1.0 - exp(-1.0 / (max(0.012 / spd, 0.0005) * sr_safe));
-let a_dn_low = 1.0 - exp(-1.0 / (max(0.140 / spd, 0.005) * sr_safe));
-let a_lg_low = 1.0 - exp(-1.0 / (max(1.400 / spd, 0.050) * sr_safe));
+if (sr_safe != last_sr || spd != last_spd) {
+    last_sr = sr_safe;
+    last_spd = spd;
+    a_up_low = 1.0 - exp(-1.0 / (max(0.012 / spd, 0.0005) * sr_safe));
+    a_dn_low = 1.0 - exp(-1.0 / (max(0.140 / spd, 0.005) * sr_safe));
+    a_lg_low = 1.0 - exp(-1.0 / (max(1.400 / spd, 0.050) * sr_safe));
 
-let a_up_mid = 1.0 - exp(-1.0 / (max(0.004 / spd, 0.0003) * sr_safe));
-let a_dn_mid = 1.0 - exp(-1.0 / (max(0.075 / spd, 0.003) * sr_safe));
-let a_lg_mid = 1.0 - exp(-1.0 / (max(0.850 / spd, 0.030) * sr_safe));
+    a_up_mid = 1.0 - exp(-1.0 / (max(0.004 / spd, 0.0003) * sr_safe));
+    a_dn_mid = 1.0 - exp(-1.0 / (max(0.075 / spd, 0.003) * sr_safe));
+    a_lg_mid = 1.0 - exp(-1.0 / (max(0.850 / spd, 0.030) * sr_safe));
 
-let a_up_high = 1.0 - exp(-1.0 / (max(0.0012 / spd, 0.0002) * sr_safe));
-let a_dn_high = 1.0 - exp(-1.0 / (max(0.040 / spd, 0.002) * sr_safe));
-let a_lg_high = 1.0 - exp(-1.0 / (max(0.480 / spd, 0.020) * sr_safe));
+    a_up_high = 1.0 - exp(-1.0 / (max(0.0012 / spd, 0.0002) * sr_safe));
+    a_dn_high = 1.0 - exp(-1.0 / (max(0.040 / spd, 0.002) * sr_safe));
+    a_lg_high = 1.0 - exp(-1.0 / (max(0.480 / spd, 0.020) * sr_safe));
+}
 
 // Stereo-linked sub-band squared energies
 let e_low = 0.5 * (band_low_L * band_low_L + band_low_R * band_low_R);
@@ -114,7 +145,8 @@ let t_db = clamp(tilt_db, -12.0, 12.0);
 let low_tilt = dbtoa(-0.5 * t_db);
 let high_tilt = dbtoa(0.5 * t_db);
 
-// Recombine sub-bands y[n] = sum_k c_k * g_k[n] * x_k[n] with soft output ceiling
+// Recombine sub-bands y[n] = sum_k c_k * g_k[n] * x_k[n], then a gentle saturator
+// (-0.6 dB at 0 dBFS, asymptote about +8 dBFS: soft rounding, not a hard ceiling)
 let sumL = band_low_L * g_low * low_tilt + band_mid_L * g_mid + band_high_L * g_high * high_tilt;
 let sumR = band_low_R * g_low * low_tilt + band_mid_R * g_mid + band_high_R * g_high * high_tilt;
 

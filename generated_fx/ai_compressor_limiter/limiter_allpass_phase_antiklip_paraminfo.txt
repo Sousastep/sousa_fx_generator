@@ -9,37 +9,56 @@ TYPE:   Stereo Dispersive All-Pass Peak Eraser & Algebraically Coefficient-Bound
 
 OVERVIEW
 --------
-Combines local all-pass phase dispersion around transients (which redistributes
-spectral phase to smear sharp crest factors by up to 5 dB, Sec. 1) with Fontana
-et al.'s (DAFx-2026) exact algebraic clipping-prevention bound on time-varying
-all-pass coefficient increments Delta_c(n) (Eqs. 4-7, Algorithm 1). When a sharp
-transient drives the envelope-modulated all-pass pole frequency, Algorithm 1
-adaptively constrains Delta_c(n) sample-by-sample so the output never exceeds the
-prescribed magnitude threshold M, creating a liquid, laser-like phase-dispersed
-peak limiter.
+A three-part peak processor, per channel:
+1. drive into a tanh soft clipper that keeps the signal inside the ceiling M;
+2. two cascaded first-order all-pass filters whose break frequencies jump up
+   with the transient envelope (dynamic phase dispersion, Sec. 1);
+3. Fontana et al.'s (DAFx-2026) bound on each coefficient change Delta_c(n)
+   (Eqs. 4-7, Algorithm 1): when a coefficient move would push the output past
+   M, the move is limited (or reversed), so the filter "steers" its phase to
+   stay inside the ceiling.
+Where the bound cannot hold the output in (a fixed all-pass can itself raise
+peaks above M), a final clamp hard-clips at M, so the output never exceeds the
+ceiling. The character is soft saturation plus a moving phase "zip" on
+attacks, with occasional hard clipping when pushed - not a transparent
+limiter. Phase dispersion can also make some peaks higher before the clamp,
+so do not expect it to lower crest factor on every signal.
 
 PARAMETERS (7 total)
 --------------------
 1. drive_db        [0.0 .. 20.0 dB, default: 6.0]
-   Input gain driving into the hyperbolic pre-ceiling and dispersive all-pass cascade.
+   Input gain into the tanh soft clipper (ceiling M) and the all-pass cascade.
+   No makeup: more drive = louder and more saturated, up to the ceiling.
 
 2. ceiling_mag     [0.10 .. 1.00, default: 0.92]
-   Prescribed linear magnitude ceiling M (Fontana Eq. 4) strictly enforced by
-   the coefficient-increment bounds.
+   Linear output ceiling M (Fontana Eq. 4): 1.00 = 0 dBFS, 0.92 = -0.7 dBFS,
+   0.5 = -6 dBFS. Enforced by the coefficient bounds and, as a last resort, a
+   hard clamp.
 
 3. ap_freq_hz      [60.0 .. 2500.0 Hz, default: 340.0]
    Base break frequency of the first dispersive all-pass stage.
 
 4. env_mod_depth   [0.0 .. 1.0, default: 0.70]
-   Depth of transient-envelope modulation sweeping the all-pass pole frequencies
-   upward during signal peaks.
+   Depth of transient-envelope modulation sweeping the all-pass break
+   frequencies upward during signal peaks (up to 5.5x ap_freq_hz at full depth
+   for a 0 dBFS driven signal, more when drive pushes the level higher).
 
 5. mod_slew_ms     [0.5 .. 50.0 ms, default: 6.0]
-   Release time constant of the transient envelope driving the all-pass coefficients.
+   Release time constant of the transient envelope driving the all-pass
+   coefficients (attack is fixed at 0.8 ms).
 
 6. stage2_spread   [0.0 .. 1.0, default: 0.55]
-   Frequency ratio offset of the second cascaded anti-clipping all-pass section
-   for broadband transient dispersion.
+   Break frequency of the second all-pass relative to the first:
+   1.2x (0) .. 4x (1); 0.55 = 2.7x.
 
 7. mix             [0.0 .. 1.0, default: 1.0]
-   Dry/wet blend (blending < 1.0 creates dynamic phase-cancellation notch limiting).
+   Dry/wet blend. Below 1.0 the dry and phase-shifted signals partly cancel,
+   giving moving notches (a phaser-like colour), and the dry part is not
+   ceiling-limited, so the output can exceed M.
+
+INLETS / OUTLETS
+----------------
+- in1 / in2: stereo audio. If in2 stays silent for 250 ms, in1 is used for both
+  sides (so a mono patch into in1 works).
+- in3 / in4: not used.
+- out1 / out2: stereo. The two channels are processed independently (no link).

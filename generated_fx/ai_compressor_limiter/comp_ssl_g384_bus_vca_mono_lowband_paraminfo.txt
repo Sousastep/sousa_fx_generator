@@ -1,73 +1,78 @@
 ================================================================================
-EFFECT: comp_ssl_g384_bus_vca_mono
+EFFECT: comp_ssl_g384_bus_vca_mono_lowband
 SOURCE: Thompson & Heilemann (DAFx-2026, "Evaluating Dynamic Range Compressor
         Models Using Control-Voltage Measurements: An Approach and Dataset",
         Sections 3 & 4.1)
-TYPE:   Mono SSL Logic FX G384 / 4000 G-Series Bus VCA Compressor with
-        Ratio-Dependent Knee, Dual-Pole AUTO Release & THAT 202 VCA Harmonics
+TYPE:   Mono SSL Logic FX G384 / 4000 G-Series Bus VCA Compressor, Low-Band
+        Variant with RMS-Style Detector
 ================================================================================
 
 OVERVIEW
 --------
-Mono (single-channel) version of comp_ssl_g384_bus_vca, adjusted for use 
-with the low band of a crossover filter. Same DSP model, but with
-one sidechain high-pass filter, one peak detector and one THAT 202 VCA stage
-instead of two, and no stereo linking or mid/side matrix — so CPU cost is
-roughly halved and there is no stereo image for the detector to react to.
+comp_ssl_g384_bus_vca_mono re-tuned for the low band of a crossover (e.g. the
+tuba below a 100 Hz Linkwitz-Riley split). Same ratio-dependent knee, AUTO
+release circuit, automatic makeup and THAT 202 VCA stage, with these changes:
 
-Models the Solid State Logic G384 / 4000 G stereo bus compressor. Features a
-shared stereo peak-sensing sidechain VCA (DBX 2151) with a ratio-dependent static
-compression knee (wide/gentle at 2:1, progressively tighter toward 10:1), a
-variable sidechain high-pass filter, the signature two-pole dual-time-constant
-SSL AUTO release circuit, and THAT 202 audio-path VCA harmonic coloration.
+- The detector is RMS-style (square -> one-pole smoothing -> square root,
+  scaled by sqrt(2) so a sine reads its peak amplitude and the threshold sits
+  where it does on the peak version). The raw peak detector of the other
+  versions makes the gain wobble at twice the note frequency on low notes;
+  this one barely does (about +/-0.2 dB at 41 Hz with the defaults).
+- New detector_ms control for that smoothing.
+- Sidechain HPF default 20 Hz, so the detector actually hears the low band.
+- AUTO release off and a long 0.75 s manual release by default.
+- Attack range widened to 100 ms, default 30 ms.
+- VCA harmonics off by default.
 
-IO
---
-in1 is the only audio input; the processed mono signal is written to both out1
-and out2 (mono-to-both), so it can be dropped into a stereo chain without
-collapsing one side. in3 (pitch Hz) and in4 (mod Hz) are unused.
+INLETS / OUTLETS
+----------------
+- in1: mono audio. in2, in3 and in4 are not used.
+- out1 / out2: the same processed mono signal, so it drops into a stereo chain.
 
-PARAMETERS (10 total)
+PARAMETERS (11 total)
 ---------------------
+(Params 1 and 11, input/output gain, were added on request on top of the
+8-parameter guideline; they are plain trims and do not change the model.)
+
 1. input_gain_db   [-24.0 .. +36.0 dB, default: 0.0]
-   Input trim, a plain gain stage ahead of the sidechain tap. Raising it feeds
-   more level into the existing compressor (so it compresses harder, as on real
-   hardware); it does not alter any other setting.
+   Input trim ahead of the sidechain tap. More input = more compression; the
+   dry signal (mix) is trimmed too.
 
 2. thresh_db       [-36.0 .. 0.0 dB, default: -18.0]
-   Compression threshold (with automatic loudness-compensated makeup gain).
+   Compression threshold, with automatic makeup (about half the reduction a
+   0 dBFS peak would get).
 
 3. ratio_mode      [2.0 .. 10.0, default: 4.0]
-   Compression ratio (2:1 to 10:1); simultaneously narrows knee curvature at
-   higher ratios as in the SSL G384 hardware (DAFx-2026 Sec. 3).
+   Compression ratio 2:1 .. 10:1; the knee narrows from 14 dB at 2:1 to 4 dB
+   at 10:1.
 
-4. attack_ms       [0.1 .. 30.0 ms, default: 10.0]
-   Sidechain VCA attack time constant (0.1 ms fast clamp to 30 ms punchy snap).
+4. attack_ms       [0.1 .. 100.0 ms, default: 30.0]
+   Gain attack time constant. Slow attacks let the front of each tongued note
+   through before the gain clamps.
 
-5. release_s       [0.05 .. 1.5 s, default: 0.30]
-   Manual single-pole release time constant when auto_release is 0.
+5. release_s       [0.05 .. 1.5 s, default: 0.75]
+   Manual single-pole release time constant (used fully when auto_release
+   is 0).
 
-6. auto_release    [0.0 .. 1.0, default: 0.65]
-   Blends in the SSL two-pole dual-RC AUTO release filter (75 ms fast transient
-   recovery pole coupled to a 1.25 s slow program-sustained recovery pole).
+6. auto_release    [0.0 .. 1.0, default: 0.0]
+   Blends in the SSL two-pole AUTO release (75 ms fast pole plus a 1.25 s slow
+   program pole). At 1 release_s is ignored.
 
-7. sc_hpf_hz       [20.0 .. 350.0 Hz, default: 85.0]
-   Sidechain high-pass filter cutoff to prevent sub-bass energy from triggering
-   excessive full-mix pumping.
+7. sc_hpf_hz       [20.0 .. 350.0 Hz, default: 20.0]
+   Sidechain high-pass cutoff. Keep it low on a low band: raising it above the
+   crossover frequency leaves the detector almost nothing to hear.
 
-8. vca_harmonics   [0.0 .. 1.0, default: 0.35]
-   THAT 202 audio VCA odd/even harmonic saturation modulated by control voltage.
+8. detector_ms     [1.0 .. 100.0 ms, default: 30.0]
+   RMS detector smoothing time. Longer = smoother gain on low notes but a
+   slower response (it adds to attack_ms). Below ~10 ms the 2x-frequency
+   wobble starts to come back on the lowest notes.
 
-9. mix             [0.0 .. 1.0, default: 1.0]
-   Dry/wet parallel bus compression blend.
+9. vca_harmonics   [0.0 .. 1.0, default: 0.0]
+   THAT 202 audio VCA odd/even harmonic saturation, rising with gain
+   reduction.
 
-10. output_gain_db [-24.0 .. +36.0 dB, default: 0.0]
-   Output trim, a plain gain stage after the sidechain tap and the dry/wet
-   blend, so it makes the effect up or down in level without feeding back into
-   the detector.
+10. mix            [0.0 .. 1.0, default: 1.0]
+   Dry/wet parallel compression blend.
 
-NOTE
-----
-Removed versus the stereo original: the second (right) sidechain leg, the shared
-stereo peak link (max of the two channels) and the right-channel VCA smoothing
-state. No parameter is lost — the stereo version has no stereo-only control.
+11. output_gain_db [-24.0 .. +36.0 dB, default: 0.0]
+   Output trim after the dry/wet blend; does not feed the detector.

@@ -4,7 +4,11 @@
 // Based on Fontana, Bernardini, Pasin & D'Angelo (DAFx-2026, "A Clipping
 // Prevention Method for All-Pass Digital Filters with Time-Varying
 // Coefficients", Sections 1 & 2, Eqs. 1-15, Algorithms 1-2)
-// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// Inlets:
+//   in1 / in2: stereo audio (if in2 stays silent for 250 ms, in1 feeds both sides)
+//   in3 / in4: not used
+// Outlets:
+//   out1 / out2: stereo, dry/wet by mix
 // ============================================================================
 
 @param({ min: 0.0, max: 20.0 }) drive_db = 6.0;
@@ -37,17 +41,22 @@
 @state y2_prev_R = 0.0;
 @state c2_prev_R = 0.0;
 
+@state in2Hold = 0.0;
+
 // Helper: Fontana et al. (DAFx-2026 Algorithm 1, Eqs. 1-7)
-// First-order all-pass step with algebraic coefficient increment bounding
-// Guarantees |y[n]| <= M whenever |x[n]| <= M and |y[n-1]| <= M
-function allpass1_antiklip_step(
+// Coefficient update of the first-order all-pass y = c*(x - y1) + x1 with
+// algebraic increment bounding: Delta_c is limited so |y[n]| <= M where the
+// bound is reachable. Returns c[n]; the caller computes
+// y[n] = clamp(c[n] * (x[n] - y[n-1]) + x[n-1], -M, M). (Returning [y, c] as a
+// list heap-allocated on every call: RNBO lists have no fixed storage.)
+function allpass1_antiklip_coeff(
     x_n: number,
     x_prev: number,
     y_prev: number,
     c_target: number,
     c_prev: number,
     M: number
-): list {
+): number {
     // Static counterpart output w[n] (Eq. 2)
     let d = x_n - y_prev;
     let w_n = c_prev * d + x_prev;
@@ -67,15 +76,19 @@ function allpass1_antiklip_step(
         }
     }
 
-    let c_n = clamp(c_prev + delta_c, -0.985, 0.985);
-    // Compute y[n] from Eq. 1 and enforce exact ceiling M against static overshoot
-    let y_n = clamp(c_n * d + x_prev, -M, M);
-    return [y_n, c_n];
+    return clamp(c_prev + delta_c, -0.985, 0.985);
 }
 
 let sr_safe = max(samplerate(), 8000.0);
 let dryL = in1;
-let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in dryL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+    in2Hold = 0.25 * sr_safe;
+} else if (in2Hold > 0.0) {
+    in2Hold -= 1.0;
+}
+let dryR = (in2Hold > 0.0) ? in2 : dryL;
 
 let M = clamp(ceiling_mag, 0.10, 1.00);
 let drv = dbtoa(clamp(drive_db, 0.0, 20.0));
@@ -117,29 +130,31 @@ let t2_R = tan(PI * f2_R / sr_safe);
 let c2_targ_L = (t2_L - 1.0) / (t2_L + 1.0);
 let c2_targ_R = (t2_R - 1.0) / (t2_R + 1.0);
 
-// Execute Algorithm 1 for Stage 1 (Left & Right)
-let res1_L = allpass1_antiklip_step(xL, x1_prev_L, y1_prev_L, c1_targ_L, c1_prev_L, M);
-let y1_L = res1_L[0];
-c1_prev_L = res1_L[1];
+// Execute Algorithm 1 for Stage 1 (Left & Right). y[n] from Eq. 1, with the
+// exact ceiling M enforced against any overshoot the bound could not prevent
+// (a static all-pass can itself exceed M; then the clamp hard-clips)
+let d1_L = xL - y1_prev_L;
+c1_prev_L = allpass1_antiklip_coeff(xL, x1_prev_L, y1_prev_L, c1_targ_L, c1_prev_L, M);
+let y1_L = clamp(c1_prev_L * d1_L + x1_prev_L, -M, M);
 x1_prev_L = xL;
 y1_prev_L = y1_L;
 
-let res1_R = allpass1_antiklip_step(xR, x1_prev_R, y1_prev_R, c1_targ_R, c1_prev_R, M);
-let y1_R = res1_R[0];
-c1_prev_R = res1_R[1];
+let d1_R = xR - y1_prev_R;
+c1_prev_R = allpass1_antiklip_coeff(xR, x1_prev_R, y1_prev_R, c1_targ_R, c1_prev_R, M);
+let y1_R = clamp(c1_prev_R * d1_R + x1_prev_R, -M, M);
 x1_prev_R = xR;
 y1_prev_R = y1_R;
 
 // Execute Algorithm 1 for Stage 2 (Left & Right)
-let res2_L = allpass1_antiklip_step(y1_L, x2_prev_L, y2_prev_L, c2_targ_L, c2_prev_L, M);
-let y2_L = res2_L[0];
-c2_prev_L = res2_L[1];
+let d2_L = y1_L - y2_prev_L;
+c2_prev_L = allpass1_antiklip_coeff(y1_L, x2_prev_L, y2_prev_L, c2_targ_L, c2_prev_L, M);
+let y2_L = clamp(c2_prev_L * d2_L + x2_prev_L, -M, M);
 x2_prev_L = y1_L;
 y2_prev_L = y2_L;
 
-let res2_R = allpass1_antiklip_step(y1_R, x2_prev_R, y2_prev_R, c2_targ_R, c2_prev_R, M);
-let y2_R = res2_R[0];
-c2_prev_R = res2_R[1];
+let d2_R = y1_R - y2_prev_R;
+c2_prev_R = allpass1_antiklip_coeff(y1_R, x2_prev_R, y2_prev_R, c2_targ_R, c2_prev_R, M);
+let y2_R = clamp(c2_prev_R * d2_R + x2_prev_R, -M, M);
 x2_prev_R = y1_R;
 y2_prev_R = y2_R;
 

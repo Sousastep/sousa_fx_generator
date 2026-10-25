@@ -9,40 +9,75 @@ TYPE:   Stereo Crest-Factor & Spectral-Flux Adaptive Auto-Ballistic FET/VCA
 
 OVERVIEW
 --------
-Implements the signal-adaptive compressor architecture of Maddams et al.
-(DAFx-2012, Sec. 4.2) and Hilsamer & Herzog (DAFx-2014). Attack and release
-ballistics are continuously modulated in real time by both instantaneous Crest
-Factor (Peak-to-RMS ratio in dB) and 2-band Spectral Flux onset velocity,
-dropping attack time down toward 40 microseconds (1176 FET speed) on sharp
-transients and releasing rapidly to avoid pumping and "breathing" drop-outs.
-Also includes Maddams' "Threshold Mode" (Sec. 4.2.1, Fig. 2A) where knee width
-scales dynamically with |Threshold| toward an infinite-ratio soft limiter.
+A stereo-linked peak compressor whose attack and release speed up on
+transients. Two detectors decide what a transient is: the crest factor
+(peak-to-RMS ratio, ~3 dB on a held note, higher on spiky material) and a
+2-band spectral-flux onset detector (how fast the low and high band envelopes
+are rising relative to their own recent level - level independent, ~0 on a
+sustained note). On a hard attack the attack time drops to 12% of
+base_attack_ms and the release to 22% of base_release_ms, so tongued notes are
+caught quickly and let go quickly, while sustained notes get the slower base
+ballistics and do not pump. Also includes Maddams' "Threshold Mode"
+(Sec. 4.2.1, Fig. 2A), where the knee widens with |threshold| toward a 40:1
+soft limiter.
+
+The level detector is a peak follower with a fixed 1 ms attack, so the overall
+attack can never be much faster than ~1 ms even when the gain smoother is set
+to its 40 us floor. The adaptive design follows Maddams Sec. 4.2; the
+Hilsamer & Herzog reference is background for the crest-factor idea, not a
+port of their offline method.
 
 PARAMETERS (8 total)
 --------------------
 1. thresh_db         [-40.0 .. 0.0 dB, default: -20.0]
-   Compression threshold (with automatic loudness makeup compensation).
+   Compression threshold. Automatic makeup gain follows it (about half of the
+   reduction a 0 dBFS peak would get), so lowering the threshold squashes
+   harder without a big level drop.
 
 2. ratio             [1.5 .. 30.0, default: 8.0]
-   Base compression ratio in "Ratio Mode" (when var_knee_mode = 0).
+   Compression ratio in "Ratio Mode" (var_knee_mode = 0). As var_knee_mode
+   rises the slope is blended toward 40:1, so the effective ratio is higher
+   than this number: at the default 0.65 a ratio of 8 behaves like ~17:1, a
+   ratio of 2 like ~5:1.
 
 3. var_knee_mode     [0.0 .. 1.0, default: 0.65]
-   Morphs between Maddams' "Ratio Mode" (0.0: fixed 3 dB knee, variable ratio,
-   Fig. 2B) and "Threshold Mode" (1.0: ratio -> inf:1 with knee width = |T|,
-   Fig. 2A).
+   Morphs between Maddams' "Ratio Mode" (0.0: fixed 3 dB knee, ratio from the
+   ratio knob, Fig. 2B) and "Threshold Mode" (1.0: 40:1 with knee width =
+   |threshold|, Fig. 2A). Low thresholds in Threshold Mode give a very wide,
+   gentle knee.
 
 4. base_attack_ms    [0.1 .. 50.0 ms, default: 8.0]
-   Nominal steady-state attack time before crest/spectral-flux acceleration.
+   Attack time on sustained material. Transients shorten it (down to 12% at
+   full activity, never below 40 us).
 
 5. base_release_ms   [20.0 .. 800.0 ms, default: 180.0]
-   Nominal steady-state release time before crest/spectral-flux acceleration.
+   Release time on sustained material. Transients shorten it (down to 22% at
+   full activity, never below 8 ms).
 
 6. crest_flux_adapt  [0.0 .. 1.0, default: 0.75]
-   Depth of real-time Crest-Factor and Spectral-Flux modulation accelerating
-   attack and release times during percussive transients.
+   How much the crest/flux detectors speed up attack and release. 0 = plain
+   compressor at the base times.
 
 7. fet_slam_sat      [0.0 .. 1.0, default: 0.40]
-   1176-style FET "All-Buttons-In" harmonic saturation driven by gain reduction.
+   1176-style "All-Buttons-In" saturation driven by gain reduction. Unity gain
+   on quiet signals; the clip point falls from 0 dBFS with no gain reduction
+   to about -12 dBFS at 20 dB of gain reduction, so it only bites when the
+   compressor is working hard. 1 = full tanh clip, 0 = clean.
 
 8. mix               [0.0 .. 1.0, default: 1.0]
    Dry/wet parallel compression blend.
+
+INLETS / OUTLETS
+----------------
+- in1 / in2: stereo audio. If in2 stays silent for 250 ms, in1 is used for both
+  sides (so a mono patch into in1 works).
+- in3 / in4: not used.
+- out1 / out2: stereo, stereo-linked gain (one gain for both sides).
+
+NOTES
+-----
+- No latency, no lookahead: very fast peaks can overshoot by a fraction of a
+  millisecond. Put limiter_hamalainen_orderstat_peak after it for a hard
+  ceiling.
+- Makeup can push loud peaks above 0 dBFS when the threshold is low and the
+  attack slow; fet_slam_sat or a limiter after it catches that.

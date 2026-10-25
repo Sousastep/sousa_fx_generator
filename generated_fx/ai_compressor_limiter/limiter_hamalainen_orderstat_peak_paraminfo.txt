@@ -9,34 +9,62 @@ TYPE:   Stereo Lookahead Order-Statistic (Running-Max) + Recursive Boxcar
 OVERVIEW
 --------
 Implements Perttu Hamalainen's (DAFx-2002) order-statistic lookahead peak
-limiter. Delays the stereo audio signal by N samples while the sidechain
-computes a pre-compensated clipping-control target c(n) (Eq. 14/19), passes it
-through a running-maximum filter x_max(n) = max[c(n-N),...,c(n)] (Eq. 6), a
-1-pole attack/release detector (Eq. 7), and an M-sample recursive moving-average
-filter (Eq. 17/21). Drapes a smooth "cloth" envelope over signal peaks that
-prevents clipping with zero click artifacts even under +30 dB of brickwall slam.
+limiter. The sidechain computes a pre-compensated clipping-control target c(n)
+(Eq. 14), holds it with a running-maximum filter (Eq. 6), follows it with a
+1-pole attack/release detector (Eq. 7) whose attack lands exactly on the peak
+after N + 1 samples, and smooths that with an M-sample moving average
+(Eq. 17/21). The audio is delayed by N + M samples, so the smooth envelope is
+already at each peak's level when the peak reaches the output: gain moves as a
+smooth "cloth" draped over the peaks, with no instant gain jumps, and the
+output never exceeds the ceiling. Stereo-linked (one gain for both sides).
+
+LATENCY
+-------
+lookahead_samp + boxcar_smooth samples (default 48 + 24 = 72 samples,
+1.5 ms at 48 kHz). The dry signal in mix is delayed by the same amount.
 
 PARAMETERS (7 total)
 --------------------
 1. drive_db        [0.0 .. 30.0 dB, default: 9.0]
-   Input loudness maximizer drive before the brickwall ceiling.
+   Input drive into the limiter (no makeup). More drive = louder and more
+   gain reduction; the peaks stay at the ceiling.
 
 2. ceiling_db      [-18.0 .. -0.05 dB, default: -0.3]
-   Absolute brickwall peak ceiling threshold in dBFS.
+   Absolute brickwall peak ceiling in dBFS (sample peak; the attack can land
+   up to 0.13 dB high on the envelope side, never on the output).
 
 3. lookahead_samp  [4.0 .. 128.0 samples, default: 48.0]
-   Feedforward delay N in samples (Eq. 5) and running-max window length (Eq. 6).
+   Attack length N in samples (Eq. 5/16): how long the gain takes to ramp
+   down before a peak. Longer = smoother, less distortion on low notes, more
+   latency. At 48 kHz, 48 samples = 1 ms.
 
 4. release_ms      [10.0 .. 1000.0 ms, default: 120.0]
    Envelope release time constant after peaks subside.
 
 5. boxcar_smooth   [1.0 .. 64.0 samples, default: 24.0]
-   Length M of the recursive moving-average filter (Eq. 17, 21) smoothing the
-   corners of the running-max envelope.
+   Length M of the moving-average filter (Eq. 17, 21) that rounds off the
+   corners of the envelope. Adds M samples of latency.
 
 6. pump_character  [0.0 .. 1.0, default: 0.35]
-   Sculpts the release contour between ultra-transparent mastering limiting
-   (0.0) and rhythmic French-house / drum-bus release breathing (1.0).
+   Release shaping only: adds a 45 ms lag to the envelope's fall, so the duck
+   after each peak is deeper and longer (rhythmic French-house / drum-bus
+   breathing at 1.0, plain release at 0.0). Never affects the attack.
 
 7. mix             [0.0 .. 1.0, default: 1.0]
-   Dry/wet blend (note: when < 1.0, mixes lookahead-delayed signal with dry).
+   Dry/wet blend. The dry signal is delayed to line up with the limited one,
+   so there is no comb filtering; it is also un-driven (drive_db does not
+   apply to the dry part) and is not ceiling-limited.
+
+INLETS / OUTLETS
+----------------
+- in1 / in2: stereo audio. If in2 stays silent for 250 ms, in1 is used for both
+  sides (so a mono patch into in1 works).
+- in3 / in4: not used.
+- out1 / out2: stereo, delayed by the latency above.
+
+NOTES
+-----
+- Changing lookahead_samp or boxcar_smooth while playing changes the delay,
+  which can click; set them before playing.
+- An instant fail-safe (gain from the delayed sample itself) remains as a
+  backstop for such edge cases; in normal use it never engages.

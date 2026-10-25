@@ -9,13 +9,14 @@ TYPE:   Mono SSL Logic FX G384 / 4000 G-Series Bus VCA Compressor with
 
 OVERVIEW
 --------
-Mono (single-channel) version of comp_ssl_g384_bus_vca. Same DSP model, but with
-one sidechain high-pass filter, one peak detector and one THAT 202 VCA stage
-instead of two, and no stereo linking or mid/side matrix — so CPU cost is
+Mono (single-channel) version of comp_ssl_g384_bus_vca. Same DSP model and
+defaults, but with one sidechain high-pass filter, one peak detector and one
+THAT 202 VCA stage instead of two, and no stereo linking - so CPU cost is
 roughly halved and there is no stereo image for the detector to react to.
+(For the low band of a crossover, see comp_ssl_g384_bus_vca_mono_lowband.)
 
 Models the Solid State Logic G384 / 4000 G stereo bus compressor. Features a
-shared stereo peak-sensing sidechain VCA (DBX 2151) with a ratio-dependent static
+peak-sensing sidechain VCA (DBX 2151) with a ratio-dependent static
 compression knee (wide/gentle at 2:1, progressively tighter toward 10:1), a
 variable sidechain high-pass filter, the signature two-pole dual-time-constant
 SSL AUTO release circuit, and THAT 202 audio-path VCA harmonic coloration.
@@ -28,6 +29,9 @@ collapsing one side. in3 (pitch Hz) and in4 (mod Hz) are unused.
 
 PARAMETERS (10 total)
 ---------------------
+(Params 1 and 10, input/output gain, were added on request on top of the
+8-parameter guideline; they are plain trims and do not change the model.)
+
 1. input_gain_db   [-24.0 .. +36.0 dB, default: 0.0]
    Input trim, a plain gain stage ahead of the sidechain tap. Raising it feeds
    more level into the existing compressor (so it compresses harder, as on real
@@ -49,6 +53,8 @@ PARAMETERS (10 total)
 6. auto_release    [0.0 .. 1.0, default: 0.65]
    Blends in the SSL two-pole dual-RC AUTO release filter (75 ms fast transient
    recovery pole coupled to a 1.25 s slow program-sustained recovery pole).
+   At 1 the manual release_s is ignored; in between, the release rate is a
+   blend of the two.
 
 7. sc_hpf_hz       [20.0 .. 350.0 Hz, default: 85.0]
    Sidechain high-pass filter cutoff to prevent sub-bass energy from triggering
@@ -68,5 +74,5 @@ PARAMETERS (10 total)
 NOTE
 ----
 Removed versus the stereo original: the second (right) sidechain leg, the shared
-stereo peak link (max of the two channels) and the right-channel VCA smoothing
+stereo peak link (max of the two channels) and the right-channel sidechain filter
 state. No parameter is lost — the stereo version has no stereo-only control.

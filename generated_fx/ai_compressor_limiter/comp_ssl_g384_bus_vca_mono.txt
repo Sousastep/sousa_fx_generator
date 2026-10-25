@@ -5,8 +5,10 @@
 // one sidechain high-pass, one peak detector, one THAT 202 VCA stage.
 // Based on Thompson & Heilemann (DAFx-2026, "Evaluating Dynamic Range
 // Compressor Models Using Control-Voltage Measurements", Sec. 3, 4.1)
-// Standalone Mono RNBO codebox~ Effect (in1, in3, in4 -> out1, out2)
-// in1: mono in; in3: pitch (Hz); in4: mod (Hz); out1/out2: processed mono
+// Inlets:
+//   in1: mono audio (in2, in3, in4 not used)
+// Outlets:
+//   out1 / out2: the same processed mono signal
 // ============================================================================
 
 @param({ min: -24.0, max: 36.0 }) input_gain_db = 0.0;
@@ -91,11 +93,12 @@ let alpha_rel_man = 1.0 - exp(-1.0 / (tau_rel_manual * sr_safe));
 let alpha_rel_fast = 1.0 - exp(-1.0 / (0.075 * sr_safe));
 let alpha_rel_slow = 1.0 - exp(-1.0 / (1.250 * sr_safe));
 let alpha_charge_slow = 1.0 - exp(-1.0 / (0.180 * sr_safe));
+let auto_blend = clamp(auto_release, 0.0, 1.0);
 
 if (target_atten_db > cv_fast_db) {
     cv_fast_db = cv_fast_db + alpha_att * (target_atten_db - cv_fast_db);
 } else {
-    let a_r = (1.0 - auto_release) * alpha_rel_man + auto_release * alpha_rel_fast;
+    let a_r = (1.0 - auto_blend) * alpha_rel_man + auto_blend * alpha_rel_fast;
     cv_fast_db = cv_fast_db + a_r * (target_atten_db - cv_fast_db);
 }
 
@@ -106,7 +109,6 @@ if (target_atten_db > cv_slow_db) {
 }
 
 // In AUTO mode, the effective release voltage is the max/blend of fast and slow RC poles
-let auto_blend = clamp(auto_release, 0.0, 1.0);
 let dual_pole_db = max(cv_fast_db, 0.68 * cv_slow_db);
 cv_att_db = (1.0 - auto_blend) * cv_fast_db + auto_blend * dual_pole_db;
 

@@ -12,9 +12,10 @@ OVERVIEW
 Implements the iZotope Loudness Dynamic Range (LDR) relative-level processor
 (DAFx-2022). By defining signal strength as the ratio L[n] = a_short[n] / a_long[n]
 between a fast asymmetric ballistic envelope and a slow macrodynamic envelope,
-the processor has NO threshold dead-zone and is completely invariant to input
-gain or verse/chorus macrodynamic changes. Applying g[n] = L[n]^((m-1)/p) (Eq. 12)
-directly compresses microdynamics and pulls up room/sustain when m < 1.0, or
+the processor has NO threshold dead-zone and is invariant to input gain or
+verse/chorus macrodynamic changes (down to about -50 dBFS RMS; below that the
+processing fades out by -70 dBFS so silence and noise are not pumped up).
+Applying g[n] = L[n]^((m-1)/p) (Eq. 12) directly compresses microdynamics and pulls up room/sustain when m < 1.0, or
 expands transient punch and articulation when m > 1.0.
 
 PARAMETERS (8 total)
@@ -22,7 +23,7 @@ PARAMETERS (8 total)
 1. micro_amount    [0.0 .. 3.5, default: 0.35]
    Direct microdynamics scaling exponent m (Eq. 11-12):
    - 0.0 .. 0.99: Microdynamic compression & upward sustain inflation (0.0 = flat sustain).
-   - 1.0:         Unity bypass.
+   - 1.0:         Unity bypass (exact below -3 dBFS output).
    - 1.01 .. 3.5: Microdynamic expansion & snappy transient punch enhancement.
 
 2. attack_ms       [0.2 .. 80.0 ms, default: 5.0]
@@ -36,14 +37,31 @@ PARAMETERS (8 total)
    Eq. 10) separating microdynamics from phrase-level macrodynamics.
 
 5. max_boost_db    [15.0 .. 42.0 dB, default: 24.0]
-   Maximum upward sustain boost / transient expansion range in dB.
+   Maximum gain change in dB, both ways: caps the upward sustain boost and the
+   cut, so it limits how far a tail is pulled up (or a transient pushed) at
+   extreme micro_amount settings.
 
 6. stereo_link     [0.0 .. 1.0, default: 0.75]
    Blends between dual-mono relative-level detection (0.0) and stereo-linked
    energy detection (1.0).
 
 7. trim_db         [-12.0 .. 12.0 dB, default: 0.0]
-   Manual output trim on top of the automatic inverse-linked makeup gain c.
+   Manual output trim on top of the automatic inverse-linked makeup gain c
+   (c = 2.2 dB x (1 - micro_amount), clamped to -6..+4 dB; +1.4 dB at the
+   default).
 
 8. mix             [0.0 .. 1.0, default: 1.0]
    Dry/wet parallel microdynamics blend.
+
+INLETS / OUTLETS
+----------------
+- in1 / in2: stereo audio. If in2 stays silent for 250 ms, in1 is used for both
+  sides (so a mono patch into in1 works).
+- in3 / in4: not used.
+- out1 / out2: stereo.
+
+NOTES
+-----
+- The wet signal passes a soft ceiling: unity below -3 dBFS, a smooth knee
+  above, never exceeding 0 dBFS. It only engages when expansion or trim pushes
+  the output that hot.

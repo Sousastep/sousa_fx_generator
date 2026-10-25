@@ -5,8 +5,10 @@
 // Lateral/Vertical matrix: one sidechain, one 6386 stage.
 // Based on Raffensperger (DAFx-2012, "Toward a Wave Digital Filter Model of
 // the Fairchild 670 Limiter", Eqs. 1, 10-14, Fig. 8, Table 3)
-// Standalone Mono RNBO codebox~ Effect (in1, in3, in4 -> out1, out2)
-// in1: mono in; in3: pitch (Hz); in4: mod (Hz); out1/out2: processed mono
+// Inlets:
+//   in1: mono audio (in2, in3, in4 not used)
+// Outlets:
+//   out1 / out2: the same processed mono signal
 // ============================================================================
 
 @param({ min: -24.0, max: 36.0 }) input_gain_db = 0.0;

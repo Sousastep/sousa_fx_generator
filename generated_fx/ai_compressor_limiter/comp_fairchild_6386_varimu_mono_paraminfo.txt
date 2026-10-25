@@ -10,8 +10,9 @@ OVERVIEW
 --------
 Mono (single-channel) version of comp_fairchild_6386_varimu. Same DSP model, but
 with one sidechain and one 6386 push-pull stage instead of two, and no
-Lateral/Vertical (mid/side) matrix — so the mono feed cannot drift in level
-between the two channels of the stereo version, and CPU cost is roughly halved.
+Lateral/Vertical (mid/side) matrix, so both outputs are always identical and
+CPU cost is a half (or, with lat_vert_mode between 0 and 1, a quarter) of the
+stereo version's.
 
 Models the 1950s Fairchild 670 variable-mu vacuum-tube feedback limiter.
 Its sidechain monitors the output signal through a Class-B crossover stage with
@@ -29,6 +30,8 @@ collapsing one side. in3 (pitch Hz) and in4 (mod Hz) are unused.
 
 PARAMETERS (8 total)
 --------------------
+(Params 1 and 8, input/output gain, were added on request; plain trims.)
+
 1. input_gain_db   [-24.0 .. +36.0 dB, default: 0.0]
    Input trim, a plain gain stage ahead of the input transformer. Raising it
    feeds more level into the existing limiter (so it limits harder, as on real
@@ -47,7 +50,8 @@ PARAMETERS (8 total)
    brickwall limiting.
 
 5. tc_mode         [1.0 .. 6.0, default: 5.0]
-   Six-way Fairchild Time-Constant selector (Table 3):
+   Six-way Fairchild Time-Constant selector (Table 3); continuous, snaps to
+   the nearest position:
    - 1..4: Single-RC release (100 ms, 300 ms, 880 ms, 1.76 s).
    - 5: Dual-RC program-dependent release (CT + CU).
    - 6: Triple-RC dual-memory auto-release (CT + CU + CV) for fast transient

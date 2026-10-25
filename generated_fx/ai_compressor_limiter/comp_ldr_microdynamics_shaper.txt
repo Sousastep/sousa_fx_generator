@@ -4,7 +4,11 @@
 // Based on Nercessian, McClellan & Lukin (DAFx-2022, "A Direct Microdynamics
 // Adjusting Processor with Matching Paradigm and Differentiable Implementation",
 // Section 3, Eqs. 7-12, Figs. 2-3)
-// Standalone Stereo RNBO codebox~ Effect (in1, in2 -> out1, out2)
+// Inlets:
+//   in1 / in2: stereo audio (if in2 stays silent for 250 ms, in1 feeds both sides)
+//   in3 / in4: not used
+// Outlets:
+//   out1 / out2: stereo, dry/wet by mix
 // ============================================================================
 
 @param({ min: 0.0, max: 3.5 }) micro_amount = 0.35;
@@ -22,11 +26,25 @@
 @state a_short_R = 0.0001;
 @state a_long_R = 0.0001;
 
+@state in2Hold = 0.0;
+
+// Helper: soft ceiling, exact unity below 0.7 (-3 dBFS), C1-smooth knee to a
+// hard asymptote at 1.0 (0 dBFS)
+function soft_ceiling(y: number): number {
+    let ay = abs(y);
+    if (ay <= 0.7) {
+        return y;
+    }
+    let lim = 0.7 + 0.3 * tanh((ay - 0.7) / 0.3);
+    return (y < 0.0) ? (0.0 - lim) : lim;
+}
+
 // Helper: Compute relative-level gain L[n]^((m-1)/p) with noise-floor guard (Eqs. 7, 12)
 function ldr_gain(a_sh: number, a_lg: number, m_val: number, max_db: number): number {
     let eps = 1e-9;
     let rel_L = (a_sh + eps) / (a_lg + eps);
-    // Gate upward gain when signal is below -68 dBFS silence floor so noise isn't amplified
+    // Fade the processing out as the long-term level falls from -50 to -70 dBFS RMS
+    // (a_lg is mean square), so silence and noise are not pumped up
     let gate = clamp((a_lg - 1e-7) / 1e-5, 0.0, 1.0);
     let m_eff = 1.0 + gate * (m_val - 1.0);
     // Since p = 2, g[n] = L[n]^((m - 1) / 2)
@@ -37,7 +55,14 @@ function ldr_gain(a_sh: number, a_lg: number, m_val: number, max_db: number): nu
 
 let sr_safe = max(samplerate(), 8000.0);
 let dryL = in1;
-let dryR = (abs(in2) > 1e-18) ? in2 : in1;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in dryL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+    in2Hold = 0.25 * sr_safe;
+} else if (in2Hold > 0.0) {
+    in2Hold -= 1.0;
+}
+let dryR = (in2Hold > 0.0) ? in2 : dryL;
 
 // Ballistic parameters (Eqs. 8-10)
 let tau_up = clamp(attack_ms, 0.2, 80.0) * 0.001;
@@ -88,11 +113,12 @@ let gR = ldr_gain(sh_use_R, lg_use_R, m_param, max_b);
 let auto_c_db = clamp(2.2 * (1.0 - m_param), -6.0, 4.0);
 let c_gain = dbtoa(auto_c_db + clamp(trim_db, -12.0, 12.0));
 
-// Soft safety ceiling at 0 dBFS when expanding aggressively (m > 1)
+// Soft safety ceiling at 0 dBFS for aggressive expansion (m > 1). Transparent
+// below -3 dBFS, so m = 1 with trim 0 is a true bypass at normal levels.
 let raw_yL = dryL * gL * c_gain;
 let raw_yR = dryR * gR * c_gain;
-let wetL = raw_yL / sqrt(1.0 + 0.12 * raw_yL * raw_yL);
-let wetR = raw_yR / sqrt(1.0 + 0.12 * raw_yR * raw_yR);
+let wetL = soft_ceiling(raw_yL);
+let wetR = soft_ceiling(raw_yR);
 
 let mx = clamp(mix, 0.0, 1.0);
 out1 = (1.0 - mx) * dryL + mx * wetL;

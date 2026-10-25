@@ -17,6 +17,9 @@ SSL AUTO release circuit, and THAT 202 audio-path VCA harmonic coloration.
 
 PARAMETERS (10 total)
 ---------------------
+(Params 1 and 10, input/output gain, were added on request on top of the
+8-parameter guideline; they are plain trims and do not change the model.)
+
 1. input_gain_db   [-24.0 .. +36.0 dB, default: 0.0]
    Input trim, a plain gain stage ahead of the sidechain tap. Raising it feeds
    more level into the existing compressor (so it compresses harder, as on real
@@ -38,6 +41,8 @@ PARAMETERS (10 total)
 6. auto_release    [0.0 .. 1.0, default: 0.65]
    Blends in the SSL two-pole dual-RC AUTO release filter (75 ms fast transient
    recovery pole coupled to a 1.25 s slow program-sustained recovery pole).
+   At 1 the manual release_s is ignored; in between, the release rate is a
+   blend of the two.
 
 7. sc_hpf_hz       [20.0 .. 350.0 Hz, default: 85.0]
    Sidechain high-pass filter cutoff to prevent sub-bass energy from triggering
@@ -53,3 +58,17 @@ PARAMETERS (10 total)
    Output trim, a plain gain stage after the sidechain tap and the dry/wet
    blend, so it makes the effect up or down in level without feeding back into
    the detector.
+
+INLETS / OUTLETS
+----------------
+- in1 / in2: stereo audio. If in2 stays silent for 250 ms, in1 is used for both
+  sides (so a mono patch into in1 works).
+- in3 / in4: not used.
+- out1 / out2: stereo, stereo-linked gain (one gain for both sides).
+
+NOTES
+-----
+- The detector is a raw peak sensor, as on the hardware: with fast release
+  settings the gain follows each cycle of very low notes a little, which adds
+  some grit on low tuba notes. comp_ssl_g384_bus_vca_mono_lowband swaps in a
+  smoothed RMS detector for that job.
