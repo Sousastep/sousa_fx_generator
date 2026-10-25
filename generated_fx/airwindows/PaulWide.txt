@@ -1,6 +1,7 @@
 /* PaulWide — standalone RNBO codebox~ port
  * in1/in2: left/right; out1/out2: left/right.
- * Controls use original normalized VST values (0..1).
+ * Control is in bits; the original normalized VST mapping is noted
+ * beside the @param.
  * Double-precision DSP path; no added output dither.
  * Paste this entire file into codebox~ inside rnbo~.
  * MIT License
@@ -27,37 +28,28 @@
  * 
  */
 
-// VST A: Quant
-@param({ min: 0, max: 1 }) p_quant = 1.0;
-// VST B: DeRez
-@param({ min: 0, max: 1 }) p_derez = 0.0;
+// Bit depth: VST A (Quant 16/24) and B (DeRez): bits = base + 6*log2(1-B)
+@param({ min: 0, max: 24 }) bits = 24.0;
 
 @state fpdL = 305419896.0;
 @state fpdR = 2271560481.0;
 @state previousDitherL = 0;
 @state previousDitherR = 0;
-@state processing: Int = 0;
-@state highres = 0;
-@state derez = 0;
 @state outScale = 0;
 @state scaleFactor = 0;
 @state frame: Int = 0;
-// Xorshift32 with explicit unsigned wrapping (fixed, reproducible seeds).
+// Xorshift32 on RNBO's int32 bit operators (logical >> via mask), returned
+// as an unsigned 0..2^32-1 value; bit-identical to the airwindows uint32_t.
 function unsigned32(x) {
-    return x - floor(x / 4294967296.0) * 4294967296.0;
+    return x < 0 ? x + 4294967296.0 : x;
 }
 function advanceRandom(x) {
     let a: Int = x;
-    let left: Int = unsigned32(x * 8192.0);
-    let b: Int = unsigned32(a ^ left);
-    let shifted: Int = floor(b / 131072.0);
-    let c: Int = unsigned32(b ^ shifted);
-    left = unsigned32(c * 32.0);
-    return unsigned32(c ^ left);
-}
-function toIndex(x) {
-    let result: Int = trunc(x);
-    return result;
+    a = a ^ (a << 13);
+    a = a ^ ((a >> 17) & 32767);
+    a = a ^ (a << 5);
+    let r = a;
+    return unsigned32(r);
 }
 
 @state floatCast = new FixedFloat32Array(1);
@@ -72,15 +64,7 @@ function init() {
 function dspsetup() { frame = 0; }
 
 if (frame == 0) {
-processing = toIndex( p_quant * 1.999 );
-	highres = 0;
-	if (processing == 1) highres = 1;
-	
-	if (highres) scaleFactor = 8388608.0;
-	else scaleFactor = 32768.0;
-	derez = p_derez;
-	if (derez > 0.0) scaleFactor = asFloat32(scaleFactor * pow(1.0-derez,6));
-	if (scaleFactor < 0.0001) scaleFactor = asFloat32(0.0001);
+scaleFactor = asFloat32(exp2(clamp(bits, 0.0, 24.0) - 1.0));
 	outScale = scaleFactor;
 	if (outScale < 8.0) outScale = 8.0;
 

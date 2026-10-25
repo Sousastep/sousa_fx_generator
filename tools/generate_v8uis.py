@@ -235,13 +235,16 @@ function toNorm(index, v) {{
     var p = PARAMS[index];
     var span = p.max - p.min;
     if (span <= 0) return 0;
-    var n = (v - p.min) / span;
-    return Math.min(1, Math.max(0, n));
+    var n = Math.min(1, Math.max(0, (v - p.min) / span));
+    // RNBO param taper: value = min + span * norm^exponent
+    if (p.exponent && p.exponent !== 1) n = Math.pow(n, 1 / p.exponent);
+    return n;
 }}
 
 function fromNorm(index, n) {{
     var p = PARAMS[index];
     n = Math.min(1, Math.max(0, Number(n) || 0));
+    if (p.exponent && p.exponent !== 1) n = Math.pow(n, p.exponent);
     return clampParam(index, p.min + n * (p.max - p.min));
 }}
 
@@ -607,6 +610,8 @@ def build_v8ui_script(effect: Effect, paraminfo_rel: str) -> str:
             entry["steps"] = p.steps
         if p.enum_values:
             entry["enumValues"] = p.enum_values
+        if p.exponent != 1.0:
+            entry["exponent"] = p.exponent
         params_data.append(entry)
 
     paraminfo_filename = f"{effect.name}_paraminfo.txt"

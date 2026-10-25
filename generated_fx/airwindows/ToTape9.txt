@@ -1,6 +1,7 @@
 /* ToTape9 — standalone RNBO codebox~ port
  * in1/in2: left/right; out1/out2: left/right.
- * Controls use original normalized VST values (0..1).
+ * Controls are in musical units (dB / % / ms / Hz); the original
+ * normalized VST mapping is noted beside each @param.
  * Double-precision DSP path; no added output dither.
  * Paste this entire file into codebox~ inside rnbo~.
  * MIT License
@@ -27,24 +28,24 @@
  * 
  */
 
-// VST A: Input
-@param({ min: 0, max: 1 }) p_input = 0.5;
-// VST B: Tilt
-@param({ min: 0, max: 1 }) p_tilt = 0.5;
-// VST C: Shape
-@param({ min: 0, max: 1 }) p_shape = 0.5;
-// VST D: Flutter
-@param({ min: 0, max: 1 }) p_flutter = 0.5;
-// VST E: FlutSpd
-@param({ min: 0, max: 1 }) p_flutspd = 0.5;
-// VST F: Bias
-@param({ min: 0, max: 1 }) p_bias = 0.5;
-// VST G: HeadBmp
-@param({ min: 0, max: 1 }) p_headbmp = 0.5;
-// VST H: HeadFrq
-@param({ min: 0, max: 1 }) p_headfrq = 0.5;
-// VST I: Output
-@param({ min: 0, max: 1 }) p_output = 0.5;
+// Input: VST A, gain = (2A)^2
+@param({ min: -24, max: 12 }) input_db = 0.0;
+// Tilt: VST B = 0.5 + tilt_pct/200 (Dubly encode/decode balance)
+@param({ min: -100, max: 100 }) tilt_pct = 0.0;
+// Shape: VST C = 0.5 + shape_pct/200 (Dubly filter corners)
+@param({ min: -100, max: 100 }) shape_pct = 0.0;
+// Flutter depth: VST D, D^6*50 samples at 44.1 kHz; extended to the 498-sample buffer
+@param({ min: 0, max: 10, exponent: 4 }) flutter_ms = 0.01772;
+// Flutter speed: VST E, 0.02*E^3 rad/sample at 44.1 kHz (before the random 0.24..0.98 scaling)
+@param({ min: 0.01, max: 140, exponent: 3 }) flutter_hz = 17.55;
+// Bias: VST F = 0.5 + bias_pct/200 (<0 under-bias, >0 over-bias)
+@param({ min: -100, max: 100 }) bias_pct = 0.0;
+// Head bump: VST G = head_bump_pct / 100
+@param({ min: 0, max: 100 }) head_bump_pct = 50.0;
+// Head bump frequency: VST H, H^2*175+25 Hz
+@param({ min: 25, max: 200, exponent: 2 }) head_freq_hz = 68.75;
+// Output: VST I, gain = 2I (0.5 = unity, where the final clip just engages)
+@param({ min: -24, max: 6 }) output_db = 0.0;
 
 const prevSampL1 = 0;
 const prevSampR1 = 1;
@@ -166,26 +167,24 @@ const hdb_total = 11;
 @state norm = 0;
 @state outputGain = 0;
 @state frame: Int = 0;
-// Xorshift32 with explicit unsigned wrapping (fixed, reproducible seeds).
+// Xorshift32 on RNBO's int32 bit operators (logical >> via mask), returned
+// as an unsigned 0..2^32-1 value; bit-identical to the airwindows uint32_t.
 function unsigned32(x) {
-    return x - floor(x / 4294967296.0) * 4294967296.0;
+    return x < 0 ? x + 4294967296.0 : x;
 }
 function advanceRandom(x) {
     let a: Int = x;
-    let left: Int = unsigned32(x * 8192.0);
-    let b: Int = unsigned32(a ^ left);
-    let shifted: Int = floor(b / 131072.0);
-    let c: Int = unsigned32(b ^ shifted);
-    left = unsigned32(c * 32.0);
-    return unsigned32(c ^ left);
+    a = a ^ (a << 13);
+    a = a ^ ((a >> 17) & 32767);
+    a = a ^ (a << 5);
+    let r = a;
+    return unsigned32(r);
 }
 function toIndex(x) {
     let result: Int = trunc(x);
     return result;
 }
 
-@state floatCast = new FixedFloat32Array(1);
-function asFloat32(x) { floatCast[0] = x; return floatCast[0]; }
 
 function init() {
 
@@ -243,18 +242,20 @@ overallscale = 1.0;
 	slewsing = floor(overallscale*2.0);
 	if (slewsing < 2) slewsing = 2; if (slewsing > 32) slewsing = 32;
 	
-	inputGain = pow(p_input*2.0,2.0);
+	inputGain = dbtoa(clamp(input_db, -24.0, 12.0));
 	
-	dublyAmount = p_tilt*2.0;
-	outlyAmount = (1.0-p_tilt)*-2.0;
+	let tiltKnob = 0.5 + (clamp(tilt_pct, -100.0, 100.0) * 0.005);
+	dublyAmount = tiltKnob*2.0;
+	outlyAmount = (1.0-tiltKnob)*-2.0;
 	if (outlyAmount < -1.0) outlyAmount = -1.0;
-	iirEncFreq = (1.0-p_shape)/overallscale;
-	iirDecFreq = p_shape/overallscale;
+	let shapeKnob = 0.5 + (clamp(shape_pct, -100.0, 100.0) * 0.005);
+	iirEncFreq = (1.0-shapeKnob)/overallscale;
+	iirDecFreq = shapeKnob/overallscale;
 	
-	flutDepth = pow(p_flutter,6)*overallscale*50;
+	flutDepth = clamp(flutter_ms, 0.0, 10.0) * 0.001 * samplerate();
 	if (flutDepth > 498.0) flutDepth = 498.0;
-	flutFrequency = (0.02*pow(p_flutspd,3))/overallscale;
-	bias = (p_bias*2.0)-1.0;
+	flutFrequency = (2.0 * PI * clamp(flutter_hz, 0.01, 140.0)) / samplerate();
+	bias = clamp(bias_pct, -100.0, 100.0) * 0.01;
 	underBias = (pow(bias,4)*0.25)/overallscale;
 	overBias = pow(1.0-bias,3)/overallscale;
 	if (bias > 0.0) underBias = 0.0;
@@ -279,10 +280,11 @@ overallscale = 1.0;
 	gslew[threshold1] = overBias;
 	overBias *= 1.618033988749894848204586;
 	
-	headBumpDrive = (p_headbmp*0.1)/overallscale;
-	headBumpMix = p_headbmp*0.5;
+	let headBump = clamp(head_bump_pct, 0.0, 100.0) * 0.01;
+	headBumpDrive = (headBump*0.1)/overallscale;
+	headBumpMix = headBump*0.5;
 	
-	hdbA[hdb_freq] = ((asFloat32(p_headfrq*p_headfrq)*175.0)+25.0)/samplerate();
+	hdbA[hdb_freq] = clamp(head_freq_hz, 25.0, 200.0)/samplerate();
 	hdbB[hdb_freq] = hdbA[hdb_freq]*0.9375;
 	hdbB[hdb_reso] = hdbA[hdb_reso] = 0.618033988749894848204586;
 	hdbB[hdb_a1] = hdbA[hdb_a1] = 0.0;
@@ -300,7 +302,7 @@ overallscale = 1.0;
 	hdbB[hdb_b1] = 2.0 * (K * K - 1.0) * norm;
 	hdbB[hdb_b2] = (1.0 - K / hdbB[hdb_reso] + K * K) * norm;
 	
-	outputGain = p_output*2.0;
+	outputGain = dbtoa(clamp(output_db, -24.0, 6.0));
 
 }
 let sampleFrames = vectorsize() - frame - 1;

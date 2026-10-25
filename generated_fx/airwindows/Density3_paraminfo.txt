@@ -1,35 +1,41 @@
-Density3 — Airwindows (Chris Johnson)
+Density3 — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/density3/
 
-What it is: the "Density" family compressor/limiter: a one-knob compressor
-with a built-in expanding "air" highpass feeding the drive so low frequencies
-don't overload it. The gain cell is sine-shaped, and above a certain drive it
-creatively distorts (a soft "densifying" saturation) rather than simply
-squashing. This RNBO port uses the original normalized 0..1 values.
+What it is: a sine-based overdrive "dirt shaper" with a gentle highpass in
+front of it. Density 0 is clean; positive values drive the signal into a
+sine-shaped saturator (PurestSaturation technique), crossfading toward full
+saturation by 1 and adding drive beyond that; negative values are an
+"inverse saturation" that keeps the tone but dries up the quiet parts — a
+soft, gatey thinning. Not a compressor.
 
 Parameters:
 
-- p_density (Density) 0..1, default 0.0
-  Compression/drive intensity. Internally density = p*5, i.e. an input gain
-  of up to 5x (+14 dB equivalent) into the sine gain cell. Guides:
-  0.0-0.1    bypass / near-bypass (default is NOT bypass - see below)
-  0.2        light, converges to almost the source output (flat)
-  0.4-0.6    heavy musical "densify" with harmonic bloom
-  0.8-1.0    limiting with visible distortion artifacts - use on busses only
+- density  (Density)  -1 .. 4, default 0 (clean)
+  -1 .. 0 : inverse saturation, strongest at -1. Very level dependent: at -1
+            a tuba at normal level comes out roughly 20 dB quieter and
+            grainy, so start around -0.3.
+   0      : clean.
+   0 .. 1 : blend toward sine saturation.
+   1 .. 4 : sine saturation with increasing drive (4 = 5x into the sine).
+  Shown exactly as the VST displays it; original knob A = (density + 1) / 5.
+  The VST's default is -1; this port defaults to 0 so it isn't near-silent
+  on first load.
 
-- p_highpas (Highpas) 0..1, default 0.0
-  Tames sub-bass from loading the gain cell: it is a highpass filter at a
-  cubic taper (iirAmount = p^3 / sampleRate). 0 = off; higher = faster
-  highpass (effectively higher cutoff). Musically: on big drums / big bass
-  busses, raise it so kicks don't eat the limiter's range.
+- highpass_hz  (Highpas)  0 .. 4000 Hz, default 0 (off)
+  One-pole highpass on the processed (wet) path only, before the
+  saturator, so heavy lows don't get saturated; blend them back with
+  mix_pct. Exponent taper for fine control at the low end. The original
+  knob B set the filter coefficient as B^3 (B = 1 at 44.1 kHz removed the
+  whole wet signal); this port sets the -3 dB corner directly.
 
-- p_output (Output) 0..1, default 1.0
-  Linear output trim (unity at 1.0).
+- output_db  (Output)  -36 .. 0 dB, default 0
+  Level of the processed path (applied before the dry/wet mix). Original
+  knob C was linear gain 0..1.
 
-- p_drywet (Dry/Wet) 0..1, default 1.0
-  Linear dry/wet blend.
+- mix_pct  (Dry/Wet)  0 .. 100 %, default 100
+  Linear blend of processed and dry signal.
 
-Musical notes: default is not bypass (see README): unity output happens at
-p_density 0.2 with Highpas off; start there, push Density until the mix
-"opens up", then trim Output down. It's a master-buss tool first, but works
-on single tracks when you want density instead of visible compression.
+Port notes: DSP matches the original double-precision path (differential
+test vs. the airwindows C++, max diff below -150 dB). The random generator
+used for the denormal guard runs on native integer operations
+(bit-identical, about 65% fewer ns/sample on a translated test harness).

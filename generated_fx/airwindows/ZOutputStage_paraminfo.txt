@@ -1,34 +1,27 @@
-ZOutputStage — Airwindows (Chris Johnson)
+ZOutputStage — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/zoutputstage/
 
-What it is: the output clipping/tone stage shared by the Emu e6400-flavored
-"Z" filters, as a standalone saturator: an insane-degree.input-staged
-fourth-power gain trim into a k-style soft clipper, followed by fixed
-15.5 kHz op-amp-style ultrasonic filters. Cleaner and simpler than
-ZAcidLowpass: no filter, no resonance, just the Z distortion/tone stage.
-This RNBO port uses the original normalized 0..1 values and the same fixed
-15.5 kHz filters, so use sample rates ABOVE 31 kHz (README note).
+What it is: the output stage of the Emu e6400-inspired Z filters on its
+own: input drive, a very low DC-blocking highpass, a 15.5 kHz biquad
+lowpass, a hard clamp at +/-1 followed by a gentle fifth-order soft
+clip (x - 0.1768 x^5), a second 15.5 kHz lowpass, then output trim. A
+dark, slightly smeared saturator — the "family sound" of the Z filters
+without any filter sweep.
 
 Parameters:
 
-- p_input (Input) 0..1, default 0.1
-  Drive into the Z distortion stage. Internally (p*10)^4, so 0.1 is
-  roughly unity and the same DRIVE mapping as the Z filters, for x10000
-  (+80 dB) at max - huge, steep taper. Start at or below the default and
-  raise slowly.
+- input_db  (Input)  -24 .. +80 dB, default 0
+  Drive into the clipper. Original knob A: gain = (10A)^4, so A 0.1 = 0 dB
+  (the default) and A 1 = +80 dB — enormous on purpose. The soft clip
+  bends from about -6 dBFS and the hard clamp is at 0 dBFS, so a normal
+  tuba level needs +10 to +20 dB to really distort.
 
-- p_output (Output) 0..1, default 1.0
-  Output pad (outPad = p_output, linear). Use it, not Input, to set
-  final level after the distortion.
+- output_db  (Output)  -36 .. 0 dB, default 0
+  Output trim after the clipper (the original knob B was linear 0..1).
+  Set the final level here, not with Input.
 
-No other parameters:
-
-- (none)
-  Fixed internal 15.5 kHz ultrasonic filtering (two biquads) rooms out
-  the floppy aliasing the distortion would otherwise generate. This is
-  the "weight/tone" family smell of the Z filters, not a mix knob.
-
-Musical notes: use on single tracks (bass, drums, synths) as an aggressive
-saturator that you can push from subtle to wildly broken. Because the
-input mapping is fourth-power, small moves near the default have large
-audible effect - push gently and A/B at equal levels with Output.
+Port notes: DSP matches the original double-precision path (differential
+test vs. the airwindows C++, max diff below -150 dB). The random generator
+for the denormal guard runs on native integer operations (bit-identical),
+about 73% fewer ns/sample on a translated test harness. The fixed 15.5 kHz
+filters need a sample rate of 32 kHz or more.

@@ -1,14 +1,23 @@
 // RCInflator 2 (Ideal Edition), lewloiwc, v1.0.
 // Inspired by Sonnox Oxford Inflator / RCJacH, sai'ke and chmaha.
+// Source: repos/JSFX/Distortion/RCInflator2_Ideal.jsfx (ReaTeam JSFX; the
+// repository ships no licence file). Not an airwindows plugin.
 // RNBO codebox~: in1/in2 = stereo input; out1/out2 = stereo output.
 // Original slider units and defaults. Effect In is NOT a full bypass:
 // input gain, input clipping and output gain remain active, as in JSFX.
+// Input (dB)
 @param({ min: -6, max: 12 }) input_db = 0;
+// Effect (%)
 @param({ min: 0, max: 100 }) effect = 0;
+// Curve
 @param({ min: -50, max: 50 }) curve = 0;
+// Clip 0 dB
 @param({ enum: ["Off", "On"] }) clip = 1;
+// Band Split (240 / 2400 Hz)
 @param({ enum: ["Off", "On"] }) band_split = 0;
+// Effect In
 @param({ enum: ["Off", "On"] }) effect_in = 1;
+// Output (dB)
 @param({ min: -12, max: 0 }) output_db = 0;
 
 @state integrators = new FixedFloat64Array(2, 2);

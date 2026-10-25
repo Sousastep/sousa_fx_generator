@@ -1,27 +1,28 @@
-ClipOnly3 — Airwindows (Chris Johnson)
+ClipOnly3 — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/cliponly3/
 
-What it is: a transparent "safety brickwall". It only acts on audio that
-would actually clip: below ±0.90850431 it changes nothing at all, so it is
-safe to leave on any channel or buss. This RNBO port has NO parameters - the
-threshold, soft-clip shape and slew control are fixed in the algorithm.
+What it is: a "safety clipper" for the end of a chain. Peaks above
+-0.83 dBFS (0.9085) are softened by blending toward a slightly randomized
+level (noise-edged clipping, so clipped tops don't sound like flat digital
+squares), and the output is held under a slew-aware hard ceiling of
+-0.54 dBFS (0.94): the faster the waveform moves, the lower that ceiling
+gets, which keeps intersample peaks near 0 dBFS. At normal levels it is
+inaudible apart from a one-sample delay.
 
-No parameters:
+No parameters. It never adds gain, so on a quiet tuba it does nothing until
+something upstream pushes the level near full scale. For a drive control,
+adjustable thresholds or the "only what was clipped" output, use ADClip9
+(its default thresholds closely match ClipOnly3).
 
-- (none)
-  Internal behavior, for reference:
-  * soft-clip threshold ±0.9085097 (about -0.84 dBFS), hard overshoot
-    reconstruction to keep clipped tops from sounding "digital"
-  * fixes clipped tops in a very narrow band, not the whole waveform
-  * behaves like a nonlinear lowpass control (based on slew) to tame
-    overs and digital harshness without dulling the material
-  * consumes a small amount of CPU; designed never to be bypassed, you
-    just leave it in the chain
+Behaviour to know about:
+- Output is one sample late.
+- Very fast, loud transients can be held down even below the -0.83 dBFS
+  threshold, because the hard ceiling drops with slew (0.94 / (1 + 1.4 *
+  slew)); with ordinary bass material this never engages.
+- Above 88.2 kHz the clip averaging spreads over more samples, as in the
+  original.
 
-Musical notes: use it where you would otherwise reach for a limiter but
-don't want one - before a saturator or clipper, or on a buss you keep
-relatively unprocessed. It prints a slightly warmer "slide" over any
-overshoots rather than a hard-topped square.
-
-Source quirks (see RNBO/README.md): the port initializes lastDryL/R to 0
-(the source leaves them undefined); behavior otherwise matches the source.
+Port notes: DSP is sample-identical to the original double-precision path
+(differential test vs. the airwindows C++, 0 differing samples). The random
+generator runs on native integer operations (bit-identical sequence, about
+60% fewer ns/sample on a translated test harness).

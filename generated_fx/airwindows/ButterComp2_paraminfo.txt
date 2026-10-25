@@ -1,34 +1,35 @@
-ButterComp2 — Airwindows (Chris Johnson)
+ButterComp2 — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/buttercomp2/
 
-What it is: the Airwindows "Butter" compressor - an extremely squishy,
-dark, vintage-feeling feedback compressor with no threshold/ratio/attack
-knobs. Everything is driven by an input gain. Gain-cell slopes are quadratic
-on the signal itself, so gain reduction follows the actual peak shape of the
-audio instead of an exact multiplication; the makeup gain is nonlinear, so
-the depth of compression is baked into the audio rather than calculated.
-This RNBO port uses the original normalized 0..1 values.
+What it is: a very gentle "glue" compressor with no threshold, ratio or
+attack controls. Each half of the waveform (positive / negative) has its own
+gain cell, and two interleaved sets of those run on alternate samples, so
+four compressors blend in parallel. It evens out the bulk of the waveform,
+balances it between positive and negative, and soaks up treble detail in a
+characteristic way; the release slows slightly while the output is hot.
+Level-dependent: it works against full scale, so a quiet input barely
+compresses — drive it.
 
 Parameters:
 
-- p_compress (Compress) 0..1, default 0.0
-  One knob: simultaneously input drive and feedback depth. Internally maps
-  to +14 dB input gain at max (pow(10, p*14/20)) with audio-dependent
-  feedback. Rough guides:
-  0.0-0.2   barely compresses (0 = bypass-ish, unity drive)
-  0.4-0.5   vintage "glue", pumping but musical
-  0.9-1.0   extreme limiting / pushes almost everything to a squashed mean
-  Nearly linear feel: each 0.1 up ≈ +1.4 dB drive. Default 0 means mostly
-  unused unless you push the knob.
+- compress_db  (Compress)  0 .. 14 dB, default 0
+  Input drive, which also sets how hard the gain cells work. Part of the
+  drive is made up again after compression (net gain about +1/3 of the
+  drive before compression bites). 0 = effectively bypassed.
+  Original knob A = compress_db / 14.
 
-- p_output (Output) 0..1, default 0.5
-  Output trim, internally output * pow(2,p*2-1)... implemented as output*2
-  with p 0..1, so 0.5 = unity, 0 = -6 dB-like, 1 = +6 dB-like. Linear taper.
+- output_db  (Output)  -24 .. +6 dB, default 0
+  Output trim. Original knob B was a linear gain of 2*B (0.5 = unity,
+  1 = +6 dB). Because it comes before the dry/wet mix and the release
+  modifier listens to the output, it slightly changes the release too.
 
-- p_drywet (Dry/Wet) 0..1, default 1.0
-  Plain linear mix of compressed and dry signal (1.0 = full wet).
+- mix_pct  (Dry/Wet)  0 .. 100 %, default 100
+  Linear blend of compressed and dry signal.
 
-Musical notes: put on the drum buss, rock out the Compress knob until it
-pumps, then ride Output for level. The buttery "bloom" comes from the
-nonlinear makeup gain; with parallel compression use the Dry/Wet for
-transient retention rather than trying to replace the compressed texture entirely.
+Port notes: DSP matches the original double-precision path (differential
+test vs. the airwindows C++, max diff below -145 dB). Optimized: the
+per-sample pow(x,2) became x*x, each polarity's gain target is computed
+only when used, the sample-rate scaling is done once per block and an unused
+noise generator was removed (output differs from the literal port by less
+than -310 dB; about 40% fewer ns/sample on a translated test harness).
+The original's 1e-16 "residue" noise is omitted.

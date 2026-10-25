@@ -1,6 +1,9 @@
 /* TakeCare — standalone RNBO codebox~ port
  * in1/in2: left/right; out1/out2: left/right.
- * Controls use original normalized VST values (0..1).
+ * Controls are in musical units (Hz / % / ms / dB); the original
+ * normalized VST mapping is noted beside each @param. Speed and buffer are
+ * converted through the current derez cycle rate, so they keep their Hz/ms
+ * when derez moves (in the VST both scaled with derez and sample rate).
  * Double-precision DSP path; no added output dither.
  * Paste this entire file into codebox~ inside rnbo~.
  * MIT License
@@ -27,22 +30,22 @@
  * 
  */
 
-// VST A: Speed
-@param({ min: 0, max: 1 }) p_speed = 0.15;
-// VST B: Rando
-@param({ min: 0, max: 1 }) p_rando = 0.5;
-// VST C: Depth
-@param({ min: 0, max: 1 }) p_depth = 0.5;
-// VST D: Regen
-@param({ min: 0, max: 1 }) p_regen = 0.5;
-// VST E: Derez
-@param({ min: 0, max: 1 }) p_derez = 0.5;
-// VST F: Buffer
-@param({ min: 0, max: 1 }) p_buffer = 0.5;
-// VST G: Output
-@param({ min: 0, max: 1 }) p_output = 1.0;
-// VST H: Dry/Wet
-@param({ min: 0, max: 1 }) p_drywet = 1.0;
+// Speed: VST A, A^5*0.1 rad per derez cycle (A 0.15 = 0.03 Hz at 48 kHz)
+@param({ min: 0.01, max: 400, exponent: 5 }) speed_hz = 0.03;
+// Rando: VST B, vibRandom = B^3*0.99 = rando_pct/100*0.99
+@param({ min: 0, max: 100, exponent: 3 }) rando_pct = 12.5;
+// Depth: VST C, sweep = C^2 of the buffer
+@param({ min: 0, max: 100, exponent: 2 }) depth_pct = 25.0;
+// Regen: VST D = regen_pct / 100
+@param({ min: 0, max: 100 }) regen_pct = 50.0;
+// Derez: VST E = 0.5 + derez_pct/200 (<0 stepped, >0 smooth)
+@param({ min: -100, max: 100 }) derez_pct = 0.0;
+// Buffer: VST F, F^3*32510+256 derez cycles (F 0.5 = 175 ms at 48 kHz)
+@param({ min: 5, max: 680, exponent: 3 }) buffer_ms = 175.0;
+// Output: VST G = dbtoa(output_db), extended to +6 dB
+@param({ min: -36, max: 6 }) output_db = 0.0;
+// Dry/Wet: VST H, wet = 1-(1-H)^2 = mix_pct/100
+@param({ min: 0, max: 100 }) mix_pct = 100.0;
 
 const bez_AL = 0;
 const bez_AR = 1;
@@ -132,22 +135,22 @@ const bez_total = 17;
 @state targetDepth = 0;
 @state reg3n = 0;
 @state stepped = 0;
-@state bezFraction: Int = 0;
+@state bezFraction = 0;
 @state bezTrim = 0;
 @state targetBuf: Int = 0;
 @state frame: Int = 0;
-// Xorshift32 with explicit unsigned wrapping (fixed, reproducible seeds).
+// Xorshift32 on RNBO's int32 bit operators (logical >> via mask), returned
+// as an unsigned 0..2^32-1 value; bit-identical to the airwindows uint32_t.
 function unsigned32(x) {
-    return x - floor(x / 4294967296.0) * 4294967296.0;
+    return x < 0 ? x + 4294967296.0 : x;
 }
 function advanceRandom(x) {
     let a: Int = x;
-    let left: Int = unsigned32(x * 8192.0);
-    let b: Int = unsigned32(a ^ left);
-    let shifted: Int = floor(b / 131072.0);
-    let c: Int = unsigned32(b ^ shifted);
-    left = unsigned32(c * 32.0);
-    return unsigned32(c ^ left);
+    a = a ^ (a << 13);
+    a = a ^ ((a >> 17) & 32767);
+    a = a ^ (a << 5);
+    let r = a;
+    return unsigned32(r);
 }
 function toIndex(x) {
     let result: Int = trunc(x);
@@ -202,12 +205,11 @@ overallscale = 1.0;
 	overallscale *= samplerate();
 	spacing = floor(overallscale); 
 	if (spacing < 1) spacing = 1; if (spacing > 16) spacing = 16;
-	vibSpeed = pow(p_speed,5.0) * 0.1;
-	vibRandom = pow(p_rando,3.0) * 0.99;
-	targetDepth = pow(p_depth,2.0) * 0.5;
-	reg3n = p_regen*0.0625;
+	vibRandom = clamp(rando_pct, 0.0, 100.0) * 0.0099;
+	targetDepth = clamp(depth_pct, 0.0, 100.0) * 0.005;
+	reg3n = clamp(regen_pct, 0.0, 100.0) * 0.000625;
 	
-	derezA = derezB; derezB = p_derez*2.0;
+	derezA = derezB; derezB = 1.0 + (clamp(derez_pct, -100.0, 100.0) * 0.01);
 	stepped = 1; 
 	if (derezB > 1.0) {  
 		stepped = 0; 
@@ -223,10 +225,13 @@ overallscale = 1.0;
 		derezB /= (2.0/pow(overallscale,0.5-((overallscale-1.0)*0.0375)));
 		bezTrim = 1.0-pow(derezB*0.5,1.0/(derezB*0.5));
 	} 
-	
-	targetBuf = (pow(p_buffer,3.0)*32510.0)+256;
-	outA = outB; outB = p_output;
-	wetA = wetB; wetB = 1.0-pow(1.0-p_drywet,2.0);
+	// derez cycles per second: a stepped cycle lasts bezFraction+1 samples
+	let cycleRate = samplerate() * derezB;
+	if (stepped) cycleRate = samplerate() / (bezFraction + 1.0);
+	vibSpeed = minimum((2.0 * PI * clamp(speed_hz, 0.01, 400.0)) / cycleRate, PI);
+	targetBuf = clamp(clamp(buffer_ms, 5.0, 680.0) * 0.001 * cycleRate, 16.0, 32766.0);
+	outA = outB; outB = dbtoa(clamp(output_db, -36.0, 6.0));
+	wetA = wetB; wetB = clamp(mix_pct, 0.0, 100.0) * 0.01;
 
 }
 let sampleFrames = vectorsize() - frame - 1;
@@ -265,15 +270,19 @@ let inFramesToProcess = vectorsize();
 			if (buf < targetBuf) buf++;
 			if (buf > targetBuf) buf--;
 			
-			let mA = (sin(rotate)+1.0)*vibDepth*buf;
-			let mB = (sin(rotate+(PI/9.0))+1.0)*vibDepth*buf;
-			let mC = (sin(rotate+((PI/9.0)*2.0))+1.0)*vibDepth*buf;
-			let mD = (sin(rotate+((PI/9.0)*3.0))+1.0)*vibDepth*buf;
-			let mE = (sin(rotate+((PI/9.0)*4.0))+1.0)*vibDepth*buf;
-			let mF = (sin(rotate+((PI/9.0)*5.0))+1.0)*vibDepth*buf;
-			let mG = (sin(rotate+((PI/9.0)*6.0))+1.0)*vibDepth*buf;
-			let mH = (sin(rotate+((PI/9.0)*7.0))+1.0)*vibDepth*buf;
-			let mI = (sin(rotate+((PI/9.0)*8.0))+1.0)*vibDepth*buf;		
+			// sin(rotate + k*PI/9) by angle addition: one sin/cos pair instead of 9 sin()
+			let sR = sin(rotate);
+			let cR = cos(rotate);
+			let vb = vibDepth*buf;
+			let mA = (sR+1.0)*vb;
+			let mB = ((sR*0.9396926207859084)+(cR*0.3420201433256687)+1.0)*vb;
+			let mC = ((sR*0.766044443118978)+(cR*0.6427876096865393)+1.0)*vb;
+			let mD = ((sR*0.5000000000000001)+(cR*0.8660254037844386)+1.0)*vb;
+			let mE = ((sR*0.17364817766693041)+(cR*0.984807753012208)+1.0)*vb;
+			let mF = ((sR*-0.1736481776669303)+(cR*0.984807753012208)+1.0)*vb;
+			let mG = ((sR*-0.49999999999999983)+(cR*0.8660254037844387)+1.0)*vb;
+			let mH = ((sR*-0.7660444431189779)+(cR*0.6427876096865395)+1.0)*vb;
+			let mI = ((sR*-0.9396926207859083)+(cR*0.3420201433256689)+1.0)*vb;
 			
 			inputSampleL = sin(minimum(maximum(inputSampleL*0.5,-(PI*0.5)),(PI*0.5)));
 			inputSampleR = sin(minimum(maximum(inputSampleR*0.5,-(PI*0.5)),(PI*0.5)));

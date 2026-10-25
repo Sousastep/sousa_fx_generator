@@ -1,46 +1,50 @@
-VerbTiny — Airwindows (Chris Johnson)
+VerbTiny — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/verbtiny/
 
-What it is: an ultra-low-CPU artificial reverb built from a specially
-evolved 4x4 matrix, meant to merge with the sound and change its texture
-(that "tssshhh" of a naive digital reverb, in a good way) rather than to
-simulate a physical room. Intentionally "old school". This RNBO port uses
-the original normalized 0..1 values.
+What it is: a deliberately naive, old-school "tssshhh" reverb with no
+predelay or early reflections — the kind heard on old dub techno. Its
+genetically evolved 4x4 Householder matrix has unusually HIGH peak energy
+relative to RMS, which makes the space feel distant. A second, dual-mono
+copy of the reverb provides the Wider control, and Bezier undersampling
+and filtering keep it sounding the same at any sample rate. VerbThic is
+its thick, up-front sibling.
 
 Parameters:
 
-- p_replace (Replace) 0..1, default 0.5
-  Regeneration: the Galactic-style "replace" control. Above 0 it replaces
-  incoming dry signal with already-reverberated signal in the feedback
-  path, so the tail is "refilled" with the mixture. Lower values sound
-  like a light small room; the high end gets dense/ringy washes. Do not
-  push too hard: unlike your complex DSP reverb, at >0.9 it can saturate.
+- regen_pct  (Replace)  0 .. 100 %, default 75
+  Galactic-style "replace": more regeneration in the 4x4 tank and, at the
+  same time, less new input going in, so the tail grows longer and the
+  reverb keeps more of its own sound. At 100 % no new input enters at
+  all (only what is already circulating keeps going; from silence it
+  stays silent). Original knob A: regen = 1 - (1-A)^2 (A 0.5 = 75 %).
 
-- p_derez (Derez) 0..1, default 1.0
-  Darkens the reverb through a Bezier undersampling: it is a sample-rate
-  style reduction, not a normal filter - at higher values the wet
-  becomes "aliased-ish", "grittier", like a digital early digital reverb.
-  Default 1.0 is full effect without extra undersampling artifacts
-  (1.0 = no reduction; lowering it starts the dull and washed sound).
+- derez_khz  (Derez)  0.2 .. 24 kHz, default 24
+  The rate the reverb tank runs at (Bezier undersampling, smoothly
+  interpolated back to the host rate). 24 kHz is the cleanest setting the
+  original reaches at 48 kHz (it always runs at least at half rate);
+  lower = duller, grainier, "early digital reverb". Original knob B: a
+  cycle of int(overallscale/B^2)+1 samples; this port picks the cycle
+  nearest the rate you ask for.
 
-- p_filter (Filter) 0..1, default 1.0
-  Tone of the wet reverb via a Bezier filter. 1.0 = brightest; lowering
-  makes a smooth tonal (not just lowpass) darker "muffled room".
-  Pairs with Derez for that old-school muddy-to-hi-fi scale.
+- filter_khz  (Filter)  0.2 .. 24 kHz, default 24
+  A second Bezier undersampler on the reverb output, used as a smooth
+  lowpass: treble rolls off progressively from around half this rate.
+  Same law as derez (original knob C).
 
-- p_wider (Wider) 0..1, default 0.0
-  Stereo image of the wet signal, with a few discrete worlds:
-  0.0-0.5 blends the normal narrow stereo reverb with a dual-mono variant
-  (richer, weirder mid-image "unnatural wideness" around 0.5);
-  0.5-1.0 then transitions into a HYPER-wide opposite-phase variant.
-  Try stops at 0.3, 0.5, 0.7 and listen for the mids changing shape
-  before the overall width does.
+- wider_pct  (Wider)  0 .. 100 %, default 0
+  0 = the normal (fairly narrow) stereo reverb; toward 50 % a dual-mono
+  copy of the reverb fades in (each side feeds only itself: very wide);
+  above 50 % the normal reverb returns with one channel phase-flipped, so
+  everything becomes side energy (hyper-wide). Settings between the
+  landmarks use both reverbs and sound richest. Original knob D = pct/100.
 
-- p_drywet (Dry/Wet) 0..1, default 1.0
-  Normal linear dry/wet blend (1.0 = full wet return).
+- mix_pct  (Dry/Wet)  0 .. 100 %, default 100
+  Linear blend with the dry signal.
 
-Musical notes: put on a return for dub/techno "big tssshhh", or on single
-tracks where you want the verb to melt into the tone. The Wider control is
-the character knob: avoid 0.5 exactly if you want natural stereo.
-Note: Trash (the VerbThic sibling) shares the same 5 controls but is
-a different - denser, stubbier - matrix: see VerbThic.
+Port notes: fixed a real port bug — `bezFraction/(bezFraction+1.0)` (and
+the same for the filter) compiled to an integer division (0), which broke
+the Bezier interpolation and put the old port up to -42 dB away from the
+original (see docs/rnbo_codebox/example28.md). Now bit-identical to the
+airwindows C++ in a differential test. The random generator for the
+denormal guard runs on native integer operations (bit-identical), about
+40% fewer ns/sample on a translated test harness.

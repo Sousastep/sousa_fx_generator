@@ -1,40 +1,50 @@
-VerbThic — Airwindows (Chris Johnson)
+VerbThic — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/verbthic/
 
-What it is: the sibling of VerbTiny: the same 5 controls, but the opposite
-character. Where VerbTiny is thin, airy and "tssshhh" (spaciousness),
-VerbThic's specially evolved matrix is dense, thick and soupy, for adding
-body and weight to sounds rather than depth of space. Use it to make pads,
-snares or vocals fat without buying tubes. This RNBO port uses the original
-normalized 0..1 values.
+What it is: VerbTiny's sibling with the opposite job. Same structure (a
+genetically evolved 4x4 Householder reverb plus a dual-mono copy, with
+Bezier undersampling and filtering), but its matrix has unusually LOW peak
+energy relative to RMS, so instead of sounding far away it sits at the
+same depth as the source and thickens it, like a fog. Its internal soft
+saturation is an extreme variant of the TapeHack curve. Use it for body
+rather than space.
 
-Parameters (identical layout to VerbTiny, different delay network):
+Parameters:
 
-- p_replace (Replace) 0..1, default 0.5
-  Regeneration ("Galactic-style replace" in the feedback path). This matrix
-  rings denser than VerbTiny: the same values read as "heavier" and stay
-  dense further up the knob. Push high for thick endless washes, watch
-  saturation at the top end.
+- regen_pct  (Replace)  0 .. 100 %, default 75
+  Galactic-style "replace": more regeneration in the 4x4 tank and, at the
+  same time, less new input going in, so the tail grows longer and the
+  reverb keeps more of its own sound. At 100 % no new input enters at
+  all (only what is already circulating keeps going; from silence it
+  stays silent). Original knob A: regen = 1 - (1-A)^2 (A 0.5 = 75 %).
 
-- p_derez (Derez) 0..1, default 1.0
-  Bezier undersampling / darkening of the wet. Higher = cleaner; lower =
-  progressively duller and more "lo-fi early reverb" character.
+- derez_khz  (Derez)  0.2 .. 24 kHz, default 24
+  The rate the reverb tank runs at (Bezier undersampling, smoothly
+  interpolated back to the host rate). 24 kHz is the cleanest setting the
+  original reaches at 48 kHz (it always runs at least at half rate);
+  lower = duller, grainier, "early digital reverb". Original knob B: a
+  cycle of int(overallscale/B^2)+1 samples; this port picks the cycle
+  nearest the rate you ask for.
 
-- p_filter (Filter) 0..1, default 1.0
-  Wet tone via Bezier filter. 1.0 = brightest; lower = rounder, duller,
-  like a blanket over the plate. In VerbThic it also sort of thickens when
-  darkened (dark low end stays big).
+- filter_khz  (Filter)  0.2 .. 24 kHz, default 24
+  A second Bezier undersampler on the reverb output, used as a smooth
+  lowpass: treble rolls off progressively from around half this rate.
+  Same law as derez (original knob C).
 
-- p_wider (Wider) 0..1, default 0.0
-  Same tri-mode wideness as VerbTiny: normal stereo near 0, weird dual-mono
-  blending near 0.5, hyper-wide opposite-phase near 1.0. On such a dense
-  matrix the differences are subtler - it reads more like "thickness
-  location" than space effect.
+- wider_pct  (Wider)  0 .. 100 %, default 0
+  0 = the normal (fairly narrow) stereo reverb; toward 50 % a dual-mono
+  copy of the reverb fades in (each side feeds only itself: very wide);
+  above 50 % the normal reverb returns with one channel phase-flipped, so
+  everything becomes side energy (hyper-wide). Settings between the
+  landmarks use both reverbs and sound richest. Original knob D = pct/100.
 
-- p_drywet (Dry/Wet) 0..1, default 1.0
-  Normal linear dry/wet blend (1.0 = full wet return).
+- mix_pct  (Dry/Wet)  0 .. 100 %, default 100
+  Linear blend with the dry signal.
 
-Musical notes: the counterpart room-mate of VerbTiny. Use VerbThic on
-things that need mass (cymbals, pads, snares) and VerbTiny for air on a
-small budget. As always on Airwindows verbs, full tails develop over 2-3
-seconds - trust your ears after a while, not the first 500 ms.
+Port notes: fixed a real port bug — `bezFraction/(bezFraction+1.0)` (and
+the same for the filter) compiled to an integer division (0), which broke
+the Bezier interpolation and put the old port up to -34 dB away from the
+original (see docs/rnbo_codebox/example28.md). Now bit-identical to the
+airwindows C++ in a differential test. The random generator for the
+denormal guard runs on native integer operations (bit-identical), about
+35% fewer ns/sample on a translated test harness.

@@ -1,42 +1,43 @@
-ADClip9 — Airwindows (Chris Johnson)
+ADClip9 — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/adclip9/
 
-What it is: modernized Airwindows soft-clip clipper. Adds smooth DC coupling
-and a chosen way to relate the clip ceiling to the processed signal. In this
-RNBO port all controls use the original normalized 0..1 values, exactly like
-the source VST parameters.
+What it is: a "loudenator" clipper — the ClipOnly3 engine inside ADClip.
+Peaks above the Noise threshold are softened by blending toward a randomized
+level (noise-edged clipping, which keeps some "over" detail), and everything
+is finally held under a slew-aware hard Ceiling (the faster the waveform is
+moving, the lower the ceiling, which tames intersample peaks). The output is
+one sample late.
 
-Parameters (p_boost lastSample... declared order):
+Parameters:
 
-- p_boost  (Boost)     0..1, default 0.0
-  Input gain into the clipper. Linearized approximately by ear: internally
-  maps to a 0 to +18 dB range (pow(10, p*18/20)). Useful to push audio into
-  the clipper; 0.5 ≈ +9 dB.
+- drive_db  (Boost / Match)  0 .. 30 dB, default 0
+  Gain into the clipper. In "boost" and "cliponly" modes it is the original
+  Boost control, in "match" mode the original Match control (only one of the
+  two was ever active, so they share one slider). The original stops at
+  18 dB; 18..30 dB is an extension for a quiet tuba input.
 
-- p_match  (Match)     0..1, default 0.0
-  Same 0 to +18 dB mapping. In mode "Match" the plugin applies this gain,
-  clips, then removes the same amount of level so the result is loud but
-  stays level-matched to the input for A/B purposes.
+- noise_db  (Noise)  -18 .. 0 dBFS, default -0.82
+  Where the noise-softened clipping starts. Lower = the transition into the
+  noisy clip starts sooner, without moving the hard limit. Original knob C:
+  level = 1 - (1-C)^2, so C 0.7 = -0.82 dBFS.
 
-- p_noise  (Noise)     0..1, default 0.7
-  Mix of randomized dither used when reconstructing clipped tops. Built with
-  a squared curve: noiseLevel = 1 - (1-p)^2, so the perceived change ramps up
-  quickly at first. At 0 the clip is fully deterministic; toward 1 the tops
-  are effectively dithered, which lets some "over" detail survive clipping.
+- ceiling_db  (Ceiling)  -18 .. 0 dBFS, default -0.56
+  The hard clip limit (further lowered while the signal slews fast). Lower =
+  harder, duller, quieter. Original knob D: level = 1 - (1-D)^2, so
+  D 0.75 = -0.56 dBFS. Defaults of both thresholds match ClipOnly3.
 
-- p_ceiling (Ceiling)  0..1, default 0.75
-  Absolute clip target applied to the processed signal, same squared taper
-  1 - (1-p)^2 so high settings change little while low settings pull down
-  dramatically. Also scales the slew-limiting post-clip behavior. Practical
-  musical effect: lower values = more aggressive, duller clipping.
+- mode_sel  (Mode)  boost / match / cliponly, default boost
+  boost    - drive, then clip: pure loudening.
+  match    - drive, clip, then remove the same gain: level-matched, so you
+             hear only what the clipping does.
+  cliponly - outputs only what the clipper took away, polarity-inverted
+             (clipped minus dry, divided by drive). Silent until clipping
+             starts; useful to audition or to parallel-process the spikes.
 
-- p_mode   (Mode)      0..1, default 0.0 (3 discrete positions, thirds)
-  0.0-0.33  Boost  - just the boosted clipped signal
-  0.33-0.67 Match  - boosted clip, level-matched back down (does not use the
-                     Boost gain for the audible path)
-  0.67-1.0  ClipOnly - outputs the clipped signal minus the dry input scaled
-                     by the gain (the "difference" clip, for parallel or
-                     novelty setups)
-
-Musical notes: designed for master/2-buss loudness. Start with mode = Boost,
-raise Boost until the mix gets flatter, then use Noise/Ceiling to taste.
+Port notes: DSP is sample-identical to the original double-precision path
+(differential test vs. the airwindows C++, max diff below -150 dB, from
+float vs. double parameter storage). The random generator now runs on
+native integer operations — bit-identical sequence, about 60% fewer
+ns/sample on a translated test harness. The VST's output dither is not
+included (it is commented out in the original's 64-bit path too). Above
+88.2 kHz the clip averaging spreads over more samples, as in the original.

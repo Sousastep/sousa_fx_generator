@@ -1,6 +1,7 @@
 /* Ultralight2 — standalone RNBO codebox~ port
  * in1/in2: left/right; out1/out2: left/right.
- * Controls use original normalized VST values (0..1).
+ * Controls are in musical units (steps / ms / %); the original
+ * normalized VST mapping is noted beside each @param.
  * Double-precision DSP path; no added output dither.
  * Paste this entire file into codebox~ inside rnbo~.
  * MIT License
@@ -27,18 +28,18 @@
  * 
  */
 
-// VST A: Damping
-@param({ min: 0, max: 1 }) p_damping = 0.65;
-// VST B: UnSolid
-@param({ min: 0, max: 1 }) p_unsolid = 0.75;
-// VST C: UnReflc
-@param({ min: 0, max: 1 }) p_unreflc = 0.75;
-// VST D: Predlay
-@param({ min: 0, max: 1 }) p_predlay = 0.54;
-// VST E: Dry/Wet
-@param({ min: 0, max: 1 }) p_drywet = 0.5;
-// VST F: Distnce
-@param({ min: 0, max: 1 }) p_distnce = 0.0;
+// Damping: VST A, displayed int(A*9.99); 0 = reverb off
+@param({ min: 0, max: 9, steps: 10 }) damping_step = 6;
+// UnSolid (highpass paths): VST B, displayed int(B*4.99)
+@param({ min: 0, max: 4, steps: 5 }) unsolid = 3;
+// UnReflc (lowpass paths): VST C, displayed int(C*4.99)
+@param({ min: 0, max: 4, steps: 5 }) unreflect = 3;
+// Predelay: VST D picked prime[D*998] samples at 48 kHz; 0 = off
+@param({ min: 0, max: 165, exponent: 2 }) predelay_ms = 81.4;
+// Dry/Wet: VST E = mix_pct / 100
+@param({ min: 0, max: 100 }) mix_pct = 50.0;
+// Distance: VST F = distance_pct / 100
+@param({ min: 0, max: 100 }) distance_pct = 0.0;
 
 const d4A = 1317;
 const d4B = 40;
@@ -298,18 +299,20 @@ const d4W = 4;
 @state distance = 0;
 @state distanceSteps: Int = 0;
 @state frame: Int = 0;
-// Xorshift32 with explicit unsigned wrapping (fixed, reproducible seeds).
+@state lastPredelayMs = -1.0;
+@state primeX = 0;
+// Xorshift32 on RNBO's int32 bit operators (logical >> via mask), returned
+// as an unsigned 0..2^32-1 value; bit-identical to the airwindows uint32_t.
 function unsigned32(x) {
-    return x - floor(x / 4294967296.0) * 4294967296.0;
+    return x < 0 ? x + 4294967296.0 : x;
 }
 function advanceRandom(x) {
     let a: Int = x;
-    let left: Int = unsigned32(x * 8192.0);
-    let b: Int = unsigned32(a ^ left);
-    let shifted: Int = floor(b / 131072.0);
-    let c: Int = unsigned32(b ^ shifted);
-    left = unsigned32(c * 32.0);
-    return unsigned32(c ^ left);
+    a = a ^ (a << 13);
+    a = a ^ ((a >> 17) & 32767);
+    a = a ^ (a << 5);
+    let r = a;
+    return unsigned32(r);
 }
 function toIndex(x) {
     let result: Int = trunc(x);
@@ -384,9 +387,28 @@ overallscale = asFloat32(1.0);
 	overallscale = asFloat32(overallscale * (samplerate()));
 	pointDerez = asFloat32(1.0 / overallscale); 
 	
-	bypassPre = ((toIndex(p_predlay*998.0)) < 1); 
+	let preMs = clamp(predelay_ms, 0.0, 165.0);
+	if (preMs != lastPredelayMs) {
+		// continuous prime index for this delay (samples at the 48 kHz rate):
+		// largest n with prime[n] <= target, plus the fraction to the next prime
+		lastPredelayMs = preMs;
+		let target = preMs * 48.0;
+		primeX = 0.0;
+		if (target >= prime[1]) {
+			let lo: Int = 1;
+			let hi: Int = 998;
+			while (hi - lo > 1) {
+				let mid: Int = (lo + hi) >> 1;
+				if (prime[mid] <= target) lo = mid; else hi = mid;
+			}
+			if (prime[hi] <= target) lo = hi;
+			primeX = lo;
+			if (lo < 998) primeX = lo + ((target - prime[lo]) / (prime[lo + 1] - prime[lo]));
+		}
+	}
+	bypassPre = ((toIndex(primeX)) < 1); 
 	
-	X = asFloat32(p_predlay*998.0);
+	X = asFloat32(primeX);
 let readIndex1: Int = trunc(X);
 	dpT = prime[readIndex1];
 	X = asFloat32(sqrt(X*81.408));
@@ -399,15 +421,17 @@ let readIndex3: Int = trunc(X);
 let readIndex4: Int = trunc(X);
 	dpS = prime[readIndex4];
 
-	bypassVerb = ((toIndex(p_damping*9.99)) < 1); 
+	let dampStep: Int = toIndex(clamp(damping_step, 0.0, 9.0));
+	bypassVerb = (dampStep < 1); 
 	
-	damping = asFloat32(0.0625-((toIndex(p_damping*9.99))*0.003125)); 
-	unSolid = 4-toIndex(p_unsolid*4.99); 
-	unReflect = 4-toIndex(p_unreflc*4.99); 
+	damping = asFloat32(0.0625-(dampStep*0.003125)); 
+	unSolid = 4-toIndex(clamp(unsolid, 0.0, 4.0)); 
+	unReflect = 4-toIndex(clamp(unreflect, 0.0, 4.0)); 
 
-	wet = asFloat32(p_drywet);
+	wet = asFloat32(clamp(mix_pct, 0.0, 100.0) * 0.01);
 
-	distance = asFloat32(pow(p_distnce*7.28,2.0)); 
+	let distKnob = clamp(distance_pct, 0.0, 100.0) * 0.01;
+	distance = asFloat32(distKnob*7.28*distKnob*7.28); 
 	distanceSteps = toIndex(distance); 
 	distance = asFloat32(distance - (distanceSteps)); 
 

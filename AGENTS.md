@@ -63,7 +63,7 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 | `tools/build_corpus.py` | PDFs → searchable corpus (incremental; run for new PDFs) |
 | `tools/fetch_papers.py` | search & download open-access PDFs (SMC, NIME, ISMIR, WASPAA, ICASSP, ICMC, AES, arXiv) with `<100 GB` cap |
 | `tools/setup_env.sh` | installs the corpus toolchain (JDK 21, tesseract, `uv` venv, opendataloader-pdf) |
-| `docs/rnbo_codebox/` | the language reference + `example1`…`example16` (fundamentals) + `example17`…`example27` (**failure modes distilled from real breakage**) |
+| `docs/rnbo_codebox/` | the language reference + `example1`…`example16` (fundamentals) + `example17`…`example28` (**failure modes distilled from real breakage**) |
 | `docs/max_v8codebox/` | v8.codebox (Max's JS) examples + API reference |
 | `docs/max_v8ui/` | `v8ui` examples (e.g. `pattr_sliders.js`) |
 | `main_test_patcher.maxpat` | The human's audition rig. Never modify. The human is an expert maxer. Tell them what to change in main_test_patcher.maxpat and they will change it.  |
@@ -99,7 +99,7 @@ both files**; page-only extras go in the gh-pages copy only.
 ## 3. codebox~ rules that bite
 
 Read `docs/rnbo_codebox/Codebox_Reference.md` for the language and
-`example17`…`example27` for these specific traps. They are ordered by how
+`example17`…`example28` for these specific traps. They are ordered by how
 expensive the mistake was. `tools/verify_codebox.js` enforces the first two
 (reserved constants, contiguous inlets/outlets) before it compiles anything.
 
@@ -148,6 +148,12 @@ read at the call site. Allowed type annotations after a name/parameter:
 `number`, `Int`, `Index`, `list`, `BufferRef`, `DataRef` — nothing else. Return
 types may only be `number` or `list` (`: Int` is rejected, so type the receiving
 local instead), and any value used as an array index must be `Int`.
+
+**`Int` arithmetic stays integer.** With `n: Int`, `n/(n+1.0)` compiles to
+`n / (n + 1)` — an integer division, always 0 — with no warning. It broke the
+Bezier timing of five airwindows ports (up to -47 dB from the original). Keep
+such counters untyped (`@state n = 0;`) or copy them (`let nf = n * 1.0;`)
+before dividing; `number / Int` is fine. See `example28`.
 
 **`delay` needs `step()`.** `write()` + `read()` without `step()` never advances
 the read pointer — no error, just no delay. Use `d.next(x, samples)` or the
@@ -207,7 +213,9 @@ default 0), and treat a bar as running only for 100 ms after it last *moved* -
   `tools/generate_v8uis.py` use the name verbatim as the control label, the RNBO
   parameter id, and the `setparam`/`param` targets, so name params for a
   musician (`midside`, `release_ms`) — never `slider3`. Always give explicit
-  `min`/`max` and a sensible default.
+  `min`/`max` and a sensible default. For Hz/ms ranges add a taper with
+  `exponent: N` (RNBO: value = min + span·norm^N); both generators pass it on
+  to the `param` box and the v8ui slider.
 - **Keep the `// Label` comment directly above each `@param`** and keep names
   stable: renaming one changes the exposed RNBO parameter id.
 - **IO contract:** `in1`/`in2` = stereo in, `out1`/`out2` = stereo out;
@@ -325,8 +333,8 @@ node tools/verify_codebox.js /tmp/probe.txt      # PASS / FAIL + line:col
 ```
 
 `generate_maxpats.py` — `--src`, `--outdir`, `--only <names…>`, `--list`. Creates
-`param <name> <default> @min <min> @max <max>` objects wired through `number`
-and `setparam` into `codebox~`.
+`param <name> <default> @min <min> @max <max> [@exponent <N>]` objects wired
+through `number` and `setparam` into `codebox~`.
 
 `generate_v8uis.py` — `--src`, `--outdir`, `--only <names…>`, `--list`. Generates
 compact `v8ui` slider scripts in `generated_v8ui/<Cat>/<name>.js` with centered

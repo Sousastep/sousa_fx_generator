@@ -1,29 +1,28 @@
-PaulWide — Airwindows (Chris Johnson)
+PaulWide — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/paulwide/
 
-What it is: not a conventional stereo widener. It is a dither/decimation
-style stereo decorrelator: it quantizes audio with randomly dithered, NOT
-correlated dither between channels, at an adjustable bit depth. The
-decorrelated dither acts as constant tiny uncorrelated signal, which the ear
-perceives as extra width and air (and a bit ofcontrolled "air"/level lift).
-This RNBO port uses the original normalized 0..1 values.
+What it is: a dither / bit-depth reducer. It quantizes to the chosen bit
+depth using "Paul" dither (the difference of successive random values, i.e.
+highpassed TPDF noise, so the hiss sits up high and sounds quieter), with
+left and right dither forced to differ strongly, so the noise is spread wide
+in the stereo field instead of sitting in the middle. At 24/16 bits it is
+a mastering dither; at low bit depths it is a wide, airy bitcrusher.
 
-Parameters:
+Parameter:
 
-- p_quant (Quant) 0..1, default 1.0 (2 discrete modes)
-  Base processing depth, two discrete picks:
-  p_quant >= 0.5  24-bit processing (highres, internal scale 2^23)
-  p_quant <  0.5  16-bit processing (internal scale 2^15) - the original
-                  PaulWide behavior: noisier, wider character
+- bits  (Quant + DeRez)  0 .. 24 bits, default 24
+  Quantization depth (continuous: 12.5 bits is a valid setting).
+  24 / 16 = the original Quant modes with DeRez at 0. Lower = crunchier
+  and noisier. Below 4 bits the output also gets quieter (the original
+  limits its output scaling there) and turns into gated, crackly noise.
+  The original's two knobs did one job between them: Quant chose a 24- or
+  16-bit base and DeRez scaled it by (1-DeRez)^6, i.e.
+  bits = base + 6 * log2(1 - DeRez); the one slider covers every setting
+  of both.
 
-- p_derez (DeRez) 0..1, default 0.0
-  Progressive bit-depth reduction. Internally scale factor is multiplied by
-  pow(1-p, 6) (a steep curve: heavy settings already fall away quickly).
-  At low values it just adds the widening dither; as it nears ~0.4-0.6 it
-  sounds like lo-fi 8-4bit noise; near 1.0 it collapses nearly to noise
-  floor. Works on any program; use an ear.
-
-Musical notes: useful as a subtle air/width enhancer on the master buss (a
-little DeRez with Quant=24) or as a lo-fi crackle texture on a return. The
-"widening" is pure psychoacoustics from the dither, so high DeRez values
-should be saved for effect use.
+Port notes: matches the airwindows C++ in a differential test (identical
+at whole-octave settings; elsewhere differences are 1-LSB steps from the
+original's float32 rounding of its DeRez scale). The random generator
+(used for the dither itself) runs on native integer operations —
+bit-identical sequence, about 70% fewer ns/sample on a translated test
+harness.

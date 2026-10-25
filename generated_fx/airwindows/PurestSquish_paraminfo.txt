@@ -1,39 +1,45 @@
-PurestSquish — Airwindows (Chris Johnson)
+PurestSquish — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/purestsquish-vst/
 
-What it is: the "Purest" family compressor: 5th-pass mu-style gain cell
-similar to VariMu's but tuned to be maximally clean and organic. It is
-designed as a 2-buss compressor with built-in auto makeup gain and a special
-"bass bloom" (BassBlm) feature: bass is pre-highpassed for the detector so
-low frequencies are compressed less aggressively while still sounding full.
-This RNBO port uses the original normalized 0..1 values.
+What it is: an open-sounding, not-at-all-normal compressor. Several
+mu-style gain cells run interleaved on 2- and 3-sample cycles and are
+averaged; there are no attack/release controls (release speeds up and
+slows down with the signal itself). Make-up gain is automatic and grows as
+the threshold drops, so it gets LOUDER as it squishes. It clamps hard on
+transients and can do odd things when a sound starts or stops abruptly
+(the author's own warning). Bass bloom keeps lows from triggering it.
 
 Parameters:
 
-- p_squish (Squish) 0..1, default 0.0
-  How hard the gain cell squashes. Internally threshold = 1.01 - (1 -(1 -
-  p/2)^4): the full range endpoint is around 1.01; the top 10-20% of the
-  knob is where the really hard squish lives. Default 0 = only the
-  base-signal path (near-bypass, but not exactly full bypass).
-  Guides: 0.3-0.5 gentle leveling; 0.7-0.9 a heavy transparent squash;
-  past 0.9 the internal makeup gain becomes extreme (designed for the
-  hardest 2-buss use).
+- thresh_db  (Squish)  -40 .. 0 dBFS, default 0
+  Input level above which the gain cells clamp down. Lower = more squish
+  and more automatic make-up gain. At 0 dBFS the plugin does almost
+  nothing but is about 6 dB quieter than its input (the original's
+  make-up split, kept as is). Pushed hard it can drive peaks over
+  0 dBFS — trim with output_db. Original knob A sets an internal threshold
+  t = 1.01 - (1 - (1 - A/2)^4) that the detector sees after an internal
+  boost; this port solves for the input level that actually matters
+  (A 0.36 = -12 dBFS, A 0.65 = -24 dBFS, A 1 = -41.6 dBFS).
 
-- p_bassblm (BassBlm) 0..1, default 0.0
-  Bass bloom. An iirAmount = p^4 / sampleRate highpass: increases
-  non-linearly, dramatically more effective toward 1.0. When cranked it
-  lets the low end bloom out of the compressed signal (kick/bass
-  interactions get extra weight while staying controlled). For use on the
-  2-buss or a group: small values already make the low end feel fuller.
+- bloom_hz  (BassBlm)  0 .. 2000 Hz, default 0 (off)
+  Highpass on the detector only (sidechain filter): below this frequency
+  notes pass through less compressed, so bass and subs "bloom" while the
+  rest is held. Exponent taper for fine control at the low end. Original
+  knob B set the filter coefficient as B^4 (B 0.3 ~ 57 Hz, B 0.5 ~ 450 Hz;
+  B 1 at 44.1 kHz switched compression off entirely).
 
-- p_output (Output) 0..1, default 1.0
-  Linear output trim (unity at 1.0). The auto makeup gain is inside the
-  algorithm, so use Output for level-matching, not density.
+- output_db  (Output)  -24 .. +6 dB, default 0
+  Output level. The original knob C only attenuated (linear 0..1); this
+  port allows +6 dB so the -6 dB at gentle settings can be made up.
 
-- p_drywet (Dry/Wet) 0..1, default 1.0
-  Linear dry/wet blend.
+- mix_pct  (Dry/Wet)  0 .. 100 %, default 100
+  Linear blend with the dry signal.
 
-Musical notes: start Squish 0.4 on a drum buss, then raise BassBlm until
-the kick "carries" hard while the snare stays forward. The makeup gain is
-nonlinear (that is the whole character), so watch your level meters when
-pushing Squish past 0.8.
+Source quirk kept: in the alternate-sample cells the original squares
+cell E's coefficient where cell D's would be expected; it is part of the
+plugin's sound, so the port does the same.
+
+Port notes: DSP matches the original double-precision path (differential
+test vs. the airwindows C++, max diff below -145 dB). Optimized:
+pow(x,2) -> x*x and the random generator on native integer operations
+(bit-identical), about 45% fewer ns/sample on a translated test harness.

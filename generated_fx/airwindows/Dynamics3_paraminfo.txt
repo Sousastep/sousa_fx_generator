@@ -1,39 +1,45 @@
-Dynamics3 — Airwindows (Chris Johnson)
+Dynamics3 — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/dynamics3/
 
-What it is: a 2-in-1 downward expander / compressor built on quadratic
-Bezier curves: the curve is literally a Bezier interpolation, re-solving
-each sample, so it reacts like a baked-in continuous curve rather than a
-culled/interpolated conventional attack-release engine. Very clean, very
-"stealth" sounding. This RNBO port uses the original normalized 0..1 values.
+What it is: a Bezier-curve compressor that morphs into an expander. The
+gain control is a peak hold (with a linear release) averaged over windows
+of "attack" length and joined by a quadratic Bezier curve, so it moves
+smoothly without a classic attack/release envelope. It is vari-mu style:
+compressing also changes the dry/wet blend (the ratio), not just the gain.
+There is no make-up gain — compression makes it quieter. A sine-shaped
+soft clip catches what gets through.
 
 Parameters:
 
-- p_thresh (Thresh) 0..1, default 1.0
-  Blend/expander-compressor knee-ish intensity. Internally bezThresh =
-  pow(p+0.618)^2 * 1.618 (quadratic taper, i.e., it moves a lot at the top
-  of the scale). At the default 1.0 the plugin effectively bypasses
-  (bezThresh > 4.236): 1.0 = OFF. Lower values engage it; around 0.6-0.75
-  is a gentle setting, near 0.0 the most aggressive.
+- thresh_db  (Thresh)  -4.18 .. +12.54 dB, default +12.54 (= bypass)
+  How readily it acts; gain reduction grows with level relative to this.
+  The top of the range bypasses the plugin completely (as the original's
+  1.0 does). The range is the original's whole span (knob A: threshold =
+  (A + 0.618)^2 * 1.618), so even at -4.18 dB it is gentle on a quiet
+  tuba: on a peak-normalised tuba take it lowers the level about 5 dB.
 
-- p_attack (Attack) 0..1, default 0.382 (golden-section default)
-  Control-response rate, NOT ms. Internally bezRez = pow((1-p)*0.4, 4) per
-  sample, i.e. a very steep exponential taper: high attack numbers are
-  dramatically slower, and each 0.1 near 0.0 matters a lot more than near
-  1.0... in practice lower p = faster response. The stair-step is hidden by
-  Bezier smoothing, so it never sounds steppy.
+- attack_ms  (Attack)  1.5 .. 450 ms, default 12 ms
+  Length of each Bezier averaging window: shorter = grabs faster and
+  follows the waveform more closely (grittier), longer = smoother, slower.
+  Original knob B set it via ((1-B)*0.4)^4 per sample (B 0.382 = 12 ms;
+  it stopped getting longer above B 0.75, ~400 ms).
 
-- p_release (Release) 0..1, default 0.618
-  Same taper family as Attack for the floor/undershoot (sloRez =
-  pow((1-p)*0.4,4)); lower p = faster release of the curve baseline.
+- release_ms  (Release)  1.5 .. 4500 ms, default 80 ms
+  How long the peak hold takes to fall from full scale back to nothing.
+  Faster release also tames the expansion boost in the inv range.
+  Original knob C: ((1-C)*0.4)^4 per sample (C 0.618 = 80 ms).
 
-- p_invwet (Inv/Wet) 0..1, default 1.0
-  Direction selector blended with dry/wet. Above 0.5 the module is a
-  compressor, below 0.5 a downward expander. The distance from the 0.5
-  midpoint also blends in dry signal: 0.5 = flat-ish dry, 1.0 or 0.0 = full
-  compressor / full expander. Default 1.0 = full compressor.
+- inv_wet_pct  (Inv/Wet)  -100 .. +100 %, default +100
+  +100 = full compression, 0 = dry, -100 = full "inverse": an expander that
+  suppresses the start of each note and lets it flare up afterwards (the
+  complement of the compressed sound, not a phase-inverted mix). Strong
+  settings can distort, by design. Original knob D = (pct + 100) / 200.
 
-Musical notes: typical use is p_thresh 0.7-0.8 as a "transparent glue"
-compressor or a subtle expander on vocals/bass; the Bezier path makes
-deep settings surprisingly clean but hints of over-realness ("controlled"
-sound) can appear at extreme depths.
+Port notes: fixed a real port bug — `stepped/(stepped+1.0)` compiled to an
+integer division (0), which made every Bezier cycle one sample long and
+put the old port up to -27 dB away from the original (see
+docs/rnbo_codebox/example28.md). Now matches the airwindows C++ in a
+differential test (max diff below -135 dB). Attack/release are set in ms
+directly, so the original's slightly odd sample-rate scaling is replaced
+by exact times. The random generator runs on native integer operations
+(bit-identical; about 65% fewer ns/sample on a translated test harness).

@@ -1,6 +1,7 @@
 /* VariMu — standalone RNBO codebox~ port
  * in1/in2: left/right; out1/out2: left/right.
- * Controls use original normalized VST values (0..1).
+ * Controls are in musical units (dBFS / % / dB); the original
+ * normalized VST mapping is noted beside each @param.
  * Double-precision DSP path; no added output dither.
  * Paste this entire file into codebox~ inside rnbo~.
  * MIT License
@@ -27,14 +28,14 @@
  * 
  */
 
-// VST A: Intensty
-@param({ min: 0, max: 1 }) p_intensty = 0.0;
-// VST B: Speed
-@param({ min: 0, max: 1 }) p_speed = 0.5;
-// VST C: Output
-@param({ min: 0, max: 1 }) p_output = 1.0;
-// VST D: Dry/Wet
-@param({ min: 0, max: 1 }) p_drywet = 1.0;
+// Threshold: VST A, the detector compares x^2 with 1.001-(1-(1-A)^3) = 10^(thresh_db/10)
+@param({ min: -30, max: 0 }) thresh_db = 0.0;
+// Speed (release): VST B = speed_pct / 100
+@param({ min: 0, max: 100 }) speed_pct = 50.0;
+// Output: VST C = dbtoa(output_db), extended to +6 dB
+@param({ min: -24, max: 6 }) output_db = 0.0;
+// Dry/Wet: VST D = mix_pct / 100
+@param({ min: 0, max: 100 }) mix_pct = 100.0;
 
 @state muVaryL = 0;
 @state muAttackL = 0;
@@ -53,8 +54,6 @@
 @state muCoefficientBR = 0;
 @state previousR = 0;
 @state flip = 0;
-@state fpdL = 305419896.0;
-@state fpdR = 2271560481.0;
 @state overallscale = 0;
 @state threshold = 0;
 @state muMakeupGain = 0;
@@ -67,24 +66,6 @@
 @state squaredSampleL = 0;
 @state squaredSampleR = 0;
 @state frame: Int = 0;
-// Xorshift32 with explicit unsigned wrapping (fixed, reproducible seeds).
-function unsigned32(x) {
-    return x - floor(x / 4294967296.0) * 4294967296.0;
-}
-function advanceRandom(x) {
-    let a: Int = x;
-    let left: Int = unsigned32(x * 8192.0);
-    let b: Int = unsigned32(a ^ left);
-    let shifted: Int = floor(b / 131072.0);
-    let c: Int = unsigned32(b ^ shifted);
-    left = unsigned32(c * 32.0);
-    return unsigned32(c ^ left);
-}
-function toIndex(x) {
-    let result: Int = trunc(x);
-    return result;
-}
-
 function init() {
 
 	muSpeedAL = 10000;
@@ -110,18 +91,19 @@ overallscale = 2.0;
 	overallscale /= 44100.0;
 	overallscale *= samplerate();
 	
-	threshold = 1.001 - (1.0-pow(1.0-p_intensty,3));
+	let threshAmp = dbtoa(clamp(thresh_db, -30.0, 0.0));
+	threshold = maximum(threshAmp*threshAmp, 0.001);
 	muMakeupGain = sqrt(1.0 / threshold);
 	muMakeupGain = (muMakeupGain + sqrt(muMakeupGain))/2.0;
 	muMakeupGain = sqrt(muMakeupGain);
 	outGain = sqrt(muMakeupGain);
 	
-	release = pow((1.15-p_speed),5)*32768.0;
+	release = pow((1.15-(clamp(speed_pct, 0.0, 100.0)*0.01)),5)*32768.0;
 	release /= overallscale;
 	fastest = sqrt(release);
 
-	output = outGain * p_output;
-	wet = p_drywet;
+	output = outGain * dbtoa(clamp(output_db, -24.0, 6.0));
+	wet = clamp(mix_pct, 0.0, 100.0) * 0.01;
 
 }
 let sampleFrames = vectorsize() - frame - 1;
@@ -280,9 +262,6 @@ let drySampleL = inputSampleL;
 			inputSampleR = (drySampleR * (1.0-wet)) + (inputSampleR * wet);
 		}
 
-		fpdL = advanceRandom(fpdL);
-
-		fpdR = advanceRandom(fpdR);
 
 out1 = inputSampleL;
 out2 = inputSampleR;

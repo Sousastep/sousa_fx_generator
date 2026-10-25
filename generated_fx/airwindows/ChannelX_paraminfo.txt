@@ -1,31 +1,40 @@
-ChannelX — Airwindows (Chris Johnson)
+ChannelX — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/channelx/
 
-What it is: a channel-wide console strip emulation in the spirit of the
-Airwindows Console system: a saturation stage ("drive"), a treble-tilt "edge"
-element, and a "Dielectric"-style modulation of the harmonics for realism.
-It has been designed for a single channel in a Console mix rather than as a
-master saturator. This RNBO port uses the original normalized 0..1 values.
+What it is: the Channel9 console-channel strip rebuilt with newer airwindows
+experiments. Per channel: a gentle interleaved highpass with Capacitor-style
+"dielectric" modulation and RetroBass-like even harmonics, a drive stage
+that crossfades dry -> Spiral saturation -> sine "phat" saturation (both
+computed "longhand" from Taylor series), a one-sample anti-alias "BLEP-ish"
+treble treatment after each nonlinearity, and a golden-ratio slew clamp
+whose limit depends on the console type. Meant for every channel of a mix,
+not as a master saturator.
 
 Parameters:
 
-- p_consoletype (Console Type) 0..1, default 0.0 (5 discrete steps, quintiles)
-  Selects one of 5 console flavors (internally floor(p*4.999); values 0-4):
-  step 0...4 changes the soft-clip threshold and the amount of treble
-  filtering/deadness of the console. Try 0.2, 0.4, 0.6, 0.8, 1.0 exactly -
-  in-between values snap to the next-lower type. Types run from a
-  "neutral-ish" console to progressively wilder/colder ones.
+- console  (Console Type)  neve / api / ssl / teac / mackie, default neve
+  Each type sets the low-cut corner and the slew clamp:
+  neve   - low cut ~20 Hz, gentle slew limit (0.334)
+  api    - ~14 Hz, looser slew limit (0.600)
+  ssl    - ~17 Hz, loosest slew limit (0.849)
+  teac   - ~32 Hz, tight slew limit (0.149): darker, softer highs
+  mackie - ~40 Hz, tightest slew limit (0.092): darkest
+  (approximate: two interleaved one-poles, each updated every other
+  sample; the low cut removes 92 % of the lows, so it is a deep shelf
+  rather than a full highpass).
+  Original knob A: type = trunc(A * 4.999).
 
-- p_drive (Drive) 0..1, default 0.0
-  Saturation drive on the channel. Internally density = p*2 (clamped at 1),
-  so the midpoint already reaches full "solid" drive; above ~0.5 the extra
-  goes into a "phattity" term that boosts density further (more edge grit).
-  Default 0 = clean console passthrough.
+- drive_pct  (Drive)  0 .. 200 %, default 0
+  0 = clean (still with highpass and slew clamp), 100 % = full Spiral
+  saturation, 200 % = full sine saturation (fatter, rounder); in between
+  it crossfades linearly. Original knob B = drive_pct / 200.
 
-- p_output (Output) 0..1, default 1.0
-  Straight output trim (linear gain 0..1, unity at 1.0).
+- output_db  (Output)  -36 .. 0 dB, default 0
+  Output attenuation. Original knob C was linear gain 0..1.
 
-Musical notes: use a different console type per track for a cohesive Console
-mix; keep Drive small on busses and higher on problem sources. Note: the port
-uses multiplyAdd instead of C++ fused multiply-add (numerical detail only,
-see RNBO/README.md).
+Port notes: DSP is sample-identical to the original double-precision path
+(differential test vs. the airwindows C++). Optimized without changing a
+sample: the random generator runs on native integer operations and each
+Taylor series is skipped when its crossfade weight is zero — about 40-60%
+fewer ns/sample on a translated test harness. The VST output dither is not
+included.

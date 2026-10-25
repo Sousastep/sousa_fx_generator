@@ -763,6 +763,7 @@ class Param:
     default: float
     steps: float | None = None
     enum_values: list[str] | None = None
+    exponent: float = 1.0
 
     @property
     def default_str(self) -> str:
@@ -846,6 +847,7 @@ def parse_effect(txt_path: str, paraminfo_path: str | None) -> Effect:
                 default=default,
                 steps=_find_float(r"steps\s*:\s*" + NUM_RE, opts),
                 enum_values=enum_vals,
+                exponent=_find_float(r"exponent\s*:\s*" + NUM_RE, opts) or 1.0,
             )
         )
 
@@ -1078,6 +1080,8 @@ def build_nested_patcher(effect: Effect) -> dict[str, Any]:
     for k, p in enumerate(effect.params):
         col = k % num_cols
         p_text = f"param {p.name} {p.default_str} @min {p.min_str} @max {p.max_str}"
+        if p.exponent != 1.0:
+            p_text += f" @exponent {fmt_num(p.exponent)}"
         p_w = float(max(PARAM_BOX_W, round(len(p_text) * 6.5) + 18.0))
         s_text = f"setparam {p.name}"
         s_w = float(max(PARAM_BOX_W, round(len(s_text) * 6.5) + 18.0))
@@ -1174,7 +1178,7 @@ def build_nested_patcher(effect: Effect) -> dict[str, Any]:
                         "displayname": "",
                         "displayorder": "-",
                         "enum": "",
-                        "exponent": 1.0,
+                        "exponent": p.exponent,
                         "fromnormalized": "",
                         "meta": "",
                         "order": "0",

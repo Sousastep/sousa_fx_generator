@@ -1,41 +1,39 @@
-VariMu — Airwindows (Chris Johnson)
+VariMu — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/varimu-vst/
 
-What it is: an airwindows-style Vari-Mu (variable-mu tube-style)
-compressor: the gain cell is a muVary function with a variable slope curve,
-controlled by a fixed threshold, with a smoothed sliding release. It is a
-5th-family Airwindows compressor: clean, musical, with automatic makeup
-gain and no ratio/pump controls, purely driven by the "mu" physics.
-This RNBO port uses the original normalized 0..1 values.
+What it is: a more organic relative of Pressure. Two interleaved
+mu-style gain cells per side trigger on the SQUARE of the input (and use
+the previous sample when a new one jumps up, which softens how brief
+transients are caught), so it bites progressively harder as level rises.
+Release speeds up and slows down with the signal. Automatic make-up gain
+grows as the threshold drops, so it gets louder as it compresses.
 
 Parameters:
 
-- p_intensty (Intensity) 0..1, default 0.0
-  Effectively the compressor's threshold via the threshold variable
-  threshold = 1.001 - (1 - (1-p)^3): the cubic taper puts nearly all of
-  the action in the top 30% of the knob. Small values (0..0.2) hardly slow
-  anything down (near-bypass, included auto makeup); values 0.6+ are the
-  sweet zone; 1.0 is extreme limiting. Automatic makeup gain is included
-  in the output mapping at all settings.
+- thresh_db  (Intensty)  -30 .. 0 dBFS, default 0
+  Input peak level where the gain cells start to clamp. 0 dBFS = nearly
+  untouched (the original's default, knob A 0). Original knob A: the
+  detector compares x^2 with 1.001 - (1 - (1-A)^3), so A 0.5 = -9.6 dBFS,
+  A 0.7 = -15.3 dBFS, A 1 = -30 dBFS. Make-up gain rises with it
+  (about +2.5 dB on a tuba take at -12 dBFS) — set level with output_db.
 
-- p_speed (Speed) 0..1, default 0.5
-  Release time. Internally release = pow(1.15-p, 5) * 32768 / overallscale,
-  then divided down for the two sliding speed histories. That makes a very
-  steep curve: at p=1.0 release is almost instantaneous; at 0.0 it is
-  several seconds long. Default 0.5 is roughly a medium-fast program
-  release. This is "release character", not literally calibrated meters.
+- speed_pct  (Speed)  0 .. 100 %, default 50
+  Release speed. Not calibrated in ms because the release is level
+  dependent and not exponential; measured recovery to 63 % after a loud
+  burst, at 48 kHz: 0 % ~1.4 s, 30 % ~0.5 s, 50 % ~125 ms, 70 % ~20 ms,
+  90 % and up almost instant (pumping, distortion-like). Original knob B
+  = pct/100. As in the original, release gets faster at higher sample
+  rates.
 
-- p_output (Output) 0..1, default 1.0
-  Output trim on top of the automatic muMakeupGain (which is calculated
-  from Intensity, so Incre
+- output_db  (Output)  -24 .. +6 dB, default 0
+  Output level on top of the automatic make-up gain. The original knob C
+  was linear 0..1; +6 dB is an extension.
 
-ase actually becomes louder as you compress):
-  output = outGain * p_output.
+- mix_pct  (Dry/Wet)  0 .. 100 %, default 100
+  Linear blend with the dry signal.
 
-- p_drywet (Dry/Wet) 0..1, default 1.0
-  Linear dry/wet blend.
-
-Musical notes: the classic Airwindows "nothing to see here, sounds like a
-tape buss" compressor. Typical master-buss use: Intensity 0.6, Speed 0.5,
-Output 1.0. Because of the nonlinear makeup curve, watch your ears/buss
-level as you push Intensity; set level with Output afterwards.
+Port notes: DSP matches the original double-precision path (differential
+test vs. the airwindows C++, max diff below -135 dB). A random generator
+that was advanced every sample but never read has been removed (no change
+to the output; about 79% fewer ns/sample on a translated test harness).
+The original's 1e-16 "residue" noise is omitted.

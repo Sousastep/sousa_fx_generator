@@ -1,6 +1,7 @@
 /* Dynamics3 — standalone RNBO codebox~ port
  * in1/in2: left/right; out1/out2: left/right.
- * Controls use original normalized VST values (0..1).
+ * Controls are in musical units (dB / ms / %); the original normalized
+ * VST mapping is noted beside each @param.
  * Double-precision DSP path; no added output dither.
  * Paste this entire file into codebox~ inside rnbo~.
  * MIT License
@@ -27,14 +28,14 @@
  * 
  */
 
-// VST A: Thresh
-@param({ min: 0, max: 1 }) p_thresh = 1.0;
-// VST B: Attack
-@param({ min: 0, max: 1 }) p_attack = 0.382;
-// VST C: Release
-@param({ min: 0, max: 1 }) p_release = 0.618;
-// VST D: Inv/Wet
-@param({ min: 0, max: 1 }) p_invwet = 1.0;
+// Threshold: VST A, bezThresh = (A+0.618)^2*1.618 = dbtoa(thresh_db); top = bypass
+@param({ min: -4.18, max: 12.54 }) thresh_db = 12.54;
+// Attack: VST B set the Bezier cycle, ((1-B)*0.4)^4 per sample (B 0.382 = 12 ms)
+@param({ min: 1.5, max: 450, exponent: 3 }) attack_ms = 12.0;
+// Release: VST C set the hold fall rate, ((1-C)*0.4)^4 per sample (C 0.618 = 80 ms)
+@param({ min: 1.5, max: 4500, exponent: 3 }) release_ms = 80.0;
+// Inv/Wet: VST D = (inv_wet_pct + 100) / 200 (+100 compress, 0 dry, -100 expand)
+@param({ min: -100, max: 100 }) inv_wet_pct = 100.0;
 
 const bez_A = 0;
 const bez_B = 1;
@@ -51,25 +52,25 @@ const bez_total = 7;
 @state bezThresh = 0;
 @state sqrThresh = 0;
 @state bezRez = 0;
-@state stepped: Int = 0;
+@state stepped = 0;
 @state bezTrim = 0;
 @state sloRez = 0;
 @state invDry = 0;
 @state compress = 0;
 @state compBypass = 0;
 @state frame: Int = 0;
-// Xorshift32 with explicit unsigned wrapping (fixed, reproducible seeds).
+// Xorshift32 on RNBO's int32 bit operators (logical >> via mask), returned
+// as an unsigned 0..2^32-1 value; bit-identical to the airwindows uint32_t.
 function unsigned32(x) {
-    return x - floor(x / 4294967296.0) * 4294967296.0;
+    return x < 0 ? x + 4294967296.0 : x;
 }
 function advanceRandom(x) {
     let a: Int = x;
-    let left: Int = unsigned32(x * 8192.0);
-    let b: Int = unsigned32(a ^ left);
-    let shifted: Int = floor(b / 131072.0);
-    let c: Int = unsigned32(b ^ shifted);
-    left = unsigned32(c * 32.0);
-    return unsigned32(c ^ left);
+    a = a ^ (a << 13);
+    a = a ^ ((a >> 17) & 32767);
+    a = a ^ (a << 5);
+    let r = a;
+    return unsigned32(r);
 }
 function toIndex(x) {
     let result: Int = trunc(x);
@@ -88,17 +89,16 @@ overallscale = 1.0;
 	overallscale /= 44100.0;
 	overallscale *= samplerate();
 
-	bezThresh = pow(p_thresh+0.6180339887498949,2.0)*1.6180339887498949;
+	bezThresh = dbtoa(clamp(thresh_db, -4.18, 12.54));
 	sqrThresh = sqrt(bezThresh);
-	bezRez = maximum(pow((1.0-p_attack)*0.4,4.0)/overallscale,0.0001); 
-	bezRez /= (2.0/pow(overallscale,0.5-((overallscale-1.0)*0.0375)));
-	stepped = 999999; if (bezRez > 0.000001) stepped = toIndex(1.0/bezRez);
+	// stepped is a float: Int/(Int+1.0) compiles to an integer division (example28)
+	stepped = maximum(toIndex(clamp(attack_ms, 1.5, 450.0) * 0.001 * samplerate()), 1);
 	bezRez = 0.99999999 / stepped;
 	bezTrim = 1.0-(bezRez*(stepped/(stepped+1.0)));
-	sloRez = maximum(pow((1.0-p_release)*0.4,4.0)/overallscale,0.00001);
-	sloRez /= (2.0/pow(overallscale,0.5-((overallscale-1.0)*0.0375)));
-	invDry = pow(1.0-(abs(p_invwet-0.5)*2.0),1.6180339887498949);
-	compress = (p_invwet > 0.499999);
+	sloRez = 1.0 / (clamp(release_ms, 1.5, 4500.0) * 0.001 * samplerate());
+	let invWet = (clamp(inv_wet_pct, -100.0, 100.0) + 100.0) * 0.005;
+	invDry = pow(1.0-(abs(invWet-0.5)*2.0),1.6180339887498949);
+	compress = (invWet > 0.499999);
 	compBypass = (bezThresh > 4.236);
 
 }

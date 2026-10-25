@@ -1,29 +1,30 @@
-TapeHack2 — Airwindows (Chris Johnson)
+TapeHack2 — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/tapehack2/
 
-What it is: a minimalist tape-style soft-saturator. Instead of trying to be
-conventional "hysteresis" tape emulation, TapeHack2 hits a soft saturation
-point, flattens the top (smoothly) and darkens the quiet parts, using a
-leveled cascade of "dark" averaging filters. Sounds like a recording
-console put into a mild analog clip. This RNBO port uses the original
-normalized 0..1 values.
+What it is: "tape compression" from two hacks. A sine-like soft clipper
+(the TapeHack transfer curve, which pushes saturation up toward the top
+and leans out the middle) sits between two slew-dependent darkening
+stages: when the waveform moves fast, it is blended toward a short moving
+average before and after the clipper. Loud, fast material gets rounder and
+darker; quiet, slow material passes almost untouched.
 
 Parameters:
 
-- p_input (Input) 0..1, default 0.1
-  Drive into the saturator. Internally a gain of p*10, i.e. x10 (+20 dB)
-  at max; the default 0.1 is already a mild drive. Relentless attention:
-  even small pushes add real loudness, so do A/B at equal levels.
+- input_db  (Input)  -24 .. +20 dB, default 0
+  Drive into the clipper. 0 dB is the original default (knob A 0.1, gain
+  = 10*A, so A 1 = +20 dB). The curve starts to bend around -6 dBFS
+  and flattens out by about +7 dBFS (2.3 linear), so on a quiet tuba
+  you need +10 dB or more to hear tape squash.
 
-- p_output (Output) 0..1, default 1.0
-  Output trim. Internally multiplied by 0.9239, so a small RTA-like loss is
-  baked in by the source; 1.0 is the calibrated setting.
+- output_db  (Output)  -24 .. 0 dB, default 0
+  Output level. Includes the original's fixed 0.9239 (-0.7 dB) trim, so
+  0 dB here equals the original knob B at 1.0.
 
-- p_drywet (Dry/Wet) 0..1, default 1.0
-  Linear dry/wet blend.
+- mix_pct  (Dry/Wet)  0 .. 100 %, default 100
+  Linear blend with the dry signal.
 
-Musical notes: use it on a single track (vocals, drums, bass) it adds a
-smeared-edge analog vibe; on a buss at the default 0.1 drive it is a
-subtle "warmer" glue. Beware of turning Input all the way up: it does NOT
-sound merely "louder", it adds real harmonic distortion and darkens
-transient bite. Set level by Output.
+Port notes: DSP matches the original double-precision path (differential
+test vs. the airwindows C++, max diff below -150 dB). The random generator
+used for the denormal guard runs on native integer operations
+(bit-identical), about 57% fewer ns/sample on a translated test harness.
+At 88.2 kHz and above the averaging stages get longer, as in the original.

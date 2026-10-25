@@ -1,50 +1,50 @@
-ZAcidLowpass — Airwindows (Chris Johnson)
+ZAcidLowpass — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/zacidlowpass/
 
-What it is: the "acid" member of the Z filter family: a resonant lowpass
-built from Bezier undersampling plus an Emu e6400-style output clipping
-stage, plus an unstable "meltdown" control that feeds the raw audio into
-the filter's control voltage path. It is a filter-meets-ring-modulator
-experiment; the resonance is nasty in a good way. This RNBO port uses the
-original normalized 0..1 values and keeps the fixed 15.5 kHz op-amp HP/LP
-filters - so use sample rates ABOVE 31 kHz (README note).
+What it is: "like if an e6400 went insane and grew shark teeth". A failed
+(and kept) experiment in cubic-Bezier undersampling: the input is averaged
+over cycles set by Cutoff and redrawn as cubic Bezier curves, which acts
+like a steep, ringy lowpass crossed with a ring modulator (it jitters
+between curve segments). Over/Under split the result into a highpassed and
+a lowpassed part like a crossover. Then the Z-filter output stage: drive,
+a DC blocker, 15.5 kHz biquad lowpasses around a soft clipper, output
+trim.
 
 Parameters:
 
-- p_cutoff (Cutoff) 0..1, default 0.5
-  Filter frequency, but with a cubic taper: internally pow(p, 3) scaled to
-  sample rate, so most of the musical range (about 100 Hz - 15 kHz for
-  typical SR) lives in the top half; the bottom third is extremely low.
-  A resonant-sounding lowpass through the Bezier curve, not a biquad.
+- cutoff_hz  (Cutoff)  20 .. 10000 Hz, default 620 Hz
+  Where the lowpassed part is 3 dB down (measured: about 0.215 x the
+  internal Bezier cycle rate). Exponent taper. The original knob A set the
+  cycle rate as A^3 (A 0.5 = ~620 Hz at 48 kHz; A 1 = ~4.9 kHz); above
+  that, up to 10 kHz, is an extension of the same law.
 
-- p_over (Over) 0..1, default 0.0
-  "Over" behavior: together with Under it makes a sort of crossover. With
-  Over only, tones above the cutoff are passed and boosted  (a peppy
-  YAHTC-like resonant filter that pushes highs). With Meltdown combined it
-  becomes the MOST aggressive: with Over at 1 and Meltdown at 0 you get
-  the famous "crazy overtones and harsh noise" setting. Linear 0..1.
+- over_pct  (Over)  0 .. 100 %, default 0
+  Level of the highpassed part (input minus the Bezier lowpass). Over on
+  its own = gritty highpass; with Meltdown at 0 it gives the "crazy
+  overtones and harsh noise" sound.
 
-- p_under (Under) 0..1, default 1.0
-  The complementary half of the "crossover": Under is the passive lowpass
-  accent. Over + Under both at 1 near the midpoint approximates the plain
-  resonant lowpass; Over alone is a distinctly gritty highpassed tone.
+- under_pct  (Under)  0 .. 100 %, default 100
+  Level of the lowpassed part. Over and Under both at 100 % give back
+  roughly the original sound.
 
-- p_meltdwn (Meltdown) 0..1, default 0.0
-  Feeds the raw (pre-filter) audio directly into the control voltage path
-  instead of the averaged/darkened one: more aliasing, chaos, and
-  ring-mod-flavored artifacts. Linear; moderate values already sound
-  "broken".
+- meltdown_pct  (Meltdwn)  0 .. 100 %, default 0
+  Feeds the raw input instead of the cycle average into the curve
+  points: aliasing and chaos, wilder and dirtier. With Over, it works the
+  other way round (0 % is the harsh one).
 
-- p_drive (Drive) 0..1, default 0.1
-  Input trim into the Z-style distortion stage. Internally a fourth-power
-  mapping: (p*10)^4, from about x1 at 0.1 up to x10000 (+80 dB!) at 1.0 -
-  a very steep taper with enormous range, designed for abuse. Default
-  0.1 is roughly unity.
+- drive_db  (Drive)  -24 .. +80 dB, default 0
+  Gain into the Z-style soft clipper. Original knob E: gain = (10E)^4, so
+  E 0.1 = 0 dB and E 1 = +80 dB — made for abuse. Nominal tuba levels
+  start to clip around +10 dB.
 
-- p_output (Output) 0..1, default 1.0
-  Output pad before the fixed 15.5 kHz stage. Linear trim.
+- output_db  (Output)  -36 .. 0 dB, default 0
+  Output trim (the original knob F was linear 0..1).
 
-Musical notes: works as a real acid box: Cutoff + Resonance-taste, then
-push Drive and Meltdown for industrial textures; or with Over for
-highpassed stabs. Because of the fixed 15.5 kHz filter, do NOT use
-low sample rates (README note above).
+Port notes: DSP matches the original double-precision path (differential
+test vs. the airwindows C++, max diff below -290 dB with float-exact knob
+values; the cycle grid makes it very sensitive to the original's float32
+knob rounding). Optimized: the cubic Bezier weights are computed once per
+sample for both channels (six pow() calls removed) and the random
+generator runs on native integer operations (bit-identical) — about 53%
+fewer ns/sample on a translated test harness. The fixed 15.5 kHz filters
+need a sample rate of 32 kHz or more.

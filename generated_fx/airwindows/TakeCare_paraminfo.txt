@@ -1,63 +1,67 @@
-TakeCare — Airwindows (Chris Johnson)
+TakeCare — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/takecare/
 
-What it is: a huge modal / delay-network wash (18 lines of 32767-sample
-memory each, about 4.5 MB). It is not a conventional "reverb" but a very
-long, very generative reverberant machine that behaves like three chained
-echo arenas with vibrato, sample-rate slop ("Derez") and a householder-style
-feedback. Sounds like a game-space of a fantasy cathedral AND like an
-old-school analog delay rack. This RNBO port uses the original normalized
-0..1 values and preserves all 18 x 32772 delay cells.
+What it is: a vibrato-modulated delay-network "space" — a 3x3 matrix of
+delay lines per side (18 lines of up to 32767 cells, ~4.7 MB) whose taps
+are swept by nine phase-offset copies of one vibrato LFO, cross-fed
+through a mixing matrix with regeneration, soft-clipped and run at a
+reduced internal sample rate ("derez") with Bezier smoothing. Anything
+from chorused ambience to warbly, seasick tape-space and runaway
+self-oscillating drones.
 
 Parameters:
 
-- p_speed (Speed) 0..1, default 0.15
-  Vibrato speed of the whole wash. Internally vibSpeed = p^5 * 0.1, a very
-  steep fifth-power taper; the last 20% of the knob changes the speed far
-  more than the first 80%. Slow settings are "tape-like" drift; fast
-  settings get chorous-y and detuned.
+- speed_hz  (Speed)  0.01 .. 400 Hz, default 0.03 Hz
+  Vibrato rate. Slow = drifting tape wobble; tens of Hz = growly
+  chorus/ring textures; hundreds of Hz = FM-like grit. Steep taper (the
+  original was A^5). With rando_pct up, the real rate wanders around
+  this value (up to ~1.3x on average).
 
-- p_rando (Rando) 0..1, default 0.5
-  Randomization of the vibrato phase/velocity per cycle. Internally
-  p^3 * 0.99 (cubic): at 0 it is a deterministic vibrato, at high values
-  each cycle gets a fresh randomized speed - the fuzz/growl of the space.
+- rando_pct  (Rando)  0 .. 100 %, default 12.5
+  How much each LFO cycle's speed is randomized. 0 = steady vibrato.
+  Original knob B: B^3 = rando_pct/100 (B 0.5 = 12.5 %).
 
-- p_depth (Depth) 0..1, default 0.5
-  Vibrato depth as a fraction of the buffer length. Internally p^2 * 0.5
-  (quadratic): 0 = frozen (a long metallic delay), 0.5+ deeply smeared
-  modal washes. One of the two big "mood" controls.
+- depth_pct  (Depth)  0 .. 100 %, default 25
+  How far the taps sweep, as a share of the buffer length. 0 = static
+  delays (metallic, combed), high = deep pitch smear. Original knob C:
+  C^2 = depth_pct/100.
 
-- p_regen (Regen) 0..1, default 0.5
-  Feedback into the lines. Internally p_regen * 0.0625 (max ~ -18 dB per
-  pass). Linear: at 0 the tail decays almost immediately; at 1 it is an
-  endless self-sustaining wash. Be careful: from ~0.8 upward tails get
-  visually "stuck" and can build to clipping (the module does not clip,
-  it just gets loud).
+- regen_pct  (Regen)  0 .. 100 %, default 50
+  Feedback through the network. Above roughly 80 % it builds into
+  self-sustaining, much louder drones (a soft clipper keeps it bounded,
+  but it can end up 20 dB above the input) — ride output_db.
 
-- p_derez (Derez) 0..1, default 0.5
-  Internal sample-rate style darkening ("tape slop") across the whole
-  wash. Internally p*2 gives a 0..2 range folded around the 1.0 midpoint:
-  below 0.5 (of p) it is an undersampled/smoothed dark-down state, above,
-  up to 1.0, it becomes "stepped" (Stillair/-like stepped quantization with
-  the Bezier undersampling). Default 0.5 is a musical middle ground.
+- derez_pct  (Derez)  -100 .. +100 %, default 0
+  Internal sample-rate reduction. Distance from 0 = how much lower the
+  rate is; negative = stepped (held samples, gritty), positive = smooth
+  (Bezier-interpolated, darker). Around 0 it already runs near half the
+  host rate, as the original does. Original knob E = 0.5 + pct/200.
 
-- p_buffer (Buffer) 0..1, default 0.5
-  Basic delay length of the arenas. Internally targetBuf = p^3 * 32510 +
-  256 samples: at 0 = tiny (256 samples), at 1 = 0.74 s at 44.1 kHz.
-  Steep cubic taper - the first 50% of the knob only doubles the size.
-  Tails run longer with bigger buffers.
+- buffer_ms  (Buffer)  5 .. 680 ms, default 175 ms
+  Base delay length (room size). Changes glide: the buffer moves one cell
+  per internal sample toward the new length, which bends pitch on the
+  way. The longest settings are limited by the 32767-cell lines (680 ms
+  at the highest internal rate; more is available at heavier derez, up
+  to the slider's maximum).
 
-- p_output (Output) 0..1, default 1.0
-  Linear output trim (unity at 1.0). Because of the long feedback, always
-  listen-from-quiet when experimenting with Rando/Regen extremes.
+- output_db  (Output)  -36 .. +6 dB, default 0
+  Level of the processed signal (before the dry/wet mix). The original
+  knob G was linear gain 0..1; +6 dB is an extension.
 
-- p_drywet (Dry/Wet) 0..1, default 1.0
-  Wet is internally 1 - (1-p)^2 (a soft "more/less" curve). Note the port
-  preserves the source's signed wet output: p_drywet 0 passes dry audio
-  only (after the source's near-1-second ramp) - it does not make a hard
-  bypass in the middle of a tail.
+- mix_pct  (Dry/Wet)  0 .. 100 %, default 100
+  Linear wet share (the original knob H used wet = 1-(1-H)^2).
 
-Musical notes: use it as a do-everything "space" on a reverb return. Give
-it time to develop (the 32767x18 state fills gradually); trial Buffer
-values at 0.1, 0.4, 0.7 to hear three different "rooms". For the classic
-airy "fog horn" sound: Regen 0.6-0.7, Depth 0.5, Derez 0.3, Rando 0.3.
+Behaviour change vs. the VST: speed and buffer are given in Hz and ms and
+converted through the current derez cycle rate, so they stay put when you
+move Derez or the sample rate. In the VST both were counted in derez
+cycles, so lowering the rate also slowed the vibrato and lengthened the
+delays (tape-speed style).
+
+Port notes: fixed a real port bug — `bezFraction/(bezFraction+1.0)`
+compiled to an integer division (0), which broke the Bezier timing and
+put the old port up to -47 dB away from the original (see
+docs/rnbo_codebox/example28.md). With that fix the core is bit-identical
+to the airwindows C++. Optimized: the nine vibrato sines come from one
+sin/cos pair (angle addition; max diff -220 dB) and the random generator
+runs on native integer operations (bit-identical) — about 33% fewer
+ns/sample on a translated test harness, measured old port vs new.

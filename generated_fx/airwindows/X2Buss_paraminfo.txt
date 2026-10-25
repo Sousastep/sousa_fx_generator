@@ -1,65 +1,52 @@
-X2Buss — Airwindows (Chris Johnson)
+X2Buss — Airwindows (Chris Johnson), MIT
 Page: https://www.airwindows.com/x2buss/
 
-What it is: the "X"-generation 2-buss: four bands of tone control (High,
-HiMid, LoMid, Bass) done with nonlinear (x|x|x) biquads and a soft-clip
-clipper stage on the output (the ADClip filter family, shared with
-ZAcidLowpass / ZOutputStage tone stages). Tone is musical "console turn the
-knob a little" rather than surgical EQ. This RNBO port uses the original
-normalized 0..1 values; note the port allocates the correct 33/65 slew
-buffers (README note: the source would otherwise overrun).
+What it is: the buss stages of ConsoleX2 as a standalone. In order: a
+ConsoleX-style input curve (about -4.2 dB at normal levels, rising to
+unity at full scale, so it softly expands toward 0 dBFS); the SmoothEQ2
+four-band EQ (biquad band splits — high, high-mid, low-mid, bass); the
+one-knob Bezier buss compressor from ConsoleX2 (it speeds up and drives
+harder as you turn it up rather than just lowering a threshold); a fader;
+and ClipOnly3 as the safety clipper.
 
 Parameters:
 
-- p_high (High) 0..1, default 0.5
-  High-band gain. Centered at 0.5 (= flat); each side is a mild
-  nonlinear x|x|x boost/cut, maximum about +/-6 dB, curved (not dB-taper
-  but nonlinear gain factor 1 + x*|x|*|x| with x = 2(p-0.5)). Small moves
-  sound great, big moves get a bit "solid-state".
+- high_db, hmid_db, lmid_db, bass_db  (High / HMid / LMid / Bass)
+  -24 .. +6 dB, default 0
+  Level of each band. Original knobs A-D: gain 1 + v^3 with v = 2*knob - 1
+  (0x .. 2x, so +6 dB is the original's maximum; its minimum removed the
+  band entirely).
 
-- p_hmid (HMid) 0..1, default 0.5
-  Same taper for the high-mid shelf/peak band.
+- high_freq_pct, hmid_freq_pct, lmid_freq_pct, bass_freq_pct
+  (HighF / HMidF / LMidF / BassF)  -100 .. +100 %, default 0
+  Where the bands split. They interact by design: the high/mid split is
+  3/4 HighF + 1/4 HMidF, the mid/bass split is 3/4 BassF + 1/4 LMidF, the
+  middle split sits between them nudged by both mid knobs, and the
+  difference between neighbouring knobs sets each split's Q (0.125 .. 4).
+  At 0 the splits are at about 8.4 kHz, 2.5 kHz and 312 Hz. With the others
+  at 0, HighF moves its split from ~3.6 kHz (-100) to ~16.5 kHz (+100),
+  BassF moves its split from ~5 Hz to ~1.7 kHz. Original knobs E-H =
+  0.5 + pct/200 (the original shows them only as 0..1).
 
-- p_lmid (LMid) 0..1, default 0.5
-  Same taper for the low-mid shelf band.
+- comp_pct  (Thresh)  0 .. 100 %, default 0 (off)
+  The one-knob buss compressor. Very steep curve: little happens below
+  ~40 %; from there it drives the signal in harder and clamps it with a
+  faster Bezier envelope, which makes it louder and denser (on a tuba take
+  70 % raised the level by about 18 dB into the clipper). Ride fader_db.
+  Original knob I (Thresh) = 1 - pct/100.
 
-- p_bass (Bass) 0..1, default 0.5
-  Same taper for the bass shelf band.
+- fader_db  (Fader)  -24 .. +12 dB, default 0
+  Output gain before the clipper. 0 dB is the original's centre (knob J
+  0.5); the original stopped at +6 dB, extended here so the input curve's
+  -4.2 dB can be made up with headroom to drive the clipper.
 
-- p_highf (HighF) 0..1, default 0.5
-  Reference frequency adjust for the high band (0.5 = neutral). It moves
-  the high corner from its default up or down, modulated also by the
-  neighboring bands' references, so this is a "family" control rather
-  than an absolute Hz readout.
+Note: 10 controls — two more than this repo's usual limit of 8; all of
+the original's controls are kept.
 
-- p_hmidf (HMidF) 0..1, default 0.5
-  Same idea for the high-mid band, which also sets the Q of the high band
-  (inter-band interaction, by design: treble and hi-mid lean on each
-  other).
-
-- p_lmidf (LMidF) 0..1, default 0.5
-  Low-mid reference; affects the low-mid band and the mid Q.
-
-- p_bassf (BassF) 0..1, default 0.5
-  Bass reference; also affects the low Q. Bands with 0.5/0.5/0.5/0.5 keep
-  the classic X2 reference points.
-
-All four (p_highf, p_hmidf, p_lmidf, p_bassf) are done with smooth
-nonlinear reference shifts rather than octave-week straight jumps, so
-move them in small steps for natural tone.
-
-- p_thresh (Thresh) 0..1, default 1.0
-  Output clipper ceiling, with ADClip-style noise for reconstructing most
-  one-sample top shapes; 1.0 = clipper at the limits (mostly passive),
-  lower settings progressively squish and distort the buss mix. Very
-  steep: small downward moves already matter.
-
-- p_fader (Fader) 0..1, default 0.5
-  Master gain/fader on the output, linear 0..1; 0.5 = unity by convention
-  inside the source (like a real console fader).
-
-Musical notes: this is a console-flavored tone + safety buss. Use the four
-tone controls around 0.45-0.6 for "console glue" moves and Thresh below
-1.0 only when the mix pushes - it eats a lot of level when engaged.
-Beware the internal reference-frequency interaction: raise BassF if the
-Bass shelf sits around the kick, or it'll lose instead of gain punch.
+Port notes: fixed the same integer-division defect as Dynamics3
+(`stepped/(stepped+1.0)` compiled to 0; see
+docs/rnbo_codebox/example28.md) in both compressor timers. Matches the
+airwindows C++ in a differential test (max diff below -115 dB, from the
+original's float32 knob storage amplified by the compressor). The random
+generator runs on native integer operations (bit-identical), about 36%
+fewer ns/sample on a translated test harness.

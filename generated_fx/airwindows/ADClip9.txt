@@ -1,6 +1,7 @@
 /* ADClip9 — standalone RNBO codebox~ port
  * in1/in2: left/right; out1/out2: left/right.
- * Controls use original normalized VST values (0..1).
+ * Controls are in musical units (dB / dBFS / mode); the original
+ * normalized VST mapping is noted beside each @param.
  * Double-precision DSP path; no added output dither.
  * Paste this entire file into codebox~ inside rnbo~.
  * MIT License
@@ -27,16 +28,14 @@
  * 
  */
 
-// VST A: Boost
-@param({ min: 0, max: 1 }) p_boost = 0.0;
-// VST B: Match
-@param({ min: 0, max: 1 }) p_match = 0.0;
-// VST C: Noise
-@param({ min: 0, max: 1 }) p_noise = 0.7;
-// VST D: Ceiling
-@param({ min: 0, max: 1 }) p_ceiling = 0.75;
-// VST E: Mode
-@param({ min: 0, max: 1 }) p_mode = 0.0;
+// Drive: VST A (Boost, boost/cliponly) / B (Match, match) = drive_db / 18; range extended to 30 dB
+@param({ min: 0, max: 30 }) drive_db = 0.0;
+// Noise threshold: VST C, level = 1-(1-C)^2 (C 0.7 = -0.82 dBFS)
+@param({ min: -18, max: 0 }) noise_db = -0.82;
+// Ceiling: VST D, level = 1-(1-D)^2 (D 0.75 = -0.56 dBFS)
+@param({ min: -18, max: 0 }) ceiling_db = -0.56;
+// Mode: VST E (Boost / Match / ClipOnly)
+@param({ enum: ["boost", "match", "cliponly"] }) mode_sel = 0;
 
 @state lastSampleL = 0;
 @state lastDryL = 0;
@@ -60,18 +59,18 @@
 @state ceiling = 0;
 @state mode: Int = 0;
 @state frame: Int = 0;
-// Xorshift32 with explicit unsigned wrapping (fixed, reproducible seeds).
+// Xorshift32 on RNBO's int32 bit operators (logical >> via mask), returned
+// as an unsigned 0..2^32-1 value; bit-identical to the airwindows uint32_t.
 function unsigned32(x) {
-    return x - floor(x / 4294967296.0) * 4294967296.0;
+    return x < 0 ? x + 4294967296.0 : x;
 }
 function advanceRandom(x) {
     let a: Int = x;
-    let left: Int = unsigned32(x * 8192.0);
-    let b: Int = unsigned32(a ^ left);
-    let shifted: Int = floor(b / 131072.0);
-    let c: Int = unsigned32(b ^ shifted);
-    left = unsigned32(c * 32.0);
-    return unsigned32(c ^ left);
+    a = a ^ (a << 13);
+    a = a ^ ((a >> 17) & 32767);
+    a = a ^ (a << 5);
+    let r = a;
+    return unsigned32(r);
 }
 function toIndex(x) {
     let result: Int = trunc(x);
@@ -100,11 +99,11 @@ overallscale = 1.0;
 	spacing = floor(overallscale); 
 	if (spacing < 1) spacing = 1; if (spacing > 16) spacing = 16;
 	
-	inputGain = pow(10.0,(p_boost*18.0)/20.0);
-	match = pow(10.0,(p_match*18.0)/20.0);
-	noiseLevel = 1.0-pow(1.0-p_noise,2.0);
-	ceiling = 1.0-pow(1.0-p_ceiling,2.0);
-	mode = toIndex(p_mode*2.999)+1;
+	inputGain = dbtoa(clamp(drive_db, 0.0, 30.0));
+	match = inputGain;
+	noiseLevel = dbtoa(clamp(noise_db, -18.0, 0.0));
+	ceiling = dbtoa(clamp(ceiling_db, -18.0, 0.0));
+	mode = toIndex(clamp(mode_sel, 0.0, 2.0))+1;
 
 }
 let sampleFrames = vectorsize() - frame - 1;

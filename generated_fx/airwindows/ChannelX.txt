@@ -1,6 +1,7 @@
 /* ChannelX — standalone RNBO codebox~ port
  * in1/in2: left/right; out1/out2: left/right.
- * Controls use original normalized VST values (0..1).
+ * Controls are in musical units (console / % / dB); the original
+ * normalized VST mapping is noted beside each @param.
  * Double-precision DSP path; no added output dither.
  * Paste this entire file into codebox~ inside rnbo~.
  * MIT License
@@ -27,12 +28,12 @@
  * 
  */
 
-// VST A: Console Type
-@param({ min: 0, max: 1 }) p_consoletype = 0.0;
-// VST B: Drive
-@param({ min: 0, max: 1 }) p_drive = 0.0;
-// VST C: Output
-@param({ min: 0, max: 1 }) p_output = 1.0;
+// Console type: VST A, trunc(A * 4.999) = index
+@param({ enum: ["neve", "api", "ssl", "teac", "mackie"] }) console = 0;
+// Drive: VST B = drive_pct / 200 (100 % = Spiral, 200 % = phat sine)
+@param({ min: 0, max: 200 }) drive_pct = 0.0;
+// Output: VST C = dbtoa(output_db)
+@param({ min: -36, max: 0 }) output_db = 0.0;
 
 const bip_dvLA = 0;
 const bip_dvLB = 1;
@@ -98,18 +99,18 @@ const bip_total = 40;
 @state threshold = 0;
 @state consoleType: Int = 0;
 @state frame: Int = 0;
-// Xorshift32 with explicit unsigned wrapping (fixed, reproducible seeds).
+// Xorshift32 on RNBO's int32 bit operators (logical >> via mask), returned
+// as an unsigned 0..2^32-1 value; bit-identical to the airwindows uint32_t.
 function unsigned32(x) {
-    return x - floor(x / 4294967296.0) * 4294967296.0;
+    return x < 0 ? x + 4294967296.0 : x;
 }
 function advanceRandom(x) {
     let a: Int = x;
-    let left: Int = unsigned32(x * 8192.0);
-    let b: Int = unsigned32(a ^ left);
-    let shifted: Int = floor(b / 131072.0);
-    let c: Int = unsigned32(b ^ shifted);
-    left = unsigned32(c * 32.0);
-    return unsigned32(c ^ left);
+    a = a ^ (a << 13);
+    a = a ^ ((a >> 17) & 32767);
+    a = a ^ (a << 5);
+    let r = a;
+    return unsigned32(r);
 }
 function toIndex(x) {
     let result: Int = trunc(x);
@@ -137,15 +138,15 @@ if (frame == 0) {
 overallscale = 1.0;
 	overallscale /= 44100.0;
 	overallscale *= samplerate();	
-	density = p_drive*2.0; 
+	density = clamp(drive_pct, 0.0, 200.0) * 0.01; 
 	phattity = density - 1.0;
 	if (density > 1.0) density = 1.0; 
 	if (phattity < 0.0) phattity = 0.0; 
 	nonLin = 5.0-density; 
-	output = p_output;
+	output = dbtoa(clamp(output_db, -36.0, 0.0));
 	rbAmount = 0.005832;
 	threshold = 0.33362176; 
-	consoleType = trunc(p_consoletype * 4.999);
+	consoleType = trunc(clamp(console, 0.0, 4.0));
  switch (consoleType)
 	{
 		case 0: rbAmount = 0.005832; threshold = 0.33362176; break; 
@@ -234,39 +235,49 @@ let inFramesToProcess = vectorsize();
 		let bip_delta = inputSampleL; 
 		let drySample = inputSampleL;
 		inputSampleL = maximum(minimum(inputSampleL,1.0),-1.0);
-		let phatSample = inputSampleL * 1.57079633; 
-		let X = phatSample; X *= X; 
-		let temp = phatSample * X; 
-		phatSample -= temp*0.16666666666666666666666666666666666; temp *= X;
-		phatSample += temp*0.00833333333333333333333333333333333; temp *= X;
-		phatSample -= temp*0.00019841269841269841269841269841269; temp *= X;
-		phatSample += temp*0.00000275573192239858906525573192239; temp *= X;
-		phatSample -= temp*0.00000002505210838544171877521083854; temp *= X;
-		phatSample += temp*0.00000000016059043836821614599392377; temp *= X;
-		phatSample -= temp*0.00000000000076471637318198164759011; temp *= X;
-		phatSample += temp*0.00000000000000281145725434552076319; temp *= X;
-		phatSample -= temp*0.00000000000000000822063524662432971; temp *= X;
-		phatSample += temp*0.00000000000000000001957294106339126;
+		let phatSample = 0.0;
+		let X = 0.0;
+		let temp = 0.0;
+		if (phattity > 0.0) {
+			phatSample = inputSampleL * 1.57079633; 
+			X = phatSample; X *= X; 
+			temp = phatSample * X; 
+			phatSample -= temp*0.16666666666666666666666666666666666; temp *= X;
+			phatSample += temp*0.00833333333333333333333333333333333; temp *= X;
+			phatSample -= temp*0.00019841269841269841269841269841269; temp *= X;
+			phatSample += temp*0.00000275573192239858906525573192239; temp *= X;
+			phatSample -= temp*0.00000002505210838544171877521083854; temp *= X;
+			phatSample += temp*0.00000000016059043836821614599392377; temp *= X;
+			phatSample -= temp*0.00000000000076471637318198164759011; temp *= X;
+			phatSample += temp*0.00000000000000281145725434552076319; temp *= X;
+			phatSample -= temp*0.00000000000000000822063524662432971; temp *= X;
+			phatSample += temp*0.00000000000000000001957294106339126;
+		}
 
 		inputSampleL *= 1.2533141373155;
 		
-		let distSample = inputSampleL * abs(inputSampleL); 
-		X = distSample; X *= X; 
-		temp = distSample * X; 
-		distSample -= temp*0.16666666666666666666666666666666666; temp *= X;
-		distSample += temp*0.00833333333333333333333333333333333; temp *= X;
-		distSample -= temp*0.00019841269841269841269841269841269; temp *= X;
-		distSample += temp*0.00000275573192239858906525573192239; temp *= X;
-		distSample -= temp*0.00000002505210838544171877521083854; temp *= X;
-		distSample += temp*0.00000000016059043836821614599392377; temp *= X;
-		distSample -= temp*0.00000000000076471637318198164759011; temp *= X;
-		distSample += temp*0.00000000000000281145725434552076319; temp *= X;
-		distSample -= temp*0.00000000000000000822063524662432971; temp *= X;
-		distSample += temp*0.00000000000000000001957294106339126;
+		let distSample = 0.0;
+		if (density > 0.0) {
+			distSample = inputSampleL * abs(inputSampleL); 
+			X = distSample; X *= X; 
+			temp = distSample * X; 
+			distSample -= temp*0.16666666666666666666666666666666666; temp *= X;
+			distSample += temp*0.00833333333333333333333333333333333; temp *= X;
+			distSample -= temp*0.00019841269841269841269841269841269; temp *= X;
+			distSample += temp*0.00000275573192239858906525573192239; temp *= X;
+			distSample -= temp*0.00000002505210838544171877521083854; temp *= X;
+			distSample += temp*0.00000000016059043836821614599392377; temp *= X;
+			distSample -= temp*0.00000000000076471637318198164759011; temp *= X;
+			distSample += temp*0.00000000000000281145725434552076319; temp *= X;
+			distSample -= temp*0.00000000000000000822063524662432971; temp *= X;
+			distSample += temp*0.00000000000000000001957294106339126;
 
-		distSample /= ((abs(inputSampleL) == 0.0) ?1.0:abs(inputSampleL));
-		inputSampleL = distSample; 
-		if (density < 1.0) inputSampleL = (drySample*(1-density))+(distSample*density); 
+			distSample /= ((abs(inputSampleL) == 0.0) ?1.0:abs(inputSampleL));
+			inputSampleL = distSample; 
+			if (density < 1.0) inputSampleL = (drySample*(1-density))+(distSample*density); 
+		} else {
+			inputSampleL = drySample;
+		}
 		if (phattity > 0.0) inputSampleL = (inputSampleL*(1-phattity))+(phatSample*phattity); 
 		bip[bip_dvLA] = bip_delta - inputSampleL; 
 		bip[bip_dvLB] = bip[bip_pvLA]-bip[bip_dvLA]; bip[bip_pvLA] = bip[bip_dvLA];
@@ -278,39 +289,47 @@ let inFramesToProcess = vectorsize();
 		bip_delta = inputSampleR; 
 		drySample = inputSampleR;
 		inputSampleR = maximum(minimum(inputSampleR,1.0),-1.0);
-		phatSample = inputSampleR * 1.57079633; 
-		X = phatSample; X *= X; 
-		temp = phatSample * X; 
-		phatSample -= temp*0.16666666666666666666666666666666666; temp *= X;
-		phatSample += temp*0.00833333333333333333333333333333333; temp *= X;
-		phatSample -= temp*0.00019841269841269841269841269841269; temp *= X;
-		phatSample += temp*0.00000275573192239858906525573192239; temp *= X;
-		phatSample -= temp*0.00000002505210838544171877521083854; temp *= X;
-		phatSample += temp*0.00000000016059043836821614599392377; temp *= X;
-		phatSample -= temp*0.00000000000076471637318198164759011; temp *= X;
-		phatSample += temp*0.00000000000000281145725434552076319; temp *= X;
-		phatSample -= temp*0.00000000000000000822063524662432971; temp *= X;
-		phatSample += temp*0.00000000000000000001957294106339126;
+		phatSample = 0.0;
+		if (phattity > 0.0) {
+			phatSample = inputSampleR * 1.57079633; 
+			X = phatSample; X *= X; 
+			temp = phatSample * X; 
+			phatSample -= temp*0.16666666666666666666666666666666666; temp *= X;
+			phatSample += temp*0.00833333333333333333333333333333333; temp *= X;
+			phatSample -= temp*0.00019841269841269841269841269841269; temp *= X;
+			phatSample += temp*0.00000275573192239858906525573192239; temp *= X;
+			phatSample -= temp*0.00000002505210838544171877521083854; temp *= X;
+			phatSample += temp*0.00000000016059043836821614599392377; temp *= X;
+			phatSample -= temp*0.00000000000076471637318198164759011; temp *= X;
+			phatSample += temp*0.00000000000000281145725434552076319; temp *= X;
+			phatSample -= temp*0.00000000000000000822063524662432971; temp *= X;
+			phatSample += temp*0.00000000000000000001957294106339126;
+		}
 
 		inputSampleR *= 1.2533141373155;
 		
-		distSample = inputSampleR * abs(inputSampleR); 
-		X = distSample; X *= X; 
-		temp = distSample * X; 
-		distSample -= temp*0.16666666666666666666666666666666666; temp *= X;
-		distSample += temp*0.00833333333333333333333333333333333; temp *= X;
-		distSample -= temp*0.00019841269841269841269841269841269; temp *= X;
-		distSample += temp*0.00000275573192239858906525573192239; temp *= X;
-		distSample -= temp*0.00000002505210838544171877521083854; temp *= X;
-		distSample += temp*0.00000000016059043836821614599392377; temp *= X;
-		distSample -= temp*0.00000000000076471637318198164759011; temp *= X;
-		distSample += temp*0.00000000000000281145725434552076319; temp *= X;
-		distSample -= temp*0.00000000000000000822063524662432971; temp *= X;
-		distSample += temp*0.00000000000000000001957294106339126;
+		distSample = 0.0;
+		if (density > 0.0) {
+			distSample = inputSampleR * abs(inputSampleR); 
+			X = distSample; X *= X; 
+			temp = distSample * X; 
+			distSample -= temp*0.16666666666666666666666666666666666; temp *= X;
+			distSample += temp*0.00833333333333333333333333333333333; temp *= X;
+			distSample -= temp*0.00019841269841269841269841269841269; temp *= X;
+			distSample += temp*0.00000275573192239858906525573192239; temp *= X;
+			distSample -= temp*0.00000002505210838544171877521083854; temp *= X;
+			distSample += temp*0.00000000016059043836821614599392377; temp *= X;
+			distSample -= temp*0.00000000000076471637318198164759011; temp *= X;
+			distSample += temp*0.00000000000000281145725434552076319; temp *= X;
+			distSample -= temp*0.00000000000000000822063524662432971; temp *= X;
+			distSample += temp*0.00000000000000000001957294106339126;
 
-		distSample /= ((abs(inputSampleR) == 0.0) ?1.0:abs(inputSampleR));
-		inputSampleR = distSample; 
-		if (density < 1.0) inputSampleR = (drySample*(1-density))+(distSample*density); 
+			distSample /= ((abs(inputSampleR) == 0.0) ?1.0:abs(inputSampleR));
+			inputSampleR = distSample; 
+			if (density < 1.0) inputSampleR = (drySample*(1-density))+(distSample*density); 
+		} else {
+			inputSampleR = drySample;
+		}
 		if (phattity > 0.0) inputSampleR = (inputSampleR*(1-phattity))+(phatSample*phattity); 
 		bip[bip_dvRA] = bip_delta - inputSampleR; 
 		bip[bip_dvRB] = bip[bip_pvRA]-bip[bip_dvRA]; bip[bip_pvRA] = bip[bip_dvRA];
@@ -319,28 +338,28 @@ let inFramesToProcess = vectorsize();
 		bip_dvE = bip[bip_pvRD]-bip[bip_dvRD]; bip[bip_pvRD] = bip[bip_dvRD];
 		inputSampleR *= (1.0+(abs(bip[bip_dvRC])*0.0618)+(abs(bip[bip_dvRD])*-0.05982)+(abs(bip_dvE)*0.0206));
 		
-		let clamp = (lastSampleLB - lastSampleLC) * 0.381966011250105;
-		clamp -= (lastSampleLA - lastSampleLB) * 0.6180339887498948482045;
-		clamp += inputSampleL - lastSampleLA; 
+		let slewClamp = (lastSampleLB - lastSampleLC) * 0.381966011250105;
+		slewClamp -= (lastSampleLA - lastSampleLB) * 0.6180339887498948482045;
+		slewClamp += inputSampleL - lastSampleLA; 
 		lastSampleLC = lastSampleLB;
 		lastSampleLB = lastSampleLA;
 		lastSampleLA = inputSampleL; 
-		if (clamp > threshold)
+		if (slewClamp > threshold)
 			inputSampleL = lastSampleLB + threshold;
-		if (-clamp > threshold)
+		if (-slewClamp > threshold)
 			inputSampleL = lastSampleLB - threshold;
 		
 		lastSampleLA = (lastSampleLA*0.381966011250105)+(inputSampleL*0.6180339887498948482045);
 		
-		clamp = (lastSampleRB - lastSampleRC) * 0.381966011250105;
-		clamp -= (lastSampleRA - lastSampleRB) * 0.6180339887498948482045;
-		clamp += inputSampleR - lastSampleRA; 
+		slewClamp = (lastSampleRB - lastSampleRC) * 0.381966011250105;
+		slewClamp -= (lastSampleRA - lastSampleRB) * 0.6180339887498948482045;
+		slewClamp += inputSampleR - lastSampleRA; 
 		lastSampleRC = lastSampleRB;
 		lastSampleRB = lastSampleRA;
 		lastSampleRA = inputSampleR; 
-		if (clamp > threshold)
+		if (slewClamp > threshold)
 			inputSampleR = lastSampleRB + threshold;
-		if (-clamp > threshold)
+		if (-slewClamp > threshold)
 			inputSampleR = lastSampleRB - threshold;
 		
 		lastSampleRA = (lastSampleRA*0.381966011250105)+(inputSampleR*0.6180339887498948482045);
