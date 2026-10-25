@@ -7,10 +7,12 @@ Implements 2D Vector Phaseshaping (VPS) Synthesis with Lissajous Vector Modulati
 
 INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input (prefer sine-ified tuba from 01_harmonic_isolator or raw tuba; in2 silent for 250 ms -> in1 is used for both sides)
-- in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs Lissajous LFO motion; internal fallback if unpatched)
+- in3: Tracked Fundamental Pitch f0 in Hz (from tuba_freq_tracker_v2; falls back to internal zero-crossing tracker if <= 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs Lissajous LFO motion; when it stops moving for 100 ms the LFO carries on at 0.75 Hz from where the bar left it)
+- in5: Optional Phase-Locked Tuba Phasor [0..1) (tuba_freq_tracker_v2 out3; the rig's s~ in5). While it moves, the shaped phase follows it exactly. Unpatched/static for 100 ms -> internal PLL (linear bandpass + Hilbert), continued from the last phase.
+- in6: Optional Smoothed Tuba Envelope [0..1] (e.g. cascade_env_follower; the rig's s~ in6). Unpatched/static for 250 ms -> internal 4-stage cascaded follower (5 ms attack / 120 ms release).
 - out1 / out2: Stereo Vector-Phaseshaped Formant Output
-- Level: on the sousa_mic.aif take (-32 dB RMS in) about -21 dB RMS / -10.5 dBFS peak at the defaults (offline render of the real RNBO code). The DC blocker sits at 10 Hz so pedal-note fundamentals pass.
+- Level: on the sousa_mic.aif take (-32 dB RMS in) about -20 dB RMS / -10.6 dBFS peak at the defaults, with or without in5/in6 (offline render of the real RNBO code). The DC blocker sits at 10 Hz so pedal-note fundamentals pass.
 
 PARAMETERS (7)
 
@@ -43,8 +45,16 @@ PARAMETERS (7)
    - Range: 0.0 to 1.0 (Default: 0.85)
    - Taper: Linear blend between trivial VPS (0.0) and DAFx-11 Section 3.2 Eq. 11–12 incomplete-period sinusoid folding (1.0).
    - Function: Suppresses phase-wrap discontinuities when 2v - 1 is non-integral during smooth formant sweeps.
+   - Only acts for v >= 1 (below that the shaper is one complete period). The paper's two branches (fractional part of v below / above 0.5) produce different shapes at exactly 0.5, so they are crossfaded over 0.35..0.65 to keep the waveform continuous while v sweeps.
 
 7. env_follow
    - Range: 0.0 to 1.0 (0.0 = Gate-Normalized Synth Sustain, 1.0 = Natural Tuba Hilbert Amplitude Envelope)
    - Taper: Linear crossfade.
-   - Function: Controls how closely the VPS output follows the tuba's instantaneous breath dynamics.
+   - Function: Controls how closely the VPS output follows the tuba's breath dynamics (in6, or the internal follower). The gate side fades in over ~4 ms and out over ~40 ms, so it cannot snap or chatter on a decaying note.
+
+CLICK FIXES (2026-10-25 audit)
+- Alias suppression had a jump inside every period when the fractional part of v was above 0.5 (up to 0.69 of full scale at v = 2.6), a jump at the period wrap for v between 0.5 and 1, and switched shape abruptly as v swept through n.5. At the defaults the Lissajous orbit (v 1.72..2.68) hit all three every LFO cycle. All removed: the shaper is continuous for every (d, v).
+- Amplitude came from a 2.5/25 ms peak follower that rippled ~12% at f0 on low notes (an AM buzz) and gated with a hard threshold. It now uses in6 or a cascaded follower (<2% ripple), a smoothed gate and a 1 ms output smoother.
+- Phase came from a resonant (nonlinear) svf + Hilbert PLL whose uncapped correction could sweep the pitch by ~800 Hz while re-locking on an attack. With in5 the tracker's phase is used directly; the fallback PLL uses a linear bandpass and its correction is capped at +/-25% of the pitch.
+- Bar start/stop and liss_ratio steps glide over 5 ms instead of jumping.
+- Anti-alias guard: d is kept far enough from 0 and 1 that neither segment of the shaper exceeds 0.2*sr in instantaneous frequency (v/d*f0 and |1-v|/(1-d)*f0). Inactive at normal settings; very small d with a high v still gives a deliberate buzzy burst every cycle.
