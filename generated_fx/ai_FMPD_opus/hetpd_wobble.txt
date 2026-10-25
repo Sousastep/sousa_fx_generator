@@ -1,0 +1,200 @@
+// ============================================================================
+// hetpd_wobble.txt — deep-dubstep wobble: heterodyne phase distortion of the
+//                    horn with the PD index swept by a bar-locked LFO
+//
+// From: V. Lazzarini, J. Timoney, J. Pekonen, V. Välimäki, "Adaptive Phase
+//       Distortion Synthesis", DAFx-09 paper 12: §2 eq. 5-6 (CZ phase
+//       distortion: piecewise-linear g(phi) with inflection d), §3.2 and
+//       §4.2 eq. 17 (heterodyne PD of an arbitrary input: y = re cos(psi) -
+//       im sin(psi), index may exceed the classic value), Fig. 18 (double
+//       inflection -> odd-harmonic "square" PD);
+//       J. Timoney, V. Lazzarini, B. Gibney, J. Pekonen, "Digital Emulation
+//       of Distortion Effects by Wave and Phase Shaping Methods", DAFx-10
+//       P65 (phase shaping as a distortion of an existing signal).
+// Parent: ai_freq_mod_phase_dist/heterodyne_pd_shaper (5 stars).
+//
+// The PD modulator runs on the tuba's own phase (in5), so the distortion
+// stays phase-locked to the note. The wobble LFO is a sine -> falling-ramp
+// morph, wobble_div cycles per bar.
+// Dry/wet: the dry is the real branch of the same Hilbert pair, so dry and
+// wet share the allpass phase response and blend without combing.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//        Only used to run the internal phase when in5 is static.
+//   in4: 0..1 one-bar phasor (wobble). Held (no movement for 100 ms) ->
+//        internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1 (PD modulator phase). Static ->
+//        internal ramp at f0, continued from the last tracked phase.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Wobbles per bar
+@param({ min: 1, max: 16 }) wobble_div = 4;
+// Wobble shape (0 = sine, 100 = falling ramp)
+@param({ min: 0, max: 100 }) wobble_shape = 30;
+// PD index at the bottom of the wobble
+@param({ min: 0, max: 5 }) index_lo = 0.2;
+// PD index at the top of the wobble
+@param({ min: 0, max: 5 }) index_hi = 2.5;
+// Inflection point d
+@param({ min: 0.02, max: 0.98 }) inflection_d = 0.15;
+// Saw (0) -> square (100) PD
+@param({ min: 0, max: 100 }) saw_square = 0;
+// Dry/wet (phase-aligned dry)
+@param({ min: 0, max: 100 }) blend = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+
+@state idxSm = 0.2;
+@state dcBlkL = new onepole();
+@state dcBlkR = new onepole();
+@state dSm = 0.15;
+
+@state reX = new FixedSampleArray(2, 4);
+@state reY = new FixedSampleArray(2, 4);
+@state imX = new FixedSampleArray(2, 4);
+@state imY = new FixedSampleArray(2, 4);
+@state reDel = new FixedSampleArray(2);
+
+// Real branch of the 4-stage quadrature pair, plus one sample of delay to
+// line it up with the imaginary branch. y = c*(x + y1) - x1 per stage.
+function hilbRe(ch: Int, x: number): number {
+	let s = x;
+	let c = 0.0;
+	for (let i: Int = 0; i < 4; i++) {
+		c = (i == 0) ? 0.4794008656 : ((i == 1) ? 0.8762184935 : ((i == 2) ? 0.9765975895 : 0.9974992559));
+		let y = c * (s + reY[ch][i]) - reX[ch][i];
+		reX[ch][i] = s;
+		reY[ch][i] = y;
+		s = y;
+	}
+	let out = reDel[ch];
+	reDel[ch] = s;
+	return out;
+}
+
+// Imaginary branch; this coefficient order gives the negative Hilbert, so negate.
+function hilbIm(ch: Int, x: number): number {
+	let s = x;
+	let c = 0.0;
+	for (let i: Int = 0; i < 4; i++) {
+		c = (i == 0) ? 0.1617584983 : ((i == 1) ? 0.7330289323 : ((i == 2) ? 0.9453497003 : 0.9905991567));
+		let y = c * (s + imY[ch][i]) - imX[ch][i];
+		imX[ch][i] = s;
+		imY[ch][i] = y;
+		s = y;
+	}
+	return 0.0 - s;
+}
+
+// Single-inflection PD offset g(x) = shaped phase - x (eq. 6).
+function pdSaw(x: number, d: number): number {
+	let g = 0.0;
+	if (x < d) {
+		g = x * (0.5 / d - 1.0);
+	} else {
+		g = 0.5 + (x - d) / (2.0 * (1.0 - d)) - x;
+	}
+	return g;
+}
+
+// Double inflection (Fig. 18): the saw offset twice per cycle -> odd harmonics.
+function pdSquare(x: number, d: number): number {
+	return 0.5 * pdSaw(wrap(2.0 * x, 0.0, 1.0), d);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar phase: in4 while it moves, else internal 2 s bar -------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + f0 / sr, 0.0, 1.0);
+}
+
+// --- Wobble LFO: sine -> falling ramp ---------------------------------------
+let div = round(clamp(wobble_div, 1.0, 16.0));
+let wPh = wrap(barPh * div, 0.0, 1.0);
+let lfoSine = 0.5 - 0.5 * cos(2.0 * pi * wPh);
+let lfoRamp = 1.0 - wPh;
+let lfo = linearinterp(clamp(wobble_shape, 0.0, 100.0) * 0.01, lfoSine, lfoRamp);
+let iLo = clamp(index_lo, 0.0, 5.0);
+let iHi = clamp(index_hi, 0.0, 5.0);
+// 2 ms smoothing turns the ramp's reset into a fast rise, not a click
+idxSm += (iLo + (iHi - iLo) * lfo - idxSm) * (1.0 - exp(-1.0 / (0.002 * sr)));
+dSm += (clamp(inflection_d, 0.02, 0.98) - dSm) * (1.0 - exp(-1.0 / (0.01 * sr)));
+
+// --- Analytic signal ---------------------------------------------------------
+let reL = hilbRe(0, xL);
+let imL = hilbIm(0, xL);
+let reR = hilbRe(1, xR);
+let imR = hilbIm(1, xR);
+
+// --- Heterodyne PD (eq. 17), small stereo offsets in phase and d ------------
+let sq = clamp(saw_square, 0.0, 100.0) * 0.01;
+let phL = ownPh;
+let phR = wrap(ownPh + 0.04, 0.0, 1.0);
+let dL = clamp(dSm - 0.025, 0.02, 0.98);
+let dR = clamp(dSm + 0.025, 0.02, 0.98);
+let gL = linearinterp(sq, pdSaw(phL, dL), pdSquare(phL, dL));
+let gR = linearinterp(sq, pdSaw(phR, dR), pdSquare(phR, dR));
+let psiL = 2.0 * pi * idxSm * gL;
+let psiR = 2.0 * pi * idxSm * gR;
+let hetL = reL * cos(psiL) - imL * sin(psiL);
+let hetR = reR * cos(psiR) - imR * sin(psiR);
+// the f0 partial's n = -1 sideband lands on 0 Hz: block DC
+let wetL = hetL - dcBlkL.next(hetL, 10.0);
+let wetR = hetR - dcBlkR.next(hetR, 10.0);
+
+// --- Dry/wet (dry = Hilbert real branch) ------------------------------------
+let b = clamp(blend, 0.0, 100.0) * 0.01;
+let oL = linearinterp(b, reL, wetL);
+let oR = linearinterp(b, reR, wetR);
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

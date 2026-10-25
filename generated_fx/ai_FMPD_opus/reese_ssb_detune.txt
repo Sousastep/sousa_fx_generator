@@ -1,0 +1,190 @@
+// ============================================================================
+// reese_ssb_detune.txt — Reese bass from the horn: the left channel is
+//                        single-sideband shifted up by a few Hz and the
+//                        right channel down, with the detune swelling over
+//                        the bar
+//
+// From: S. Wardle, "A Hilbert-Transformer Frequency Shifter for Audio",
+//       DAFx-98 §3 (SSB: Re{z e^{jwt}} = re cos - im sin), §6 (stereo phaser:
+//       opposite shifts on L/R, summed with the dry);
+//       S. Disch & U. Zölzer, "Modulation and Delay Line Based Digital Audio
+//       Effects", DAFx-99 §2 (SSB modulation);
+//       J. Timoney et al., "Examining the Oscillator Waveform Animation
+//       Effect", DAFx-14 §2 (the detuned-unison / Reese sound is two copies a
+//       few Hz apart beating);
+//       F. Esqueda, V. Välimäki, J. Parker, "Barberpole Phasing and Flanging
+//       Illusions", DAFx-15 paper 67 §4 (SSB shift + dry = endless phasing).
+// Parent: ai_freq_mod_phase_dist/11_bode_ssb_freq_shifter (5 stars).
+//
+// Dry/wet: the dry path is the REAL branch of the same Hilbert network, so dry
+// and wet share the allpass phase response and sum without combing. At
+// blend 50 % the dry and shifted copies beat: the classic Reese.
+// Below sub_mono_hz the shift is undone and replaced by the mono dry lows, so
+// the sub stays centred and steady.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (detune swell). Held (no movement for 100 ms) ->
+//        internal 2 s bar (120 BPM 4/4).
+//   in5: smoothed tuba volume envelope 0..1 (louder = wider detune). Static ->
+//        internal envelope follower.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Detune (Hz)
+@param({ min: 0, max: 12 }) detune_hz = 1.5;
+// Pitch tracking of the detune (0 = fixed Hz, 100 = scales with f0 / 55 Hz)
+@param({ min: 0, max: 100 }) pitch_track = 0;
+// Bar swell depth
+@param({ min: 0, max: 100 }) bar_swell = 40;
+// Swells per bar
+@param({ min: 1, max: 16 }) swell_div = 1;
+// Stereo width (100 = L up / R down)
+@param({ min: 0, max: 100 }) width = 100;
+// Mono sub below (Hz)
+@param({ min: 40, max: 250 }) sub_mono_hz = 120;
+// Dry/wet (phase-aligned dry)
+@param({ min: 0, max: 100 }) blend = 70;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevEnvIn = 0.0;
+@state envHold = 0.0;
+@state envInt = 0.0;
+
+@state dSmooth = 1.5;
+@state thL = 0.0;
+@state thR = 0.0;
+
+// Hilbert pair states, per channel and stage
+@state reX = new FixedSampleArray(2, 4);
+@state reY = new FixedSampleArray(2, 4);
+@state imX = new FixedSampleArray(2, 4);
+@state imY = new FixedSampleArray(2, 4);
+@state reDel = new FixedSampleArray(2);
+
+@state lpReL = new onepole();
+@state lpImL = new onepole();
+@state lpReR = new onepole();
+@state lpImR = new onepole();
+
+// Real branch of the 4-stage quadrature pair, plus one sample of delay to
+// line it up with the imaginary branch. y = c*(x + y1) - x1 per stage.
+function hilbRe(ch: Int, x: number): number {
+	let s = x;
+	let c = 0.0;
+	for (let i: Int = 0; i < 4; i++) {
+		c = (i == 0) ? 0.4794008656 : ((i == 1) ? 0.8762184935 : ((i == 2) ? 0.9765975895 : 0.9974992559));
+		let y = c * (s + reY[ch][i]) - reX[ch][i];
+		reX[ch][i] = s;
+		reY[ch][i] = y;
+		s = y;
+	}
+	let out = reDel[ch];
+	reDel[ch] = s;
+	return out;
+}
+
+// Imaginary branch; this coefficient order gives the negative Hilbert, so negate.
+function hilbIm(ch: Int, x: number): number {
+	let s = x;
+	let c = 0.0;
+	for (let i: Int = 0; i < 4; i++) {
+		c = (i == 0) ? 0.1617584983 : ((i == 1) ? 0.7330289323 : ((i == 2) ? 0.9453497003 : 0.9905991567));
+		let y = c * (s + imY[ch][i]) - imX[ch][i];
+		imX[ch][i] = s;
+		imY[ch][i] = y;
+		s = y;
+	}
+	return 0.0 - s;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let envIn = in5;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar phase: in4 while it moves, else internal 2 s bar -------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Envelope: in5 while it moves, else internal follower ------------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.005 * sr));
+let rel = 1.0 - exp(-1.0 / (0.120 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envHold = 0.1 * sr;
+} else if (envHold > 0.0) {
+	envHold -= 1.0;
+}
+prevEnvIn = envIn;
+let env = (envHold > 0.0) ? clamp(envIn, 0.0, 1.0) : clamp(sqrt(maximum(envInt, 0.0)) * 1.6, 0.0, 1.0);
+
+// --- Detune amount -----------------------------------------------------------
+let div = round(clamp(swell_div, 1.0, 16.0));
+let stepPh = wrap(barPh * div, 0.0, 1.0);
+let swellShape = 0.5 - 0.5 * cos(2.0 * pi * stepPh);
+let sw = clamp(bar_swell, 0.0, 100.0) * 0.01;
+let trk = clamp(pitch_track, 0.0, 100.0) * 0.01;
+let baseHz = clamp(detune_hz, 0.0, 12.0);
+let dTarget = baseHz * linearinterp(trk, 1.0, f0 / 55.0) * (1.0 - sw + sw * swellShape) * (0.6 + 0.4 * env);
+dSmooth += (dTarget - dSmooth) * (1.0 - exp(-1.0 / (0.02 * sr)));
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+thL = wrap(thL + dSmooth / sr, 0.0, 1.0);
+thR = wrap(thR + dSmooth * (1.0 - 2.0 * wd) / sr, 0.0, 1.0);
+
+// --- Analytic signal ---------------------------------------------------------
+let reL = hilbRe(0, xL);
+let imL = hilbIm(0, xL);
+let reR = hilbRe(1, xR);
+let imR = hilbIm(1, xR);
+
+// --- SSB shift; lows: undo the shift, put back mono dry ---------------------
+let subHz = clamp(sub_mono_hz, 40.0, 250.0);
+let lReL = lpReL.next(reL, subHz);
+let lImL = lpImL.next(imL, subHz);
+let lReR = lpReR.next(reR, subHz);
+let lImR = lpImR.next(imR, subHz);
+let cL = cos(2.0 * pi * thL);
+let sL = sin(2.0 * pi * thL);
+let cR = cos(2.0 * pi * thR);
+let sR = sin(2.0 * pi * thR);
+let lowMono = 0.5 * (lReL + lReR);
+let wetL = (reL - lReL) * cL - (imL - lImL) * sL + lowMono;
+let wetR = (reR - lReR) * cR - (imR - lImR) * sR + lowMono;
+
+// --- Dry/wet (dry = Hilbert real branch) ------------------------------------
+let b = clamp(blend, 0.0, 100.0) * 0.01;
+let oL = linearinterp(b, reL, wetL);
+let oR = linearinterp(b, reR, wetR);
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

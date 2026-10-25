@@ -1,0 +1,194 @@
+// ============================================================================
+// animator_delay_unison.txt — supersaw-style unison of the real horn:
+//                             pairs of up/down transposing delay lines
+//                             around the untouched dry centre voice
+//
+// From: J. Timoney, V. Lazzarini, J. Pekonen, V. Välimäki, "Examining the
+//       Oscillator Waveform Animation Effect", DAFx-14 §2 (multiple detuned
+//       oscillators), §5 eq. 24-25 (animator from delay-line pitch shifters:
+//       a pair of windowed taps whose delay ramps at a constant rate,
+//       w(x) windows, crossfaded half a cycle apart, summed with the input);
+//       S. Disch & U. Zölzer, DAFx-99 §3 (delay-line pitch shifting);
+//       J. Hyrkas & T. Smyth, "On Vibrato and Frequency (De)Modulation in
+//       Musical Sounds", DAFx-24 paper 84 §2 (delay slope <-> frequency
+//       ratio: f_out = f_in * (1 - dD/dn)).
+// Parent: ai_freq_mod_phase_dist/05_phaseshaper_supersaw_tri (4 stars).
+//
+// Each voice: delay D = W*(1 - s) + 2, s ramps at (ratio - 1)/W per sample,
+// two taps half a ramp apart with sin^2 windows (sum = 1). The window W is a
+// whole number of f0 periods, so the splice points land period-aligned on
+// the horn's waveform and the shifter grain is quieter.
+// Dry/wet: the dry centre voice is never delayed or filtered, so the lows
+// (below sub_mono_hz the voices are high-passed away) are the untouched horn.
+//
+// Inlets:
+//   in1 / in2: stereo tuba (dry stays stereo; the voices read the mid)
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (detune drift over a 4-bar cycle). Held (no
+//        movement for 100 ms) -> internal 2 s bar (120 BPM 4/4).
+//   in5: pitch confidence 0..1 (0 while the horn is silent, ~1 while
+//        playing). While it is low the window length is held, so a silent
+//        horn keeps the last note's grain. Never moved since load ->
+//        treated as 1 (unpatched).
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Detune of the outer pair (cents)
+@param({ min: 0, max: 50 }) detune_cents = 12;
+// Voice pairs (up + down each)
+@param({ min: 1, max: 4 }) voice_pairs = 3;
+// Detune drift cycles per bar
+@param({ min: 0.25, max: 4 }) drift_per_bar = 0.5;
+// Shifter window in f0 periods
+@param({ min: 2, max: 8 }) window_periods = 4;
+// Stereo width of the voices
+@param({ min: 0, max: 100 }) width = 80;
+// Voices high-passed below (Hz)
+@param({ min: 40, max: 250 }) sub_mono_hz = 120;
+// Dry/wet (dry centre voice stays)
+@param({ min: 0, max: 100 }) blend = 60;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+@state prevBarPh = 0.0;
+@state barCount = 0.0;
+
+@state prevConfIn = 0.0;
+@state confSeen = 0.0;
+@state confSm = 1.0;
+
+@state winHeld = 3491.0;
+@state winSm = 3491.0;
+
+@state buf = new FixedSampleArray(32768);
+@state wIdx: Int = 0;
+@state ramp = new FixedSampleArray(8);
+
+@state lpWetL = new onepole();
+@state lpWetR = new onepole();
+
+// Cubic read d samples behind the write head (d >= 2).
+function readBack(d: number): number {
+	let pos = wIdx - d;
+	while (pos < 0.0) {
+		pos += 32768.0;
+	}
+	let i0: Int = trunc(pos);
+	let fr = pos - i0;
+	let im1: Int = (i0 + 32767) % 32768;
+	let ia: Int = i0 % 32768;
+	let ib: Int = (i0 + 1) % 32768;
+	let ic: Int = (i0 + 2) % 32768;
+	return cubicinterp(fr, buf[im1], buf[ia], buf[ib], buf[ic]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let confIn = in5;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar phase: in4 while it moves, else internal 2 s bar; 4-bar position -----
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+if (barPh < prevBarPh - 0.5) {
+	barCount += 1.0;
+	if (barCount >= 4.0) {
+		barCount = 0.0;
+	}
+}
+prevBarPh = barPh;
+let pos4 = barCount + barPh;
+
+// --- Confidence gate: 0 = silent horn; never moved = unpatched -> 1 ---------
+if (abs(confIn - prevConfIn) > 0.0000001) {
+	confSeen = 1.0;
+}
+prevConfIn = confIn;
+let confRaw = (confSeen > 0.5) ? clamp(confIn, 0.0, 1.0) : 1.0;
+let cAtk = 1.0 - exp(-1.0 / (0.005 * sr));
+let cRel = 1.0 - exp(-1.0 / (0.150 * sr));
+confSm += (confRaw - confSm) * ((confRaw > confSm) ? cAtk : cRel);
+
+// --- Window: whole f0 periods, held while the horn is silent ----------------
+let periods = round(clamp(window_periods, 2.0, 8.0));
+if (confRaw > 0.5) {
+	winHeld = clamp(periods * sr / f0, 64.0, 30000.0);
+}
+winSm += (winHeld - winSm) * (1.0 - exp(-1.0 / (0.05 * sr)));
+let W = winSm;
+
+// --- Write the mid signal ----------------------------------------------------
+buf[wIdx] = 0.5 * (xL + xR);
+
+// --- Voices ------------------------------------------------------------------
+let nPairs: Int = trunc(clamp(voice_pairs, 1.0, 4.0) + 0.5);
+let nVoices: Int = nPairs * 2;
+let det = clamp(detune_cents, 0.0, 50.0);
+let drift = clamp(drift_per_bar, 0.25, 4.0);
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+let accL = 0.0;
+let accR = 0.0;
+for (let v: Int = 0; v < nVoices; v++) {
+	let pair: Int = v / 2;
+	let k = (pair + 1.0) / nPairs;
+	let dir = ((v % 2) == 0) ? 1.0 : -1.0;
+	// slow triangle drift per pair, offset so the pairs never move together
+	let triPh = wrap(pos4 * drift + k * 0.37, 0.0, 1.0);
+	let tri = 1.0 - 4.0 * abs(triPh - 0.5);
+	let cents = dir * det * k * (0.8 + 0.2 * tri);
+	let ratio = exp2(cents / 1200.0);
+	let s = wrap(ramp[v] + (ratio - 1.0) / W, 0.0, 1.0);
+	ramp[v] = s;
+	let s2 = wrap(s + 0.5, 0.0, 1.0);
+	let wa = sin(pi * s);
+	let wb = sin(pi * s2);
+	let y = wa * wa * readBack(W * (1.0 - s) + 2.0) + wb * wb * readBack(W * (1.0 - s2) + 2.0);
+	// alternate the pan side per pair: pair 0 up->L, pair 1 up->R, ...
+	let side = dir * (((pair % 2) == 0) ? 1.0 : -1.0);
+	accL += y * sqrt(0.5 * (1.0 + wd * side));
+	accR += y * sqrt(0.5 * (1.0 - wd * side));
+}
+wIdx = (wIdx + 1) % 32768;
+
+// incoherent voices add by power
+let norm = 1.0 / sqrt(nVoices);
+let subHz = clamp(sub_mono_hz, 40.0, 250.0);
+let vL = accL * norm;
+let vR = accR * norm;
+vL = vL - lpWetL.next(vL, subHz);
+vR = vR - lpWetR.next(vR, subHz);
+
+// --- Dry/wet: dry centre voice stays; voices fade in --------------------------
+let b = clamp(blend, 0.0, 100.0) * 0.01;
+let gDry = 1.0 - 0.4 * b;
+let gWet = b * 1.2;
+let oL = xL * gDry + vL * gWet;
+let oR = xR * gDry + vR * gWet;
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

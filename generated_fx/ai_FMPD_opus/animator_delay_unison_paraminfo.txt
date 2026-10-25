@@ -1,0 +1,61 @@
+================================================================================
+animator_delay_unison — Parameter Information
+================================================================================
+
+WHAT IT IS
+A supersaw for the real horn. Pairs of delay-line pitch shifters make copies
+of the tuba a few cents sharp and flat, which drift slowly with the bar, and
+they surround the untouched dry horn in the middle. This is the "waveform
+animator" trick that makes one oscillator sound like a stack of detuned saws.
+The copies are high-passed so the sub stays clean and mono.
+
+Source: Timoney, Lazzarini, Pekonen & Välimäki, DAFx-14 §2, §5 eq. 24–25
+(animator from delay-line pitch shifters); Disch & Zölzer, DAFx-99 §3;
+Hyrkas & Smyth, DAFx-24 paper 84 §2 (delay slope = frequency ratio).
+Parent: 05_phaseshaper_supersaw_tri.
+
+PARAMETERS (7 + output gain)
+
+1. detune_cents — 0…50 cents, default 12
+   Detune of the outermost pair; inner pairs are spaced evenly inside it.
+   5–15 = lush unison; 30–50 = sour, wide Reese.
+
+2. voice_pairs — 1…4 (stepped), default 3
+   Each pair is one sharp and one flat copy (2–8 voices).
+
+3. drift_per_bar — 0.25…4 cycles per bar, default 0.5
+   Speed of the slow detune drift (±20 % of each voice's detune), counted
+   over a 4-bar cycle.
+
+4. window_periods — 2…8 (stepped), default 4
+   Shifter grain length in f0 periods. Short = tighter, more "buzzy";
+   long = smoother but more smeared and delayed (up to ~270 ms at pedal
+   Bb). Held while the horn is silent.
+
+5. width — 0…100 %, default 80 %
+   Spreads sharp and flat copies to opposite sides, alternating per pair.
+
+6. sub_mono_hz — 40…250 Hz, default 120 Hz
+   The copies are high-passed below this; the lows are only the dry horn.
+
+7. blend — 0…100 %, default 60 %
+   Brings the copies in. The dry horn always stays as the centre voice
+   (it dips by 4 dB at 100 %), so there is never a dry/wet comb on the sub.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba (the copies read the mid signal).
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (drift). If held, an internal 2 s bar (120 BPM) runs.
+- in5: pitch confidence (0 while silent, ~1 while playing). While it is low
+  the grain length is held at the last note's value. Never moved since
+  load = unpatched = treated as 1.
+- out1 / out2: stereo.
+
+NOTES
+- The copies are delayed by up to one window, so they ring on briefly after
+  you stop; that is the shifter's buffer, not a bug.
+- No safety limiter; at 4 pairs, 50 cents and 100 % blend, peaks rise about
+  +3 dB.

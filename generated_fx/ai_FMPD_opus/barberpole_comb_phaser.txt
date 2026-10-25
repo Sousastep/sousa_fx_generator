@@ -1,0 +1,251 @@
+// ============================================================================
+// barberpole_comb_phaser.txt — space-bass endless phaser: a comb tuned to
+//                              the f0 period with a single-sideband shift
+//                              inside its feedback loop, so the peaks and
+//                              notches climb (or fall) forever, in key,
+//                              at a tempo-locked rate
+//
+// From: F. Esqueda, V. Välimäki, J. Parker, "Barberpole Phasing and
+//       Flanging Illusions", DAFx-15 paper 67: §3 eq. 9-10 (flanger comb and
+//       the endless-motion illusion), §4 eq. 11-14 (single-sideband
+//       modulation of the delayed path: the comb pattern moves by the shift
+//       frequency without ever resetting), §4.1 (allpass spectral delay in
+//       the path warps the notch spacing);
+//       S. Wardle, DAFx-98 §6 (stereo phaser from opposite SSB shifts);
+//       J. Kleimola, "Dispersion Modulation using Allpass Filters", DAFx-08
+//       paper 36 §2.3 (first-order allpass as frequency-dependent delay).
+// Parent: ai_freq_mod_phase_dist/barberpole_comb_ssb_flanger (4 stars),
+//         11_bode_ssb_freq_shifter (5 stars).
+//
+// Loop: v = x + fb * BP(SSB_shift(AP_warp(delay(v, T)))), wet = the
+// shifted path. BP = 20 Hz..7 kHz one-poles; the feedback is a soft tanh so
+// the loop cannot run away where the shifter is not exactly unity gain. T = comb_ratio f0 periods minus the loop's own phase delay at f0
+// (Hilbert real branch + warp allpasses, computed analytically) so the loop
+// resonates exactly on f0. Shift = cycles_per_bar * bar frequency (measured from in4).
+// Dry/wet: out = (1 - blend) dry + blend wet; 50 % is the classic phaser
+// sum. The barberpole motion IS the phase relation between the two.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (sets the shift rate). Held (no movement for
+//        100 ms) -> internal 2 s bar (120 BPM 4/4).
+//   in5: pitch confidence 0..1 (0 while the horn is silent, ~1 while
+//        playing). While it is low the comb tuning is held, so the tail keeps
+//        ringing on the last note. Never moved since load -> treated as 1.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Barberpole cycles per bar (- = falling)
+@param({ min: -8, max: 8 }) cycles_per_bar = 1;
+// Comb delay in f0 periods
+@param({ min: 0.5, max: 4 }) comb_ratio = 1;
+// Loop feedback
+@param({ min: 0, max: 95 }) feedback = 60;
+// Notch warp (allpass dispersion)
+@param({ min: 0, max: 90 }) warp = 40;
+// Stereo width (100 = L up / R down)
+@param({ min: 0, max: 100 }) width = 100;
+// Dry/wet (50 = phaser sum)
+@param({ min: 0, max: 100 }) blend = 50;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+@state f0Held = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state barHzSm = 0.5;
+
+@state prevConfIn = 0.0;
+@state confSeen = 0.0;
+
+@state tSm = 872.0;
+@state thL = 0.0;
+@state thR = 0.0;
+
+@state bufL = new FixedSampleArray(32768);
+@state bufR = new FixedSampleArray(32768);
+@state wIdx: Int = 0;
+
+@state hpLoopL = new onepole();
+@state hpLoopR = new onepole();
+@state lpLoopL = new onepole();
+@state lpLoopR = new onepole();
+
+@state apX = new FixedSampleArray(2, 2);
+@state apY = new FixedSampleArray(2, 2);
+
+@state reX = new FixedSampleArray(2, 4);
+@state reY = new FixedSampleArray(2, 4);
+@state imX = new FixedSampleArray(2, 4);
+@state imY = new FixedSampleArray(2, 4);
+@state reDel = new FixedSampleArray(2);
+
+// Real branch of the 4-stage quadrature pair, plus one sample of delay to
+// line it up with the imaginary branch. y = c*(x + y1) - x1 per stage.
+function hilbRe(ch: Int, x: number): number {
+	let s = x;
+	let c = 0.0;
+	for (let i: Int = 0; i < 4; i++) {
+		c = (i == 0) ? 0.4794008656 : ((i == 1) ? 0.8762184935 : ((i == 2) ? 0.9765975895 : 0.9974992559));
+		let y = c * (s + reY[ch][i]) - reX[ch][i];
+		reX[ch][i] = s;
+		reY[ch][i] = y;
+		s = y;
+	}
+	let out = reDel[ch];
+	reDel[ch] = s;
+	return out;
+}
+
+// Imaginary branch; this coefficient order gives the negative Hilbert, so negate.
+function hilbIm(ch: Int, x: number): number {
+	let s = x;
+	let c = 0.0;
+	for (let i: Int = 0; i < 4; i++) {
+		c = (i == 0) ? 0.1617584983 : ((i == 1) ? 0.7330289323 : ((i == 2) ? 0.9453497003 : 0.9905991567));
+		let y = c * (s + imY[ch][i]) - imX[ch][i];
+		imX[ch][i] = s;
+		imY[ch][i] = y;
+		s = y;
+	}
+	return 0.0 - s;
+}
+
+// Two first-order allpasses H = (a + z^-1)/(1 + a z^-1) (spectral delay).
+function warpAp(ch: Int, x: number, a: number): number {
+	let s = x;
+	for (let i: Int = 0; i < 2; i++) {
+		let y = a * s + apX[ch][i] - a * apY[ch][i];
+		apX[ch][i] = s;
+		apY[ch][i] = y;
+		s = y;
+	}
+	return s;
+}
+
+// Cubic read d samples behind the write head; ch 0 = L, 1 = R.
+function readBack(ch: Int, d: number): number {
+	let pos = wIdx - d;
+	while (pos < 0.0) {
+		pos += 32768.0;
+	}
+	let i0: Int = trunc(pos);
+	let fr = pos - i0;
+	let im1: Int = (i0 + 32767) % 32768;
+	let ia: Int = i0 % 32768;
+	let ib: Int = (i0 + 1) % 32768;
+	let ic: Int = (i0 + 2) % 32768;
+	let y = 0.0;
+	if (ch == 0) {
+		y = cubicinterp(fr, bufL[im1], bufL[ia], bufL[ib], bufL[ic]);
+	} else {
+		y = cubicinterp(fr, bufR[im1], bufR[ia], bufR[ib], bufR[ic]);
+	}
+	return y;
+}
+
+// Phase (rad) at w of (z^-1 - c)/(1 - c z^-1): continuous from 0 to -pi.
+// A Hilbert stage (c - z^-1)/(1 - c z^-1) is this times -1; the four sign
+// flips of the chain cancel, so the chain phase is the sum of these.
+function apPhase(c: number, w: number): number {
+	return atan2(0.0 - sin(w), cos(w) - c) - atan2(c * sin(w), 1.0 - c * cos(w));
+}
+
+// Phase (rad) at w of (a + z^-1)/(1 + a z^-1): continuous from 0 to -pi.
+function warpPhase(a: number, w: number): number {
+	return atan2(0.0 - sin(w), a + cos(w)) - atan2(0.0 - a * sin(w), 1.0 + a * cos(w));
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let confIn = in5;
+
+// --- Confidence: 0 = silent horn; never moved = unpatched -> 1 ---------------
+if (abs(confIn - prevConfIn) > 0.0000001) {
+	confSeen = 1.0;
+}
+prevConfIn = confIn;
+let confRaw = (confSeen > 0.5) ? clamp(confIn, 0.0, 1.0) : 1.0;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz; held while silent
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+if (confRaw > 0.5) {
+	f0Held = f0Target;
+}
+f0Smooth += (f0Held - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar frequency: from in4's increment while it moves, else 0.5 Hz --------
+let barInc = wrap(barIn - prevBarIn + 0.5, 0.0, 1.0) - 0.5;
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+let barHzT = (barHold > 0.0) ? clamp(abs(barInc) * sr, 0.05, 8.0) : 0.5;
+barHzSm += (barHzT - barHzSm) * (1.0 - exp(-1.0 / (0.25 * sr)));
+
+// --- Shift phases -------------------------------------------------------------
+let shiftHz = clamp(cycles_per_bar, -8.0, 8.0) * barHzSm;
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+thL = wrap(thL + shiftHz / sr, 0.0, 1.0);
+thR = wrap(thR + shiftHz * (1.0 - 2.0 * wd) / sr, 0.0, 1.0);
+
+// --- Comb delay: comb_ratio periods minus the loop's phase delay at f0 ------
+// (the loop resonates where its total phase is a whole number of cycles)
+let a = 0.0 - 0.9 * clamp(warp, 0.0, 90.0) * 0.01;
+let w0 = 2.0 * pi * f0 / sr;
+let phLoop = 0.0 - w0 + apPhase(0.4794008656, w0) + apPhase(0.8762184935, w0) + apPhase(0.9765975895, w0) + apPhase(0.9974992559, w0) + 2.0 * warpPhase(a, w0);
+let period = sr / f0;
+let tT = clamp(comb_ratio, 0.5, 4.0) * period + phLoop / w0;
+// a loop longer than the wanted delay: add whole periods (keeps f0 in tune)
+if (tT < 2.0) {
+	tT += period * ceil((2.0 - tT) / period);
+}
+tT = clamp(tT, 2.0, 30000.0);
+tSm += (tT - tSm) * (1.0 - exp(-1.0 / (0.02 * sr)));
+
+// --- Loop -------------------------------------------------------------------
+let fb = clamp(feedback, 0.0, 95.0) * 0.01;
+let dL = warpAp(0, readBack(0, tSm), a);
+let dR = warpAp(1, readBack(1, tSm), a);
+let reL = hilbRe(0, dL);
+let imL = hilbIm(0, dL);
+let reR = hilbRe(1, dR);
+let imR = hilbIm(1, dR);
+let ssbL = reL * cos(2.0 * pi * thL) - imL * sin(2.0 * pi * thL);
+let ssbR = reR * cos(2.0 * pi * thR) - imR * sin(2.0 * pi * thR);
+// Band-limit inside the loop: the Hilbert pair loses quadrature below
+// ~40 Hz and above a few kHz, where the rotation can exceed unity gain, and
+// each pass walks energy further out; the band edges also fade the
+// barberpole in and out (the Shepard part of the illusion).
+let bpL = lpLoopL.next(ssbL - hpLoopL.next(ssbL, 20.0), 7000.0);
+let bpR = lpLoopR.next(ssbR - hpLoopR.next(ssbR, 20.0), 7000.0);
+let wetL = bpL;
+let wetR = bpR;
+// soft feedback: linear for small signals, cannot run away
+bufL[wIdx] = xL + 1.5 * tanh(fb * wetL / 1.5);
+bufR[wIdx] = xR + 1.5 * tanh(fb * wetR / 1.5);
+wIdx = (wIdx + 1) % 32768;
+
+// --- Dry/wet ------------------------------------------------------------------
+let b = clamp(blend, 0.0, 100.0) * 0.01;
+let oL = linearinterp(b, xL, wetL);
+let oR = linearinterp(b, xR, wetR);
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

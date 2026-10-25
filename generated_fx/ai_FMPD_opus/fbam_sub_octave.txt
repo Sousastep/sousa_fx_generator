@@ -1,0 +1,200 @@
+// ============================================================================
+// fbam_sub_octave.txt — deep sub: an octave divider counting the tuba's
+//                       phase cycles, voiced by a feedback-AM oscillator for
+//                       grit, pumped per bar step, added under the dry horn
+//
+// From: F. Esqueda, O. Lähdeoja, V. Välimäki, "Algorithms for Guitar-Driven
+//       Synthesis: Application to an Augmented Guitar", SMC-18: §2 (sub-octave
+//       generator: estimate a clock at f0, divide it by two), §2.3 (S-R latch
+//       / divider: toggle once per input cycle), §2.5 ("processor": combine
+//       the divided oscillator with the input);
+//       V. Lazzarini, J. Timoney, J. Kleimola, V. Välimäki, "Five Variations
+//       on a Feedback Theme", DAFx-09 paper 31: §2 eq. 1-3
+//       (feedback AM: y(n) = cos(wn)[1 + beta y(n-1)], a coefficient-modulated
+//       one-pole fed a sinusoid; beta adds harmonics), §3 (variations).
+//       Here run in the phase domain at 64 steps per cycle (see below).
+// Parent: ai_freq_mod_phase_dist/08_suboctave_phase_ringmod (4 stars).
+//
+// Divider: every wrap of the tuba phasor (in5) advances a counter; the sub
+// phase is (phase + count) / N, N = 2 or 4. It is the tuba's own phase
+// divided, so the sub never drifts or beats against the horn. No Schmitt
+// trigger / zero-crossing detection is involved.
+// Dry/wet: the sub is ADDED to the untouched dry horn (sub_mix), mono, so
+// there is no dry/wet comb at all.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//        Only used to run the internal phase when in5 is static.
+//   in4: 0..1 one-bar phasor (pump). Held (no movement for 100 ms) ->
+//        internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1 (divided for the sub). Static ->
+//        internal ramp at f0, continued from the last tracked phase.
+//   in6: smoothed tuba volume envelope 0..1 (sub level / gate). Static ->
+//        internal envelope follower.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Octaves down (1 = f0/2, 2 = f0/4)
+@param({ min: 1, max: 2 }) octave_down = 1;
+// Feedback AM amount (grit)
+@param({ min: 0, max: 150 }) fbam = 60;
+// Pump depth per step
+@param({ min: 0, max: 100 }) pump = 30;
+// Pump steps per bar
+@param({ min: 1, max: 16 }) pump_div = 4;
+// Sub tone (2-pole lowpass)
+@param({ min: 60, max: 2000 }) tone_hz = 400;
+// Envelope follow (0 = gate, 100 = follows dynamics)
+@param({ min: 0, max: 100 }) env_follow = 100;
+// Sub level added to the dry
+@param({ min: 0, max: 100 }) sub_mix = 60;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+@state prevOwnPh = 0.0;
+@state cycleCount = 0.0;
+
+@state prevEnvIn = 0.0;
+@state envHold = 0.0;
+@state envInt = 0.0;
+@state ampSm = 0.0;
+
+@state fbTab = new FixedSampleArray(65);
+@state ctlCount: Int = 0;
+@state lp1 = new onepole();
+@state lp2 = new onepole();
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+let envIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar phase: in4 while it moves, else internal 2 s bar -------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + f0 / sr, 0.0, 1.0);
+}
+
+// --- Divider: count tuba cycles (SMC-18 §2.3) -------------------------------
+let nDiv = (round(clamp(octave_down, 1.0, 2.0)) > 1.5) ? 4.0 : 2.0;
+if (ownPh < prevOwnPh - 0.5) {
+	cycleCount += 1.0;
+	if (cycleCount >= 4.0) {
+		cycleCount = 0.0;
+	}
+}
+prevOwnPh = ownPh;
+let subPh = wrap((ownPh + cycleCount) / nDiv, 0.0, 1.0);
+
+// --- Envelope: in6 while it moves, else internal follower ------------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.004 * sr));
+let rel = 1.0 - exp(-1.0 / (0.080 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envHold = 0.1 * sr;
+} else if (envHold > 0.0) {
+	envHold -= 1.0;
+}
+prevEnvIn = envIn;
+let env = (envHold > 0.0) ? clamp(envIn, 0.0, 1.0) : clamp(envInt * 2.5, 0.0, 1.0);
+
+// --- Sub amplitude: gate <-> envelope, times the bar-step pump ---------------
+let gateV = clamp(env * 8.0, 0.0, 1.0);
+let ampT = linearinterp(clamp(env_follow, 0.0, 100.0) * 0.01, gateV, env);
+let div = round(clamp(pump_div, 1.0, 16.0));
+let stepPh = wrap(barPh * div, 0.0, 1.0);
+let duck = (1.0 - stepPh) * (1.0 - stepPh) * (1.0 - stepPh);
+ampT *= 1.0 - clamp(pump, 0.0, 100.0) * 0.01 * duck;
+ampSm += (ampT - ampSm) * (1.0 - exp(-1.0 / (0.003 * sr)));
+
+// --- Feedback AM oscillator on the divided phase (DAFx-09 eq. 1, D = 1) -----
+// Run in the phase domain, 64 steps per cycle, so the timbre does not depend
+// on how many samples a sub cycle lasts (at audio-rate D = 1 a 27 Hz sub
+// would sit near the pole for ~800 samples and blow up). The periodic steady
+// state depends only on beta: rebuild it every 64 samples, remove its mean,
+// normalise its peak, read it with linear interpolation.
+if (ctlCount <= 0) {
+	let beta = clamp(fbam, 0.0, 150.0) * 0.01;
+	let y = 0.0;
+	for (let cyc: Int = 0; cyc < 3; cyc++) {
+		for (let k: Int = 0; k < 64; k++) {
+			y = cos(2.0 * pi * k / 64.0) * (1.0 + beta * y);
+			if (cyc == 2) {
+				fbTab[k] = y;
+			}
+		}
+	}
+	let mean = 0.0;
+	for (let k: Int = 0; k < 64; k++) {
+		mean += fbTab[k];
+	}
+	mean = mean / 64.0;
+	let pk = 0.000001;
+	for (let k: Int = 0; k < 64; k++) {
+		fbTab[k] = fbTab[k] - mean;
+		pk = maximum(pk, abs(fbTab[k]));
+	}
+	for (let k: Int = 0; k < 64; k++) {
+		fbTab[k] = fbTab[k] / pk;
+	}
+	fbTab[64] = fbTab[0];
+	ctlCount = 64;
+}
+ctlCount -= 1;
+let tPos = subPh * 64.0;
+let ti: Int = trunc(tPos);
+ti = clamp(ti, 0, 63);
+let osc = linearinterp(tPos - ti, fbTab[ti], fbTab[ti + 1]);
+let tone = clamp(tone_hz, 60.0, minimum(2000.0, sr * 0.45));
+let sub = lp2.next(lp1.next(osc, tone), tone) * ampSm * 0.5;
+
+// --- Add the mono sub under the untouched dry --------------------------------
+let mixAmt = clamp(sub_mix, 0.0, 100.0) * 0.01;
+let oL = xL + sub * mixAmt;
+let oR = xR + sub * mixAmt;
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

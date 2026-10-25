@@ -1,0 +1,67 @@
+================================================================================
+expfm_tvdl_growl — Parameter Information
+================================================================================
+
+WHAT IT IS
+Analog-style exponential FM applied to the whole horn through a wobbling
+delay line: the dark, lopsided, throaty growl of a modular through-zero-less
+FM patch. It is re-tuned so the note stays in pitch, the modulator runs on
+the tuba's own phase, and the depth hits and decays on each bar step. Turn
+re-tuning down and every step becomes a pitch swoop.
+
+Source: DAFx-20 paper 61 §4–4.3 (exponential FM, its DC offset
+I0(alpha ln 2), re-tuning); Smyth, DAFx-26 paper 36 §2 (FM with a
+time-varying delay line); Hyrkas & Smyth, DAFx-24 paper 84 §2.
+Parent: retuned_exp_fm_ltz.
+
+PARAMETERS (7 + output gain)
+
+1. exp_octaves — 0…3 octaves, default 0.8
+   Peak frequency swing of the horn, in octaves up and down (exponential).
+   0 = clean.
+
+2. mod_ratio — 0.5…4 × f0, default 1
+   Modulator frequency, snapped to 0.5 steps. 1 = harmonic growl; 0.5 =
+   sub-octave growl; 1.5 / 2.5 = hollow, nasal.
+
+3. retune — 0…100 %, default 100 %
+   100 = fully re-tuned: exponential FM's built-in pitch drift is divided
+   out and the note stays in tune. Lower = part of the drift is left in;
+   since a delay cannot hold a pitch change, it shows up as a swoop on every
+   depth change that settles back in tune within ~60 ms.
+
+4. bar_depth — 0…100 %, default 50 %
+   How much the depth decays through each step (hits on the step, then
+   closes). 0 = steady.
+
+5. depth_div — 1…16 (stepped), default 2
+   Depth steps per bar.
+
+6. tone_hz — 200…12000 Hz, default 4000 Hz
+   Two-pole lowpass on the wet.
+
+7. blend — 0…100 %, default 100 %
+   Dry/wet. The dry is read from the same delay line at the same centre
+   delay, so parallel blends do not comb.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+  Only used when in5 is not patched.
+- in4: one-bar phasor (depth steps). If held, an internal 2 s bar (120 BPM)
+  runs.
+- in5: phase-locked tuba phasor (modulator). If static, an internal ramp at
+  f0 carries on from the last phase.
+- out1 / out2: stereo.
+
+NOTES
+- Latency = the centre delay, which follows the deepest swing: about 2 ms
+  at the defaults on A1, ~20 ms at 3 octaves with ratio 0.5. It rises at
+  once and relaxes over about half a second.
+- No through-zero: the horn never plays backwards, so the delay is always
+  causal.
+- The wet path has a 10 Hz DC blocker.
+- No safety limiter.

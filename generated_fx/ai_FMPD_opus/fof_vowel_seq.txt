@@ -1,0 +1,169 @@
+// ============================================================================
+// fof_vowel_seq.txt — talking "yoi" bass: a filterless FOF formant locked
+//                     to every tuba period, stepping between two vowels
+//                     on each bar step with a glide
+//
+// From: V. Lazzarini & J. Timoney, "Synthesis of Resonant Sounds with a
+//       Heterodyne Model", DAFx-12 paper 58: §2.1-2.2 eq. 4-7 (a resonance
+//       = a decaying exponential R^(n mod T0) restarted every period times a
+//       carrier at the formant frequency, R = exp(-pi fc / (sr Q))),
+//       eq. 8-10 (adjacent-harmonic carrier interpolation so fractional
+//       formant ratios stay harmonic and click-free), §3 eq. 12 (FOF skirt:
+//       subtract a faster exponential for a rounded grain onset);
+//       P. R. Cook, "Toward the Perfect Audio Morph? Singing Voice Synthesis
+//       and Processing", DAFx-98 §2.4 (FOFs as formant impulse responses).
+// Parent: ai_freq_mod_phase_dist/heterodyne_fof_resonator (5 stars).
+//
+// Wet = the horn ring-modulated by the formant grain (heterodyne excitation,
+// keeps the horn's own attack and breath) plus the pure FOF resynthesis at
+// the horn's envelope. Both run on the tuba's phase, so every wet partial
+// is a harmonic in phase with the dry, and the dry/wet blend is coherent.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//        Only used to run the internal phase when in5 is static.
+//   in4: 0..1 one-bar phasor (vowel steps). Held (no movement for 100 ms) ->
+//        internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1 (grain restarts each period). Static
+//        -> internal ramp at f0, continued from the last tracked phase.
+//   in6: smoothed tuba volume envelope 0..1 (FOF resynthesis level). Static
+//        -> internal envelope follower.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Vowel A formant (x f0)
+@param({ min: 1, max: 16 }) vowel_lo = 3;
+// Vowel B formant (x f0)
+@param({ min: 1, max: 16 }) vowel_hi = 9;
+// Vowel steps per bar (A, B, A, B ...)
+@param({ min: 1, max: 16 }) steps_per_bar = 4;
+// Glide between vowels (ms)
+@param({ min: 5, max: 500 }) glide_ms = 60;
+// Formant resonance Q
+@param({ min: 1, max: 40 }) resonance_q = 10;
+// FOF skirt (rounded grain onset)
+@param({ min: 0, max: 100 }) fof_skirt = 50;
+// Dry/wet (phase-locked wet)
+@param({ min: 0, max: 100 }) blend = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+
+@state prevEnvIn = 0.0;
+@state envHold = 0.0;
+@state envInt = 0.0;
+
+@state logRatio = 1.585;
+@state qSm = 10.0;
+
+@state dcBlkL = new onepole();
+@state dcBlkR = new onepole();
+
+// One formant grain on the tuba phase p (eq. 4-12), ratio = fc / f0.
+function grain(p: number, ratio: number, q: number, skirt: number): number {
+	let alpha = pi * ratio / q;
+	let fastMult = 3.0 + 12.0 * skirt;
+	let envl = (exp(0.0 - alpha * p) - skirt * exp(0.0 - alpha * fastMult * p)) * (1.0 + 0.55 * skirt);
+	let k = floor(ratio);
+	let a = ratio - k;
+	let car = (1.0 - a) * cos(2.0 * pi * k * p) + a * cos(2.0 * pi * (k + 1.0) * p);
+	// wider grains (low Q) carry more energy: rough level match across Q
+	return envl * car * sqrt(1.0 + 0.22 * alpha);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+let envIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar phase: in4 while it moves, else internal 2 s bar -------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + f0 / sr, 0.0, 1.0);
+}
+
+// --- Envelope: in6 while it moves, else internal follower ------------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.004 * sr));
+let rel = 1.0 - exp(-1.0 / (0.060 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envHold = 0.1 * sr;
+} else if (envHold > 0.0) {
+	envHold -= 1.0;
+}
+prevEnvIn = envIn;
+let env = (envHold > 0.0) ? clamp(envIn, 0.0, 1.0) : clamp(envInt * 2.5, 0.0, 1.0);
+
+// --- Vowel sequence with log-domain glide -------------------------------------
+let steps = round(clamp(steps_per_bar, 1.0, 16.0));
+let stepIdx: Int = trunc(barPh * steps);
+let target = ((stepIdx % 2) == 0) ? clamp(vowel_lo, 1.0, 16.0) : clamp(vowel_hi, 1.0, 16.0);
+let glide = clamp(glide_ms, 5.0, 500.0) * 0.001;
+logRatio += (log2(target) - logRatio) * (1.0 - exp(-1.0 / (glide * sr)));
+qSm += (clamp(resonance_q, 1.0, 40.0) - qSm) * (1.0 - exp(-1.0 / (0.01 * sr)));
+let ratioL = clamp(exp2(logRatio - 0.04), 1.0, 17.0);
+let ratioR = clamp(exp2(logRatio + 0.04), 1.0, 17.0);
+let skirt = clamp(fof_skirt, 0.0, 100.0) * 0.01;
+
+// --- Grains, heterodyne excitation + FOF resynthesis ------------------------
+let gL = grain(ownPh, ratioL, qSm, skirt);
+let gR = grain(ownPh, ratioR, qSm, skirt);
+let synL = (gL + 0.25 * sin(2.0 * pi * ownPh)) * env * 0.5;
+let synR = (gR + 0.25 * sin(2.0 * pi * ownPh)) * env * 0.5;
+let rawL = xL * (0.35 + 1.3 * gL) + synL;
+let rawR = xR * (0.35 + 1.3 * gR) + synR;
+// the grain has a DC term, so the ring path folds part of each partial to 0 Hz
+// x 0.6: level-matched to the dry at the defaults
+let wetL = (rawL - dcBlkL.next(rawL, 10.0)) * 0.6;
+let wetR = (rawR - dcBlkR.next(rawR, 10.0)) * 0.6;
+
+// --- Dry/wet ------------------------------------------------------------------
+let b = clamp(blend, 0.0, 100.0) * 0.01;
+let oL = linearinterp(b, xL, wetL);
+let oR = linearinterp(b, xR, wetR);
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

@@ -1,0 +1,224 @@
+// ============================================================================
+// expfm_tvdl_growl.txt — dark growl: exponential FM of the whole horn
+//                        through a time-varying delay line, re-tuned so it
+//                        stays in pitch, modulator locked to the tuba's
+//                        phase, depth decaying on each bar step
+//
+// From: DAFx-20 paper 61 on linear-through-zero and re-tuned exponential
+//       FM (its title page is missing from the corpus extract): §4 eq. 14-18
+//       (exponential FM w(t) = w_c 2^(alpha m(t))), §4.1 eq. 19-22 (its DC
+//       offset: the mean of 2^(alpha sin) is I0(alpha ln 2), which detunes
+//       the note), §4.2 (re-tuning by dividing out that mean; a DC filter
+//       on the frequency control instead gives an inharmonic glide on every
+//       index change), §4.3 (alpha in octaves);
+//       T. Smyth, "Loopback Frequency Modulation Using a Time-Varying Delay
+//       Line", DAFx-26 paper 36 §2 (a TVDL applies FM to any input: the
+//       output frequency is f_in (1 - dD/dn); a sustained ratio != 1 needs
+//       an unbounded delay);
+//       J. Hyrkas & T. Smyth, DAFx-24 paper 84 §2 (delay <-> FM).
+// Parent: ai_freq_mod_phase_dist/retuned_exp_fm_ltz (4 stars).
+//
+// Frequency ratio rho(n) = 2^(alpha sin(2 pi ratio phase)) / C,
+// C = linearinterp(retune, 1, I0(alpha ln 2)). The delay integrates
+// (1 - rho) with a 60 ms leak: at retune 100 % the mean of rho is 1 and the
+// delay just oscillates (in tune); below 100 % the leftover mean pushes the
+// delay away and the leak pulls it back, so every index change becomes a
+// pitch swoop that settles back in tune. rho > 0 always (no through-zero),
+// so the delay slope stays below 1 and the read never passes the write.
+// Dry/wet: the dry is read from the same buffer at the same centre delay,
+// so the blend does not comb.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//        Only used to run the internal phase when in5 is static.
+//   in4: 0..1 one-bar phasor (depth steps). Held (no movement for 100 ms) ->
+//        internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1 (modulator phase). Static ->
+//        internal ramp at f0, continued from the last tracked phase.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Exponential FM depth (octaves)
+@param({ min: 0, max: 3 }) exp_octaves = 0.8;
+// Modulator ratio x f0 (snaps to 0.5 steps)
+@param({ min: 0.5, max: 4 }) mod_ratio = 1;
+// Re-tuning (100 = in tune; less = swoops)
+@param({ min: 0, max: 100 }) retune = 100;
+// Depth decay per bar step
+@param({ min: 0, max: 100 }) bar_depth = 50;
+// Depth steps per bar
+@param({ min: 1, max: 16 }) depth_div = 2;
+// Tone (2-pole lowpass on the wet)
+@param({ min: 200, max: 12000 }) tone_hz = 4000;
+// Dry/wet (delay-aligned dry)
+@param({ min: 0, max: 100 }) blend = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+@state prevOwnPh = 0.0;
+@state flip = 0.0;
+
+@state alphaSm = 0.4;
+@state vL = 0.0;
+@state vR = 0.0;
+@state negPk = 0.0;
+@state dcSm = 4.0;
+
+@state bufL = new FixedSampleArray(16384);
+@state bufR = new FixedSampleArray(16384);
+@state wIdx: Int = 0;
+
+@state dcBlkL = new onepole();
+@state dcBlkR = new onepole();
+@state lp1L = new onepole();
+@state lp2L = new onepole();
+@state lp1R = new onepole();
+@state lp2R = new onepole();
+
+// Rational fit of ln(I0(x)) (Abramowitz & Stegun 9.8.1 / asymptotic).
+function lnBesselI0(x: number): number {
+	let ax = abs(x);
+	let res = 0.0;
+	if (ax < 3.75) {
+		let t = ax / 3.75;
+		let t2 = t * t;
+		let i0 = 1.0 + t2 * (3.5156229 + t2 * (3.0899424 + t2 * (1.2067492 + t2 * (0.2659732 + t2 * (0.0360768 + t2 * 0.0045813)))));
+		res = log(i0);
+	} else {
+		res = ax - 0.5 * log(2.0 * pi * ax) + 0.125 / ax;
+	}
+	return res;
+}
+
+// Cubic read d samples behind the write head; ch 0 = L, 1 = R.
+function readBack(ch: Int, d: number): number {
+	let pos = wIdx - d;
+	while (pos < 0.0) {
+		pos += 16384.0;
+	}
+	let i0: Int = trunc(pos);
+	let fr = pos - i0;
+	let im1: Int = (i0 + 16383) % 16384;
+	let ia: Int = i0 % 16384;
+	let ib: Int = (i0 + 1) % 16384;
+	let ic: Int = (i0 + 2) % 16384;
+	let y = 0.0;
+	if (ch == 0) {
+		y = cubicinterp(fr, bufL[im1], bufL[ia], bufL[ib], bufL[ic]);
+	} else {
+		y = cubicinterp(fr, bufR[im1], bufR[ia], bufR[ib], bufR[ic]);
+	}
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar phase: in4 while it moves, else internal 2 s bar -------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + f0 / sr, 0.0, 1.0);
+}
+// two-cycle ramp 0..2 so half-integer ratios stay continuous
+if (ownPh < prevOwnPh - 0.5) {
+	flip = 1.0 - flip;
+}
+prevOwnPh = ownPh;
+let ph2 = ownPh + flip;
+
+// --- Depth: decays through each bar step ------------------------------------
+let div = round(clamp(depth_div, 1.0, 16.0));
+let stepPh = wrap(barPh * div, 0.0, 1.0);
+let bd = clamp(bar_depth, 0.0, 100.0) * 0.01;
+let alphaT = clamp(exp_octaves, 0.0, 3.0) * (1.0 - bd + bd * (1.0 - stepPh) * (1.0 - stepPh));
+// 1.5 ms smoothing: the step restart is a fast rise, not a click
+alphaSm += (alphaT - alphaSm) * (1.0 - exp(-1.0 / (0.0015 * sr)));
+
+// --- Frequency ratio, re-tuned (eq. 19-22) ----------------------------------
+let ratio = clamp(round(2.0 * clamp(mod_ratio, 0.5, 4.0)) * 0.5, 0.5, 4.0);
+let thL = 2.0 * pi * wrap(ratio * ph2, 0.0, 1.0);
+let thR = 2.0 * pi * wrap(ratio * ph2 + 0.05, 0.0, 1.0);
+let i0 = exp(lnBesselI0(alphaSm * 0.6931471806));
+let cNorm = linearinterp(clamp(retune, 0.0, 100.0) * 0.01, 1.0, i0);
+let rhoL = exp2(alphaSm * sin(thL)) / cNorm;
+let rhoR = exp2(alphaSm * sin(thR)) / cNorm;
+
+// --- Delay = centre + leaky integral of (1 - rho) ----------------------------
+let leak = 1.0 - 1.0 / (0.06 * sr);
+vL = vL * leak + (1.0 - rhoL);
+vR = vR * leak + (1.0 - rhoR);
+// the centre keeps the shortest read >= 4 samples; it rises at once and
+// relaxes over ~0.5 s, and the dry reads it too
+let worst = maximum(0.0 - minimum(vL, vR), 0.0);
+if (worst > negPk) {
+	negPk = worst;
+} else {
+	negPk = negPk * (1.0 - 1.0 / (0.5 * sr));
+}
+dcSm = maximum(dcSm + (negPk + 4.0 - dcSm) * (1.0 - exp(-1.0 / (0.05 * sr))), worst + 4.0);
+let dcRead = minimum(dcSm, 12000.0);
+bufL[wIdx] = xL;
+bufR[wIdx] = xR;
+let wetRawL = readBack(0, clamp(dcRead + vL, 2.0, 16000.0));
+let wetRawR = readBack(1, clamp(dcRead + vR, 2.0, 16000.0));
+let dryL = readBack(0, dcRead);
+let dryR = readBack(1, dcRead);
+wIdx = (wIdx + 1) % 16384;
+
+let tone = clamp(tone_hz, 200.0, minimum(12000.0, sr * 0.45));
+let lpL = lp2L.next(lp1L.next(wetRawL, tone), tone);
+let lpR = lp2R.next(lp1R.next(wetRawR, tone), tone);
+// with the modulator on f0, the fundamental's n = -1 sideband sits at 0 Hz
+let wetL = lpL - dcBlkL.next(lpL, 10.0);
+let wetR = lpR - dcBlkR.next(lpR, 10.0);
+
+// --- Dry/wet (dry delayed by the same centre) -------------------------------
+let b = clamp(blend, 0.0, 100.0) * 0.01;
+let oL = linearinterp(b, dryL, wetL);
+let oR = linearinterp(b, dryR, wetR);
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

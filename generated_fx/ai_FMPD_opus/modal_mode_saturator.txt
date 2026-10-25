@@ -1,0 +1,181 @@
+// ============================================================================
+// modal_mode_saturator.txt — warm drive without intermod mud: harmonics 1-4
+//                            (plus an f0/2 sub mode) are each heterodyned,
+//                            smoothed, re-modulated and saturated on their
+//                            own; the bar swings an odd/even tilt
+//
+// From: J. S. Abel & K. J. Werner, "Distortion and Pitch Processing Using a
+//       Modal Reverberator Architecture", DAFx-15 paper 72: §2 eq. 5-8 (a
+//       mode = heterodyne to DC with e^(-j w_m t), smooth with a one-pole
+//       per stage, modulate back with e^(j w_m t)), §3.3 eq. 13-14
+//       (re-modulating at a different frequency nu_m: pitch processing),
+//       §3.4 and Fig. 12 (distort each mode separately, then sum: harmonic
+//       distortion without intermodulation between partials).
+// Parent: ai_freq_mod_phase_dist/modal_heterodyne_inverter_dist (5 stars).
+//
+// Mode h runs at h*f0 on an integrated f0 phase (h = 1..4). The sub mode
+// re-modulates mode 1's baseband at f0/2 (eq. 13: nu = w/2), so it is
+// phase-locked to the fundamental. Demodulating and re-modulating with the
+// same oscillator returns each partial with its own phase, so the wet is in
+// phase with the dry and the blend is coherent.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (odd/even tilt swing). Held (no movement for
+//        100 ms) -> internal 2 s bar (120 BPM 4/4).
+//   in5: pitch confidence 0..1 (0 while the horn is silent, ~1 while
+//        playing). While it is low the mode frequencies are held, so the
+//        decaying modes keep ringing at the last note instead of sliding.
+//        Never moved since load -> treated as 1 (unpatched).
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Mode smoothing / sustain (ms)
+@param({ min: 5, max: 600 }) decay_ms = 40;
+// Per-mode drive (dB)
+@param({ min: 0, max: 30 }) drive_db = 12;
+// Sub mode (f0/2) level
+@param({ min: 0, max: 100 }) sub_level = 30;
+// Odd (-) / even (+) mode tilt
+@param({ min: -100, max: 100 }) odd_even = 0;
+// Bar swing of the tilt
+@param({ min: 0, max: 100 }) bar_tilt = 30;
+// Tilt swings per bar
+@param({ min: 1, max: 16 }) tilt_div = 1;
+// Dry/wet (phase-coherent modes)
+@param({ min: 0, max: 100 }) blend = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+@state f0Held = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevConfIn = 0.0;
+@state confSeen = 0.0;
+
+@state ph = 0.0;
+@state prevPh = 0.0;
+@state flip = 0.0;
+@state tiltSm = 0.0;
+
+// two smoothing stages, per channel and mode: real / imaginary
+@state s1Re = new FixedSampleArray(2, 4);
+@state s1Im = new FixedSampleArray(2, 4);
+@state s2Re = new FixedSampleArray(2, 4);
+@state s2Im = new FixedSampleArray(2, 4);
+
+// tanh with 1/sqrt(g) makeup: unity at 0 dB drive, half the drive (in dB)
+// as small-signal gain, so quiet mode tails are not pumped up by full drive.
+function sat(x: number, g: number, norm: number): number {
+	return tanh(g * x) * norm;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let confIn = in5;
+
+// --- Confidence: 0 = silent horn; never moved = unpatched -> 1 ---------------
+if (abs(confIn - prevConfIn) > 0.0000001) {
+	confSeen = 1.0;
+}
+prevConfIn = confIn;
+let confRaw = (confSeen > 0.5) ? clamp(confIn, 0.0, 1.0) : 1.0;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz; held while silent
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+if (confRaw > 0.5) {
+	f0Held = f0Target;
+}
+f0Smooth += (f0Held - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar phase: in4 while it moves, else internal 2 s bar -------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Mode oscillator phase; two-cycle ramp for the f0/2 sub ------------------
+ph = wrap(ph + f0 / sr, 0.0, 1.0);
+if (ph < prevPh - 0.5) {
+	flip = 1.0 - flip;
+}
+prevPh = ph;
+let subPh = 0.5 * (ph + flip);
+
+// --- Smoothing coefficient: at least two f0 periods so neighbours stay out ---
+let tau = maximum(clamp(decay_ms, 5.0, 600.0) * 0.001, 2.0 / f0);
+let kS = 1.0 - exp(-1.0 / (tau * sr));
+
+// --- Drive and odd/even weights ---------------------------------------------
+let g = dbtoa(clamp(drive_db, 0.0, 30.0));
+let norm = 1.0 / sqrt(g);
+let div = round(clamp(tilt_div, 1.0, 16.0));
+let tiltT = clamp(clamp(odd_even, -100.0, 100.0) * 0.01 + clamp(bar_tilt, 0.0, 100.0) * 0.01 * sin(2.0 * pi * wrap(barPh * div, 0.0, 1.0)), -1.0, 1.0);
+tiltSm += (tiltT - tiltSm) * (1.0 - exp(-1.0 / (0.01 * sr)));
+let wOdd = 1.0 - 0.85 * maximum(tiltSm, 0.0);
+let wEven = 1.0 - 0.85 * maximum(0.0 - tiltSm, 0.0);
+let subG = clamp(sub_level, 0.0, 100.0) * 0.01;
+let cSub = cos(2.0 * pi * subPh);
+let sSub = sin(2.0 * pi * subPh);
+
+// --- Modes, per channel -------------------------------------------------------
+let wetL = 0.0;
+let wetR = 0.0;
+for (let ch: Int = 0; ch < 2; ch++) {
+	let x = (ch == 0) ? xL : xR;
+	let acc = 0.0;
+	for (let m: Int = 0; m < 4; m++) {
+		let th = 2.0 * pi * wrap((m + 1.0) * ph, 0.0, 1.0);
+		let c = cos(th);
+		let s = sin(th);
+		// heterodyne to DC, two smoothing stages (eq. 5-8)
+		s1Re[ch][m] = s1Re[ch][m] + (x * c - s1Re[ch][m]) * kS;
+		s1Im[ch][m] = s1Im[ch][m] + (0.0 - x * s - s1Im[ch][m]) * kS;
+		s2Re[ch][m] = s2Re[ch][m] + (s1Re[ch][m] - s2Re[ch][m]) * kS;
+		s2Im[ch][m] = s2Im[ch][m] + (s1Im[ch][m] - s2Im[ch][m]) * kS;
+		let bRe = s2Re[ch][m];
+		let bIm = s2Im[ch][m];
+		// modulate back and distort this mode alone (Fig. 12)
+		let mode = 2.0 * (bRe * c - bIm * s);
+		let w = ((m % 2) == 0) ? wOdd : wEven;
+		acc += sat(mode, g, norm) * w;
+		if (m == 0) {
+			// sub: the fundamental's baseband re-modulated at f0/2 (eq. 13)
+			let sub = 2.0 * (bRe * cSub - bIm * sSub);
+			acc += sat(sub, g, norm) * subG;
+		}
+	}
+	if (ch == 0) {
+		wetL = acc;
+	} else {
+		wetR = acc;
+	}
+}
+
+// --- Dry/wet ------------------------------------------------------------------
+let b = clamp(blend, 0.0, 100.0) * 0.01;
+let oL = linearinterp(b, xL, wetL);
+let oR = linearinterp(b, xR, wetR);
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

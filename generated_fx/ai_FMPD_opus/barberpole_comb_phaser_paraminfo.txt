@@ -1,0 +1,60 @@
+================================================================================
+barberpole_comb_phaser — Parameter Information
+================================================================================
+
+WHAT IT IS
+An endless phaser for space bass. A resonant comb tuned to your note has a
+frequency shifter inside its feedback loop, so the resonances climb (or
+fall) forever without resetting, like a barber's pole, and the rate is
+locked to the bar. With width up, the left channel climbs while the right
+falls.
+
+Source: Esqueda, Välimäki & Parker, DAFx-15 paper 67 §3–4.1 eq. 9–14
+(barberpole flanging and SSB phasing, allpass warp); Wardle, DAFx-98 §6;
+Kleimola, DAFx-08 paper 36 §2.3 (allpass dispersion).
+Parents: barberpole_comb_ssb_flanger, 11_bode_ssb_freq_shifter.
+
+PARAMETERS (6 + output gain)
+
+1. cycles_per_bar — -8…+8, default 1
+   Barberpole speed in cycles per bar (+ = rising, - = falling, 0 = a
+   static comb). Follows the tempo of the in4 phasor.
+
+2. comb_ratio — 0.5…4 f0 periods, default 1
+   Comb length. 1 = resonances on the harmonics (in key); 2 = also on the
+   half-harmonics (sub shimmer); 0.5 = every other harmonic.
+
+3. feedback — 0…95 %, default 60 %
+   Resonance. High = ringing, metallic, long tails.
+
+4. warp — 0…90 %, default 40 %
+   Allpass dispersion in the loop: squeezes the resonances together at the
+   bottom and spreads them at the top. The comb stays tuned on f0.
+
+5. width — 0…100 %, default 100 %
+   100 = L rises while R falls; 0 = both move the same way.
+
+6. blend — 0…100 %, default 50 %
+   Dry/wet. 50 % = the classic phaser sum (deepest notches); 100 % = only
+   the shifted resonant comb.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (rate; its speed is measured). If held, an internal
+  2 s bar (120 BPM) sets the rate.
+- in5: pitch confidence (0 while silent, ~1 while playing). While it is low
+  the comb tuning is held, so the tail keeps ringing on the last note.
+  Never moved since load = unpatched = treated as 1.
+- out1 / out2: stereo.
+
+NOTES
+- The comb length is corrected for the loop's own phase delay at f0, so the
+  resonance lands exactly on the note at any warp.
+- Inside the loop: 20 Hz–7 kHz band-limit and a soft (tanh) feedback, so it
+  stays stable where the frequency shifter is not exactly unity gain. This
+  is not an output limiter: the output can still run up to about +7 dB at
+  95 % feedback.

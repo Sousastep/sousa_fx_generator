@@ -1,0 +1,61 @@
+================================================================================
+reese_ssb_detune — Parameter Information
+================================================================================
+
+WHAT IT IS
+A Reese bass made from the horn itself. A Hilbert frequency shifter moves the
+left channel up by a few Hz and the right channel down; mixed with the dry
+signal, the copies beat against each other like two detuned saws. The detune
+swells across the bar and opens up as you play louder. The sub stays mono
+and unshifted.
+
+Source: Wardle, DAFx-98 §3, §6 (Hilbert SSB shifter, stereo phaser);
+Disch & Zölzer, DAFx-99 §2; Timoney et al., DAFx-14 §2 (detuned unison);
+Esqueda, Välimäki & Parker, DAFx-15 paper 67 §4.
+Parent: 11_bode_ssb_freq_shifter.
+
+PARAMETERS (7 + output gain)
+
+1. detune_hz — 0…12 Hz, default 1.5 Hz
+   Peak frequency shift. 0.3–2 Hz = slow Reese beating; 4–12 Hz = fast,
+   seasick warble.
+
+2. pitch_track — 0…100 %, default 0 %
+   0 = fixed Hz (low notes beat as fast as high notes). 100 = the shift
+   scales with f0 / 55 Hz, so the beating stays the same musical speed
+   across the register.
+
+3. bar_swell — 0…100 %, default 40 %
+   How much of the detune comes and goes with the bar. 0 = steady.
+
+4. swell_div — 1…16 (stepped), default 1
+   Swells per bar.
+
+5. width — 0…100 %, default 100 %
+   100 = L shifts up, R shifts down (widest). 0 = both shift up (mono-ish
+   phaser).
+
+6. sub_mono_hz — 40…250 Hz, default 120 Hz
+   Below this the shift is undone and the dry lows go out mono, centred.
+
+7. blend — 0…100 %, default 70 %
+   Dry/wet. The dry is taken from the same Hilbert network as the wet, so
+   they never comb. 50 % gives the strongest Reese beating; 100 % is pure
+   frequency shift (a slow stereo rotation).
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (swell). If held, an internal 2 s bar (120 BPM) runs.
+- in5: smoothed tuba envelope (louder = more detune). If static, an internal
+  follower is used.
+- out1 / out2: stereo.
+
+NOTES
+- The Hilbert pair is in quadrature within ±2° from about 40 Hz to 500 Hz and
+  ±4° to 1 kHz (at 48 kHz); above a few kHz a little of the opposite
+  sideband leaks through, which just adds shimmer to the top.
+- No safety limiter.

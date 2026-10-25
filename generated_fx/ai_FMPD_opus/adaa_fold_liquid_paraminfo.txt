@@ -1,0 +1,62 @@
+================================================================================
+adaa_fold_liquid — Parameter Information
+================================================================================
+
+WHAT IT IS
+A West-Coast wavefolder for liquid bass. Only the band above the crossover
+is folded (the fold count and brightness rise with level, rubbery and
+vocal), while the sub underneath stays the clean horn. The drive swells
+with the bar, follows your dynamics, and can ease off on high notes so the
+tone stays smooth across the register. Antiderivative antialiasing keeps the
+folds from turning into digital fizz.
+
+Source: Esqueda, Pöntynen, Välimäki & Parker, DAFx-17 paper 82 §2–3
+(wavefolding, ADAA1); Gabrielli, Squartini et al., DAFx-25 paper 30 §1–2.
+Parents: 12_adaa_chebyshev_wavefolder, buchla259_parallel_wavefolder.
+
+PARAMETERS (7 + output gain)
+
+1. drive_db — 0…30 dB, default 12 dB
+   Fold drive. Folding begins once the high band passes the threshold;
+   more drive = more folds = brighter, more liquid motion. Makeup is half
+   the drive, so it gets a little louder as it folds.
+
+2. bias — -60…+60 %, default 15 %
+   Offsets the fold point (opposite on L and R): adds even harmonics and
+   stereo difference. 0 = symmetric, odd harmonics only.
+
+3. keytrack — 0…100 %, default 50 %
+   Lowers the drive for high notes (by (55 Hz / f0)^(keytrack/2)), so the
+   brightness stays even across the register. 0 = same drive everywhere.
+
+4. bar_swell — 0…100 %, default 40 %
+   How much of the drive comes and goes with the bar.
+
+5. swell_div — 1…16 (stepped), default 4
+   Swells per bar.
+
+6. xover_hz — 40…300 Hz, default 110 Hz
+   Below this the horn passes untouched (one-pole complementary split that
+   sums back exactly).
+
+7. blend — 0…100 %, default 100 %
+   Dry/wet of the high band only. The sub is always the dry horn, so there
+   is never any phase shift down low.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz (key tracking). 0 = disconnected -> fixed 55 Hz. No
+  zero-crossing fallback.
+- in4: one-bar phasor (swell). If held, an internal 2 s bar (120 BPM) runs.
+- in5: smoothed tuba envelope (louder = more fold, drive scaled 50–100 %).
+  If static, an internal follower is used.
+- out1 / out2: stereo.
+
+NOTES
+- The one-pole crossover is gentle, so some fundamental reaches the folder
+  on low notes, which is part of the sound.
+- A 10 Hz DC blocker follows the folder.
+- No safety limiter.

@@ -1,0 +1,60 @@
+================================================================================
+fof_vowel_seq — Parameter Information
+================================================================================
+
+WHAT IT IS
+A talking "yoi" bass. A sharp vocal formant is built into every period of
+the horn's tone (no filter, so it is always in tune and can't ring out of
+control) and steps between two vowels in time with the bar, gliding between
+them. The horn is ring-modulated by the formant grain, and a clean FOF voice
+is laid on top, following your dynamics.
+
+Source: Lazzarini & Timoney, DAFx-12 paper 58 §2.1–2.2 eq. 4–10, §3 eq. 12
+(heterodyne resonance and FOF skirt); Cook, DAFx-98 §2.4 (FOFs).
+Parent: heterodyne_fof_resonator.
+
+PARAMETERS (7 + output gain)
+
+1. vowel_lo — 1…16 × f0, default 3
+   Formant of vowel A (even steps). Low = "oo / oh".
+
+2. vowel_hi — 1…16 × f0, default 9
+   Formant of vowel B (odd steps). High = "ee / yee". Equal to vowel_lo =
+   a fixed formant.
+
+3. steps_per_bar — 1…16 (stepped), default 4
+   Vowel changes per bar, alternating A, B, A, B.
+
+4. glide_ms — 5…500 ms, default 60 ms
+   Glide between vowels. Short = choppy "yoi-yoi"; long = slow "wow".
+
+5. resonance_q — 1…40, default 10
+   Formant sharpness. Low = broad, warm; high = whistly, vocal peak.
+
+6. fof_skirt — 0…100 %, default 50 %
+   Rounds the start of each grain (FOF onset): smoother, more vocal top.
+
+7. blend — 0…100 %, default 100 %
+   Dry/wet. The wet is built on the tuba's own phase, so every wet partial
+   is a harmonic in step with the dry: no combing in parallel.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+  Only used when in5 is not patched.
+- in4: one-bar phasor (vowel steps). If held, an internal 2 s bar (120 BPM)
+  runs.
+- in5: phase-locked tuba phasor (grain sync). If static, an internal ramp
+  at f0 carries on from the last phase.
+- in6: smoothed tuba envelope (FOF voice level). If static, an internal
+  follower is used.
+- out1 / out2: stereo.
+
+NOTES
+- L/R formants are offset by ±0.04 octave for width.
+- The wet path has a 10 Hz DC blocker. Level is matched to the dry at the
+  defaults; very low ratios with low Q run about +2 dB hotter.
+- No safety limiter.

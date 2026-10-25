@@ -1,0 +1,64 @@
+================================================================================
+asym_adfm_liquid — Parameter Information
+================================================================================
+
+WHAT IT IS
+Adaptive FM of the whole horn through a wobbling delay line, made
+asymmetric: the sidebands lean above the notes (bright, vocal) or below them
+(dark, subby). The lean sweeps back and forth with the bar, so the formant
+flows like liquid bass, and the FM index opens as you play louder.
+
+Source: Lazzarini, Timoney & Lysaght, DAFx-08 paper 42 §2.1–2.2 eq. 3–4
+(delay-based and asymmetric adaptive FM), §4.2 (moving formants); Hyrkas &
+Smyth, DAFx-24 paper 84 §2.
+Parent: 06_asymmetric_delay_adfm.
+
+PARAMETERS (7 + output gain)
+
+1. cm_ratio — 0.5…4, default 2
+   Modulator = f0 / cm_ratio. 1 = sidebands on the harmonics; 2 = sidebands
+   on half-harmonics (sub growl); non-integers = metallic.
+
+2. index — 0…6, default 1.5
+   FM index on the fundamental (upper partials get proportionally more).
+   0 = clean.
+
+3. symmetry — -100…+100 %, default +40 %
+   Sideband lean (Palamin r = 4^symmetry). + = energy above each partial,
+   - = below, 0 = classic symmetric FM.
+
+4. bar_sweep — 0…100 %, default 50 %
+   How far the bar swings the symmetry (sine, ± this amount).
+
+5. sweep_div — 1…16 (stepped), default 2
+   Sweeps per bar.
+
+6. env_index — 0…100 %, default 50 %
+   How much the index follows the envelope. 0 = fixed index; 100 = clean
+   when soft, full index when loud.
+
+7. blend — 0…100 %, default 100 %
+   Dry/wet. The dry is read from the same delay line at the same centre
+   delay, so parallel blends do not comb.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (symmetry sweep). If held, an internal 2 s bar
+  (120 BPM) runs.
+- in5: smoothed tuba envelope (index). If static, an internal follower is
+  used.
+- out1 / out2: stereo.
+
+NOTES
+- Latency = the centre delay, which grows with index, |symmetry| + sweep
+  and low notes: about 8 ms at the defaults on A1, ~70 ms at index 6 /
+  symmetry ±100 on pedal Bb. It does not move with the bar sweep or the
+  envelope; on note changes it slews over 40 ms, bending dry and wet
+  together.
+- The AM is power-normalised (unit RMS at any index/symmetry); a 10 Hz DC
+  blocker removes sidebands that fold onto 0 Hz.
+- No safety limiter.

@@ -1,0 +1,204 @@
+// ============================================================================
+// asym_adfm_liquid.txt — liquid moving formants: asymmetric delay-based
+//                        adaptive FM of the horn, symmetry swept by the bar,
+//                        index opened by the envelope
+//
+// From: V. Lazzarini, J. Timoney, T. Lysaght, "Asymmetric-Spectra Methods
+//       for Adaptive FM Synthesis", DAFx-08 paper 42: §2.1 (delay-line AdFM:
+//       a variable delay modulated by a sinusoid phase-modulates every
+//       partial of the input), §2.2 eq. 3-4 (asymmetric FM: the PM index is
+//       k(r + 1/r)/2 and an exponential AM exp(k(r - 1/r)/2 cos(wm t)) tilts
+//       the sidebands up (r > 1) or down (r < 1); modified-Bessel I0
+//       normalisation), §4.2 (examples: moving formants);
+//       J. Hyrkas & T. Smyth, DAFx-24 paper 84 §2 (delay modulation as FM).
+// Parent: ai_freq_mod_phase_dist/06_asymmetric_delay_adfm (5 stars).
+//
+// Delay = Dc + A sin(wm t), A = kPM * sr / (2 pi f0) so the index on the
+// fundamental is kPM (higher partials get proportionally more). Dc is the
+// centre delay (A at full index and the widest swept r, slewed 40 ms), shared by the dry
+// path, so dry and wet stay time-aligned and blend without combing.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor (symmetry sweep). Held (no movement for
+//        100 ms) -> internal 2 s bar (120 BPM 4/4).
+//   in5: smoothed tuba volume envelope 0..1 (opens the index). Static ->
+//        internal envelope follower.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Carrier:modulator ratio (fm = f0 / ratio)
+@param({ min: 0.5, max: 4 }) cm_ratio = 2;
+// FM index
+@param({ min: 0, max: 6 }) index = 1.5;
+// Sideband symmetry (+ = up, - = down)
+@param({ min: -100, max: 100 }) symmetry = 40;
+// Bar sweep of the symmetry
+@param({ min: 0, max: 100 }) bar_sweep = 50;
+// Sweeps per bar
+@param({ min: 1, max: 16 }) sweep_div = 2;
+// Envelope -> index
+@param({ min: 0, max: 100 }) env_index = 50;
+// Dry/wet (delay-aligned dry)
+@param({ min: 0, max: 100 }) blend = 100;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevEnvIn = 0.0;
+@state envHold = 0.0;
+@state envInt = 0.0;
+
+@state modPh = 0.0;
+@state dcSm = 2.0;
+@state symSm = 0.4;
+@state kSm = 1.5;
+
+@state dcBlkL = new onepole();
+@state dcBlkR = new onepole();
+
+@state bufL = new FixedSampleArray(16384);
+@state bufR = new FixedSampleArray(16384);
+@state wIdx: Int = 0;
+
+// Rational fit of ln(I0(x)) (Abramowitz & Stegun 9.8.1 / asymptotic).
+function lnBesselI0(x: number): number {
+	let ax = abs(x);
+	let res = 0.0;
+	if (ax < 3.75) {
+		let t = ax / 3.75;
+		let t2 = t * t;
+		let i0 = 1.0 + t2 * (3.5156229 + t2 * (3.0899424 + t2 * (1.2067492 + t2 * (0.2659732 + t2 * (0.0360768 + t2 * 0.0045813)))));
+		res = log(i0);
+	} else {
+		res = ax - 0.5 * log(2.0 * pi * ax) + 0.125 / ax;
+	}
+	return res;
+}
+
+// Cubic read d samples behind the write head; ch 0 = L, 1 = R.
+function readBack(ch: Int, d: number): number {
+	let pos = wIdx - d;
+	while (pos < 0.0) {
+		pos += 16384.0;
+	}
+	let i0: Int = trunc(pos);
+	let fr = pos - i0;
+	let im1: Int = (i0 + 16383) % 16384;
+	let ia: Int = i0 % 16384;
+	let ib: Int = (i0 + 1) % 16384;
+	let ic: Int = (i0 + 2) % 16384;
+	let y = 0.0;
+	if (ch == 0) {
+		y = cubicinterp(fr, bufL[im1], bufL[ia], bufL[ib], bufL[ic]);
+	} else {
+		y = cubicinterp(fr, bufR[im1], bufR[ia], bufR[ib], bufR[ic]);
+	}
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let envIn = in5;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar phase: in4 while it moves, else internal 2 s bar -------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Envelope: in5 while it moves, else internal follower ------------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.005 * sr));
+let rel = 1.0 - exp(-1.0 / (0.120 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envHold = 0.1 * sr;
+} else if (envHold > 0.0) {
+	envHold -= 1.0;
+}
+prevEnvIn = envIn;
+let env = (envHold > 0.0) ? clamp(envIn, 0.0, 1.0) : clamp(sqrt(maximum(envInt, 0.0)) * 1.6, 0.0, 1.0);
+
+// --- Symmetry r: base + bar sweep (sine per step), r = 4^sym ----------------
+let div = round(clamp(sweep_div, 1.0, 16.0));
+let sweepSin = sin(2.0 * pi * wrap(barPh * div, 0.0, 1.0));
+let symT = clamp(clamp(symmetry, -100.0, 100.0) * 0.01 + clamp(bar_sweep, 0.0, 100.0) * 0.01 * sweepSin, -1.0, 1.0);
+let ctl = 1.0 - exp(-1.0 / (0.01 * sr));
+symSm += (symT - symSm) * ctl;
+let r = exp2(2.0 * symSm);
+let rPlus = 0.5 * (r + 1.0 / r);
+let rMinus = 0.5 * (r - 1.0 / r);
+
+// --- Index: base x envelope --------------------------------------------------
+let kBase = clamp(index, 0.0, 6.0);
+let eAmt = clamp(env_index, 0.0, 100.0) * 0.01;
+let kT = kBase * (1.0 - eAmt + eAmt * env);
+kSm += (kT - kSm) * ctl;
+
+// --- Modulator -------------------------------------------------------------
+let fm = clamp(f0 / clamp(cm_ratio, 0.5, 4.0), 5.0, sr * 0.2);
+modPh = wrap(modPh + fm / sr, 0.0, 1.0);
+let phR = wrap(modPh + 0.06, 0.0, 1.0);
+
+// --- Delay: Dc + A sin, Dc shared with the dry path ------------------------
+let aCap = 7000.0;
+// centre from the widest r the sweep can reach, so it does not move with it
+let symMax = minimum(abs(clamp(symmetry, -100.0, 100.0) * 0.01) + clamp(bar_sweep, 0.0, 100.0) * 0.01, 1.0);
+let rMax = exp2(2.0 * symMax);
+let rPlusMax = 0.5 * (rMax + 1.0 / rMax);
+let aFull = clamp(kBase * rPlusMax * sr / (2.0 * pi * f0), 0.0, aCap);
+let aNow = clamp(kSm * rPlus * sr / (2.0 * pi * f0), 0.0, aCap);
+dcSm += (aFull + 2.0 - dcSm) * (1.0 - exp(-1.0 / (0.04 * sr)));
+let dc = maximum(dcSm, aNow + 2.0);
+bufL[wIdx] = xL;
+bufR[wIdx] = xR;
+let dL = readBack(0, dc + aNow * sin(2.0 * pi * modPh));
+let dR = readBack(1, dc + aNow * sin(2.0 * pi * phR));
+let dryL = readBack(0, dc);
+let dryR = readBack(1, dc);
+wIdx = (wIdx + 1) % 16384;
+
+// --- Asymmetric AM, I0-normalised (eq. 3-4) ---------------------------------
+// delay +A sin gives phase -wc*A*sin; the matching AM term is -cos.
+// mean of exp(2a cos) is I0(2a), so dividing by sqrt(I0(2a)) keeps unit power.
+let kAm = clamp(kSm * rMinus, -8.0, 8.0);
+let lnNorm = 0.5 * lnBesselI0(2.0 * kAm);
+let amL = dL * exp(0.0 - kAm * cos(2.0 * pi * modPh) - lnNorm);
+let amR = dR * exp(0.0 - kAm * cos(2.0 * pi * phR) - lnNorm);
+// sidebands can land on 0 Hz (e.g. cm_ratio 2, n = 2): block DC
+let wetL = amL - dcBlkL.next(amL, 10.0);
+let wetR = amR - dcBlkR.next(amR, 10.0);
+
+// --- Dry/wet (dry delayed by the same centre) -------------------------------
+let b = clamp(blend, 0.0, 100.0) * 0.01;
+let oL = linearinterp(b, dryL, wetL);
+let oR = linearinterp(b, dryR, wetR);
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;

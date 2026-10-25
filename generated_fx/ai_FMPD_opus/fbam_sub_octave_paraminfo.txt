@@ -1,0 +1,65 @@
+================================================================================
+fbam_sub_octave — Parameter Information
+================================================================================
+
+WHAT IT IS
+A deep-dubstep sub-octave. It counts the tuba's own phase cycles and divides
+them by two (or four), like a classic octave pedal, so the sub is locked to
+the horn and never drifts or beats. A feedback-AM oscillator voices the sub,
+from a pure sine up to a buzzy, gritty pulse. The sub pumps on every bar step
+and is added, mono, under the untouched horn.
+
+Source: Esqueda, Lähdeoja & Välimäki, SMC-18 §2, §2.3, §2.5 (guitar-driven
+sub-octave generator: divider and processor); Lazzarini, Timoney, Kleimola
+& Välimäki, DAFx-09 paper 31 §2–3 (feedback amplitude modulation).
+Parent: 08_suboctave_phase_ringmod.
+
+PARAMETERS (7 + output gain)
+
+1. octave_down — 1…2 (stepped), default 1
+   1 = one octave down (f0/2); 2 = two octaves down (f0/4).
+
+2. fbam — 0…150 %, default 60 %
+   Feedback AM: 0 = pure sine sub; 100 = classic FBAM buzz; 150 = spiky,
+   pulse-like grit. Level is normalised to the same peak at any setting.
+
+3. pump — 0…100 %, default 30 %
+   Sidechain-style duck at the start of each step, recovering through the
+   step. 0 = steady sub.
+
+4. pump_div — 1…16 (stepped), default 4
+   Pump steps per bar.
+
+5. tone_hz — 60…2000 Hz, default 400 Hz
+   Two-pole lowpass on the sub. Low = pure weight; high = lets the FBAM
+   grit through.
+
+6. env_follow — 0…100 %, default 100 %
+   100 = the sub follows your dynamics; 0 = a gate (full level while you
+   play). Silent either way when the horn is silent.
+
+7. sub_mix — 0…100 %, default 60 %
+   How much sub is added. The dry horn is never touched, so there is no
+   dry/wet comb.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+  Only used when in5 is not patched.
+- in4: one-bar phasor (pump). If held, an internal 2 s bar (120 BPM) runs.
+- in5: phase-locked tuba phasor (divided for the sub). If static, an
+  internal ramp at f0 carries on from the last phase.
+- in6: smoothed tuba envelope (sub level / gate). If static, an internal
+  follower is used.
+- out1 / out2: stereo (the sub is the same on both sides).
+
+NOTES
+- The feedback AM runs at a fixed 64 steps per sub cycle (not per audio
+  sample), so its timbre is the same on every note and it cannot blow up at
+  low pitches.
+- Which of the two (or four) cycles the sub starts on is arbitrary; the
+  divider just counts.
+- No safety limiter.

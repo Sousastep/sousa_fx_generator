@@ -1,0 +1,59 @@
+================================================================================
+hetpd_wobble — Parameter Information
+================================================================================
+
+WHAT IT IS
+The classic dubstep wobble, played by the horn. The tuba is phase-distorted
+the Casio CZ way (heterodyne method, so it works on the real horn and not
+just a sine), and the PD amount swings between two settings in time with the
+bar. The PD runs on the tuba's own phase, so the wobble stays locked to the
+note.
+
+Source: Lazzarini, Timoney, Pekonen & Välimäki, DAFx-09 paper 12 §2
+eq. 5–6, §3.2 / §4.2 eq. 17, Fig. 18; Timoney, Lazzarini, Gibney &
+Pekonen, DAFx-10 P65.
+Parent: heterodyne_pd_shaper.
+
+PARAMETERS (7 + output gain)
+
+1. wobble_div — 1…16 (stepped), default 4
+   Wobbles per bar (4 = quarter notes, 8 = eighths, 3/6/12 = triplet feel).
+
+2. wobble_shape — 0…100 %, default 30 %
+   0 = smooth sine "wub"; 100 = falling ramp (hits bright on the beat and
+   closes down).
+
+3. index_lo — 0…5, default 0.2
+   PD index at the closed end of the wobble. 0 = clean horn.
+
+4. index_hi — 0…5, default 2.5
+   PD index at the open end. 1 = exact CZ phase distortion; above 1 pushes
+   extra formant energy up (DAFx-09 §4.2). Set lower than index_lo to
+   invert the wobble.
+
+5. inflection_d — 0.02…0.98, default 0.15
+   PD breakpoint. 0.5 = no distortion; toward 0.02 or 0.98 = brighter, like
+   opening a filter. L/R are offset slightly for width.
+
+6. saw_square — 0…100 %, default 0 %
+   0 = sawtooth PD (all harmonics); 100 = square PD (hollow, odd harmonics).
+
+7. blend — 0…100 %, default 100 %
+   Dry/wet. The dry comes from the same Hilbert network, so they never comb.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+  Only used when in5 is not patched.
+- in4: one-bar phasor (wobble). If held, an internal 2 s bar (120 BPM) runs.
+- in5: phase-locked tuba phasor (PD modulator). If static, an internal ramp
+  at f0 carries on from the last phase.
+- out1 / out2: stereo.
+
+NOTES
+- The wet path has a 10 Hz DC blocker (the heterodyne folds part of the
+  fundamental onto 0 Hz).
+- No safety limiter.

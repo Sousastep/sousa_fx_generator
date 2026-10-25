@@ -1,0 +1,65 @@
+================================================================================
+modal_mode_saturator — Parameter Information
+================================================================================
+
+WHAT IT IS
+Warm, heavy drive with no intermod mud. The first four harmonics of the horn
+are each pulled out on their own (heterodyne to DC, smooth, modulate back),
+saturated separately and summed, so you get thick harmonic distortion that
+never grinds the partials against each other. A sub one octave down is
+grown from the fundamental. The bar swings the balance between odd modes
+(hollow) and even modes (round).
+
+Source: Abel & Werner, DAFx-15 paper 72 §2 eq. 5–8 (heterodyne-smooth-
+modulate modes), §3.3 eq. 13 (re-modulating at another frequency), §3.4 and
+Fig. 12 (distort each mode separately).
+Parent: modal_heterodyne_inverter_dist.
+
+PARAMETERS (7 + output gain)
+
+1. decay_ms — 5…600 ms, default 40 ms
+   Smoothing time constant of each mode. Short = tracks articulation
+   tightly; long = the modes ring on like a resonator pad (tails last
+   several times this value). Never shorter than two f0 periods, so
+   neighbouring harmonics stay out of each mode.
+
+2. drive_db — 0…30 dB, default 12 dB
+   Saturation of each mode. 0 = clean resynthesis of harmonics 1–4.
+   Makeup is half the drive, so more drive is also somewhat louder (about
+   +4 dB at the default).
+
+3. sub_level — 0…100 %, default 30 %
+   Level of the f0/2 sub mode (phase-locked to the fundamental, saturated
+   like the others).
+
+4. odd_even — -100…+100 %, default 0 %
+   - = favour modes 1 & 3 (hollow, clarinet-like), + = favour modes 2 & 4
+   (round, octave-y).
+
+5. bar_tilt — 0…100 %, default 30 %
+   Bar swing of the odd/even tilt (sine, ± this amount).
+
+6. tilt_div — 1…16 (stepped), default 1
+   Tilt swings per bar.
+
+7. blend — 0…100 %, default 100 %
+   Dry/wet. Each mode comes back with its own partial's phase, so the wet
+   lines up with the dry (no combing). At 100 % only harmonics 1–4, the sub
+   and their distortion products remain (breath and the very top drop
+   away).
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (tilt swing). If held, an internal 2 s bar (120 BPM)
+  runs.
+- in5: pitch confidence (0 while silent, ~1 while playing). While it is low
+  the mode frequencies are held, so ringing tails stay on the last note.
+  Never moved since load = unpatched = treated as 1.
+- out1 / out2: stereo.
+
+NOTES
+- No safety limiter.

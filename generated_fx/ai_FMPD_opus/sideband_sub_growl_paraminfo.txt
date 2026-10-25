@@ -1,0 +1,58 @@
+================================================================================
+sideband_sub_growl — Parameter Information
+================================================================================
+
+WHAT IT IS
+FM of the whole horn with the sidebands split four ways: below or above each
+note, odd or even. Keep mostly the lower ones and the horn grows a growling
+sub-harmonic undertone; swing toward the upper ones and it screeches. The bar
+morphs between the two, and the FM index opens as you play louder.
+
+Source: Lazzarini, Timoney & Lysaght, DAFx-08 paper 42 §3.1–3.2
+eq. 5–20 (adaptive split-sideband synthesis), §4.3 (lower-sideband
+sub-harmonics, upper-sideband screech).
+Parents: 15_inst_split_sideband_morph_synth, 07_adaptive_split_sideband.
+
+PARAMETERS (7 + output gain)
+
+1. cm_ratio — 0.5…4, default 2
+   Modulator = f0 / cm_ratio. 2 = sidebands every half-harmonic (lower
+   ones = sub-octave growl); 3 = thirds; 1 = harmonic.
+
+2. index — 0…6, default 2
+   FM index (scaled 40–100 % by the envelope). 0 = clean.
+
+3. low_high — -100…+100 %, default -60 %
+   - = keep lower sidebands (sub, dark), + = keep upper (bright, screech),
+   0 = both (plain FM).
+
+4. odd_even — -100…+100 %, default 0 %
+   - = odd sidebands only (hollow), + = even only (octave-y, smooth).
+
+5. bar_morph — 0…100 %, default 50 %
+   Bar swing of low_high (sine, ± this amount).
+
+6. morph_div — 1…16 (stepped), default 2
+   Morphs per bar.
+
+7. blend — 0…100 %, default 100 %
+   Dry/wet. The dry comes from the same Hilbert network, so they never comb.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+- in4: one-bar phasor (morph). If held, an internal 2 s bar (120 BPM) runs.
+- in5: smoothed tuba envelope (index). If static, an internal follower is
+  used.
+- out1 / out2: stereo.
+
+NOTES
+- Sidebands are computed exactly from Bessel J0–J10 (no Hilbert on the
+  modulator), so the split is clean; the horn side uses the 4-stage
+  Hilbert pair (best below ~1 kHz).
+- Level is auto-compensated for removed sidebands (exact for a sine
+  carrier). A 10 Hz DC blocker removes sidebands that fold onto 0 Hz.
+- No safety limiter.

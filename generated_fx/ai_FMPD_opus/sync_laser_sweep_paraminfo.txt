@@ -1,0 +1,64 @@
+================================================================================
+sync_laser_sweep — Parameter Information
+================================================================================
+
+WHAT IT IS
+The space-bass laser "pew". A synth oscillator is hard-synced to the tuba's
+own phase, so it always plays your note, and its sync ratio dives from high
+to low on every bar step: the classic sync sweep. It follows your dynamics
+and blends with the horn without phasing, because it shares the horn's
+period and phase.
+
+Source: DAFx-12 paper 37 §2–3 (virtual analog hard sync and its
+band-limited reset); Timoney, Lazzarini, Gibney & Pekonen, DAFx-10 P65;
+Kleimola, Lazzarini, Timoney & Välimäki, DAFx-11 paper 55 §5.
+Parent: 04_hilbert_phasor_sync.
+
+PARAMETERS (7 + output gain)
+
+1. sync_lo — 1…8, default 1
+   Sync ratio at the end of each sweep (1 = plain saw at the note).
+
+2. sync_hi — 1…16, default 6
+   Sync ratio at the start of each sweep (bright, nasal peak). Lower than
+   sync_lo = a rising sweep.
+
+3. sweeps_per_bar — 1…16 (stepped), default 2
+   Laser hits per bar.
+
+4. curve — -100…+100 %, default +60 %
+   + = drops fast then lingers low ("pew"); - = lingers high then drops;
+   0 = even exponential sweep.
+
+5. soft_hard — 0…100 %, default 100 %
+   100 = hard sync (buzzy, band-limited saw reset); 0 = soft, windowed
+   sine sync (round, vocal).
+
+6. tone_hz — 200…12000 Hz, default 5000 Hz
+   Two-pole lowpass on the laser.
+
+7. blend — 0…100 %, default 50 %
+   Horn/laser crossfade. Phase-locked, so 50 % doesn't comb.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final trim. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.
+- in3: f0 in Hz. 0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+  Only used when in5 is not patched.
+- in4: one-bar phasor (sweep steps). If held, an internal 2 s bar (120 BPM)
+  runs.
+- in5: phase-locked tuba phasor (sync master). If static, an internal ramp
+  at f0 carries on from the last phase.
+- in6: smoothed tuba envelope (laser level). If static, an internal
+  follower is used.
+- out1 / out2: stereo (R runs a 3 % higher ratio for width).
+
+NOTES
+- PolyBLEP corrections at every slave wrap and master reset (one sample of
+  latency; the dry is delayed to match). In an offline check at 220 Hz,
+  ratio 6.3, they lowered the aliased energy from -16 dB to -36 dB below
+  the harmonics.
+- The laser has a 10 Hz DC blocker.
+- No safety limiter.

@@ -1,0 +1,208 @@
+// ============================================================================
+// sync_laser_sweep.txt — space-bass "pew" laser: an oscillator hard/soft
+//                        synced to the tuba's own phase, the sync ratio
+//                        sweeping down on every bar step
+//
+// From: "Virtual Analog Oscillator Hard Synchronisation: Fourier Series and
+//       an Efficient Implementation", DAFx-12 paper 37 §2-3 (hard sync: the
+//       slave restarts at every master cycle, so the period stays the
+//       master's while the slave ratio moves a formant-like peak; the reset
+//       is a step of variable height, band-limited by a correction around
+//       the discontinuity);
+//       J. Timoney, V. Lazzarini, B. Gibney, J. Pekonen, DAFx-10 P65 (phase
+//       shaping of a driving phase);
+//       J. Kleimola, V. Lazzarini, J. Timoney, V. Välimäki, "Vector
+//       Phaseshaping Synthesis", DAFx-11 paper 55 §5 (audio-rate phase
+//       shaping driven by another oscillator's phase).
+// Parent: ai_freq_mod_phase_dist/04_hilbert_phasor_sync (4 stars).
+//
+// Master = the tuba phasor (in5). Slave phase advances ratio x master
+// increment and restarts on each master wrap. Hard: slave saw, with two-
+// sample polyBLEP corrections at its own wraps (step -2) and at the master
+// reset (step = -2 x slave phase) -- one sample of latency. Soft: slave sine
+// windowed by sin(pi master phase), which is zero at the reset (no step).
+// Dry/wet: the laser shares the horn's period and phase, so the crossfade is
+// coherent.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = tracked pitch (clamped 20..1000 Hz);
+//        0 = disconnected -> fixed 55 Hz. No zero-crossing fallback.
+//        Only used to run the internal phase when in5 is static.
+//   in4: 0..1 one-bar phasor (sweep steps). Held (no movement for 100 ms) ->
+//        internal 2 s bar (120 BPM 4/4).
+//   in5: phase-locked tuba phasor 0..1 (sync master). Static -> internal
+//        ramp at f0, continued from the last tracked phase.
+//   in6: smoothed tuba volume envelope 0..1 (laser level). Static ->
+//        internal envelope follower.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Sync ratio at the end of each sweep
+@param({ min: 1, max: 8 }) sync_lo = 1;
+// Sync ratio at the start of each sweep
+@param({ min: 1, max: 16 }) sync_hi = 6;
+// Sweeps per bar
+@param({ min: 1, max: 16 }) sweeps_per_bar = 2;
+// Sweep curve (+ = fast drop, - = slow drop)
+@param({ min: -100, max: 100 }) curve = 60;
+// Soft (0) -> hard (100) sync
+@param({ min: 0, max: 100 }) soft_hard = 100;
+// Tone (2-pole lowpass)
+@param({ min: 200, max: 12000 }) tone_hz = 5000;
+// Dry/wet (phase-locked laser)
+@param({ min: 0, max: 100 }) blend = 50;
+// Output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state f0Smooth = 55.0;
+
+@state prevBarIn = 0.0;
+@state barLast = 0.0;
+@state barHold = 0.0;
+@state freeBar = 0.0;
+
+@state prevPhIn = 0.0;
+@state phHold = 0.0;
+@state ownPh = 0.0;
+@state prevOwnPh = 0.0;
+
+@state prevEnvIn = 0.0;
+@state envHold = 0.0;
+@state envInt = 0.0;
+
+@state ratioSm = 6.0;
+@state slave = new FixedSampleArray(2);
+@state pend = new FixedSampleArray(2);
+@state dryDel = new FixedSampleArray(2);
+
+@state dcBlkL = new onepole();
+@state dcBlkR = new onepole();
+@state lp1L = new onepole();
+@state lp2L = new onepole();
+@state lp1R = new onepole();
+@state lp2R = new onepole();
+
+// One hard/soft sync voice for channel ch; returns the output delayed by one
+// sample (polyBLEP needs to correct the sample before each step).
+function syncVoice(ch: Int, mPh: number, inc: number, wrapped: number, ratio: number, sh: number): number {
+	let sInc = ratio * inc;
+	let sp = slave[ch];
+	let hStep = 0.0;
+	let d = 0.0;
+	if (wrapped > 0.5) {
+		// master reset: d = samples since the reset, slave value just before it
+		d = clamp(mPh / maximum(inc, 0.0000001), 0.0, 1.0);
+		let before = wrap(sp + sInc * (1.0 - d), 0.0, 1.0);
+		hStep = 0.0 - 2.0 * before;
+		sp = wrap(sInc * d, 0.0, 1.0);
+	} else {
+		sp = sp + sInc;
+		if (sp >= 1.0) {
+			sp = wrap(sp, 0.0, 1.0);
+			d = clamp(sp / maximum(sInc, 0.0000001), 0.0, 1.0);
+			hStep = -2.0;
+		}
+	}
+	slave[ch] = sp;
+	let hard = 2.0 * sp - 1.0;
+	let soft = sin(2.0 * pi * sp) * sin(pi * mPh);
+	// polyBLEP: step h at d samples before now -> previous sample += h d^2/2,
+	// this sample -= h (1-d)^2/2 (soft has no step, so scale by the hard share)
+	let corrPrev = sh * hStep * d * d * 0.5;
+	let corrNow = 0.0 - sh * hStep * (1.0 - d) * (1.0 - d) * 0.5;
+	let out = pend[ch] + corrPrev;
+	pend[ch] = linearinterp(sh, soft, hard) + corrNow;
+	return out;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+let phIn = in5;
+let envIn = in6;
+
+// --- f0: in3 > 0 is the pitch; 0 = disconnected -> fixed 55 Hz --------------
+let f0Target = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) : 55.0;
+f0Smooth += (f0Target - f0Smooth) * (1.0 - exp(-1.0 / (0.004 * sr)));
+let f0 = clamp(f0Smooth, 20.0, 1000.0);
+
+// --- Bar phase: in4 while it moves, else internal 2 s bar -------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barLast = barIn;
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+freeBar = wrap(freeBar + 0.5 / sr, 0.0, 1.0);
+let barPh = (barHold > 0.0) ? wrap(barLast, 0.0, 1.0) : freeBar;
+
+// --- Tuba phase: in5 while it moves, else continue it at f0 -----------------
+if (abs(phIn - prevPhIn) > 0.0000001) {
+	phHold = 0.1 * sr;
+} else if (phHold > 0.0) {
+	phHold -= 1.0;
+}
+prevPhIn = phIn;
+if (phHold > 0.0) {
+	ownPh = wrap(phIn, 0.0, 1.0);
+} else {
+	ownPh = wrap(ownPh + f0 / sr, 0.0, 1.0);
+}
+let mInc = wrap(ownPh - prevOwnPh, 0.0, 1.0);
+let mWrapped = (ownPh < prevOwnPh - 0.5) ? 1.0 : 0.0;
+prevOwnPh = ownPh;
+// a phasor that jumped (e.g. on re-lock) is not a reset: cap the increment
+mInc = minimum(mInc, 0.25);
+
+// --- Envelope: in6 while it moves, else internal follower ------------------
+let absMono = 0.5 * (abs(xL) + abs(xR));
+let atk = 1.0 - exp(-1.0 / (0.004 * sr));
+let rel = 1.0 - exp(-1.0 / (0.060 * sr));
+envInt += (absMono - envInt) * ((absMono > envInt) ? atk : rel);
+if (abs(envIn - prevEnvIn) > 0.0000001) {
+	envHold = 0.1 * sr;
+} else if (envHold > 0.0) {
+	envHold -= 1.0;
+}
+prevEnvIn = envIn;
+let env = (envHold > 0.0) ? clamp(envIn, 0.0, 1.0) : clamp(envInt * 2.5, 0.0, 1.0);
+
+// --- Sweep: sync_hi -> sync_lo through each step, exponential ---------------
+let div = round(clamp(sweeps_per_bar, 1.0, 16.0));
+let stepPh = wrap(barPh * div, 0.0, 1.0);
+let shape = pow(stepPh, exp2(0.0 - clamp(curve, -100.0, 100.0) * 0.02));
+let rLo = clamp(sync_lo, 1.0, 8.0);
+let rHi = clamp(sync_hi, 1.0, 16.0);
+let ratioT = rHi * pow(rLo / rHi, shape);
+ratioSm += (ratioT - ratioSm) * (1.0 - exp(-1.0 / (0.001 * sr)));
+
+// --- Voices (R slightly higher ratio for width) -----------------------------
+let sh = clamp(soft_hard, 0.0, 100.0) * 0.01;
+let vL = syncVoice(0, ownPh, mInc, mWrapped, ratioSm, sh);
+let vR = syncVoice(1, ownPh, mInc, mWrapped, ratioSm * 1.03, sh);
+let tone = clamp(tone_hz, 200.0, minimum(12000.0, sr * 0.45));
+let fL = lp2L.next(lp1L.next(vL, tone), tone);
+let fR = lp2R.next(lp1R.next(vR, tone), tone);
+// a synced saw with a non-integer ratio ends mid-cycle: it carries DC
+let lasL = (fL - dcBlkL.next(fL, 10.0)) * env * 0.5;
+let lasR = (fR - dcBlkR.next(fR, 10.0)) * env * 0.5;
+
+// --- Dry/wet: dry delayed one sample to match the polyBLEP latency ------------
+let dL = dryDel[0];
+let dR = dryDel[1];
+dryDel[0] = xL;
+dryDel[1] = xR;
+let b = clamp(blend, 0.0, 100.0) * 0.01;
+let oL = linearinterp(b, dL, lasL);
+let oR = linearinterp(b, dR, lasR);
+
+// --- Output gain (last stage) -----------------------------------------------
+let outGain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = oL * outGain;
+out2 = oR * outGain;
