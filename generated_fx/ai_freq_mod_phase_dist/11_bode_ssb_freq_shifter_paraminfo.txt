@@ -9,18 +9,19 @@ INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input (Left / Right)
 - in3: Optional Tracked Pitch in Hz (from fluid.pitch~; scales the frequency shift relative to a 55 Hz A1 reference when f0_track_amt > 0)
 - out1 / out2: Stereo SSB Frequency-Shifted Output
+- Measured (offline render of the real RNBO code): the unwanted sideband is 40-65 dB down for 40 Hz..1 kHz inputs; on the sousa_mic.aif take (-32 dB RMS in) the defaults give about -35 dB RMS.
 
 PARAMETERS (4)
 
 1. shift_hz
    - Range: -500.0 to +500.0 Hz
-   - Taper: Cubic center-weighted taper (500 * (0.25*x + 0.75*x^3)) providing fine sub-Hertz resolution near 0 Hz for slow barber-pole Reese detuning while reaching +/- 500 Hz at the extremes.
-   - Function: Sets the base frequency shift in Hz. Setting shift_hz near -f0 (e.g., -55 Hz) folds the fundamental to DC (removed by the internal 12 Hz highpass) and inverts lower sidebands for "through-zero" metallic gnarl.
+   - Taper: Cubic center-weighted taper: actual shift = 500 * (0.25*x + 0.75*x^3) with x = shift_hz / 500, so the number on the knob is NOT the shift in Hz except at 0 and +/-500. Examples: -500 -> -500 Hz, -100 -> -28 Hz, -28 (default) -> -7.1 Hz, -10 -> -2.5 Hz. This gives fine sub-Hertz resolution near 0 Hz for slow barber-pole Reese detuning while reaching +/- 500 Hz at the extremes.
+   - Function: Sets the base frequency shift in Hz. Setting the actual shift near -f0 (knob about -140 for -55 Hz) folds the fundamental to DC (removed by the internal 12 Hz highpass) and inverts lower sidebands for "through-zero" metallic gnarl.
 
 2. f0_track_amt
    - Range: 0.0 to 1.0 (0% Fixed Hz Shift to 100% Pitch-Proportional Shift)
    - Taper: Linear crossfade between fixed Hz and f0-scaled Hz (normalized to 55 Hz).
-   - Function: When set toward 1.0 with fluid.pitch~ connected to in3, the shift amount becomes a fixed fraction of the played pitch (e.g., -0.5 * f0), keeping the exact type of metallic inharmonicity consistent across all notes.
+   - Function: The actual shift is multiplied by (1 - amt) + amt * f0 / 55 (f0 from in3, held when in3 is invalid). At 1.0 the shift becomes a fixed fraction of the played pitch (e.g. knob about -99 -> -27.5 Hz at 55 Hz -> -0.5 * f0 on every note), keeping the exact type of metallic inharmonicity consistent across all notes.
 
 3. up_down_stereo
    - Range: -1.0 to +1.0

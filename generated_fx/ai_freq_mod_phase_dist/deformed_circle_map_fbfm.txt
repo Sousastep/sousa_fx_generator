@@ -55,6 +55,7 @@
 @state zcHz = 58.27;
 @state smoothF0 = 58.27;
 @state smoothEnv = 0.0;
+@state in2Hold = 0.0;
 @state dcXL = 0.0; @state dcYL = 0.0;
 @state dcXR = 0.0; @state dcYR = 0.0;
 
@@ -128,7 +129,13 @@ function evalDeformedLoop(phaseIn: number, deform: number, rotAngle: number): nu
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
 let barIn = in4;
 
@@ -192,9 +199,11 @@ let lockStrength = clamp(phase_lock_strength, 0.0, 1.0);
 let defAmt = clamp(loop_deformation, 0.0, 1.0);
 
 // In the Sine Circle Map x_n = x_{n-1} + Omega + (k / 2*pi)*sin(2*pi*x_{n-1}),
-// positive feedback accelerates the average rotation number W(Omega, k) above Omega!
-// Compensate Omega slightly as k grows so the perceived pitch stays locked to f0,
-// and use a 2-point Tomisawa anti-hunting filter on the feedback projection at high k.
+// the feedback changes the average rotation number W(Omega, k) (near k = 1 the map
+// lingers on the slow side of the circle, so it falls well below Omega). The phase
+// lock below keeps the pitch on f0 for any phase_lock_strength >= 0.1; at 0 the map
+// runs free and detunes (e.g. a 58 Hz note gives a 30 Hz series at k = 0.95).
+// A 2-point Tomisawa anti-hunting filter smooths the feedback projection at high k.
 let omegaBase = f0 / sr;
 let errL = wrap(tubaPh - mapX_L + 0.5, 0.0, 1.0) - 0.5;
 let errR = wrap(tubaPh - mapX_R + 0.5, 0.0, 1.0) - 0.5;
@@ -213,7 +222,11 @@ fbPrevR = fbRawR;
 let stepPertL = (kVal / (2.0 * pi)) * omegaBase * 6.5 * fbSmoothL;
 let stepPertR = ((kVal * 1.03) / (2.0 * pi)) * omegaBase * 6.5 * fbSmoothR;
 
-let contLock = lockStrength * 0.08;
+// Continuous per-sample pull toward the tuba phase, faded out between k = 1.0 and
+// 1.2: above that only the period-synchronous sync below acts, so the map's own
+// period doubling can show (with the pull always on it stayed 1:1 at every k and
+// the documented sub-octave regime never appeared)
+let contLock = lockStrength * 0.08 * clamp((1.2 - kVal) / 0.2, 0.0, 1.0);
 mapX_L = wrap(mapX_L + omegaBase + stepPertL + contLock * errL, 0.0, 1.0);
 mapX_R = wrap(mapX_R + omegaBase + stepPertR + contLock * errR, 0.0, 1.0);
 
@@ -251,9 +264,10 @@ let rawOutL = evalDeformedLoop(evalPhL, defAmt, rotAngle);
 let rawOutR = evalDeformedLoop(evalPhR, defAmt, rotAngle + 0.5 * pi);
 
 // DC blocker (Concave L-Loop is intentionally asymmetric around origin!)
-let dcOutL = rawOutL - dcXL + 0.995 * dcYL;
+let dcPole = 1.0 - (2.0 * pi * 10.0 / sr); // 10 Hz (a fixed 0.995 was 38 Hz at 48 kHz: -1.6 dB at 58 Hz, -4 dB at 29 Hz)
+let dcOutL = rawOutL - dcXL + dcPole * dcYL;
 dcXL = rawOutL; dcYL = dcOutL;
-let dcOutR = rawOutR - dcXR + 0.995 * dcYR;
+let dcOutR = rawOutR - dcXR + dcPole * dcYR;
 dcXR = rawOutR; dcYR = dcOutR;
 
 let gate = clamp((smoothEnv - 0.002) * 200.0, 0.0, 1.0);

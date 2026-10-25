@@ -44,11 +44,21 @@
 @state zcCount = 0.0;
 @state zcHz = 55.0;
 @state smoothF0 = 55.0;
+@state lastI = -1.0;
+@state j0I = 1.0;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = in2;
 let pitchIn = in3;
+
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 
 // --- 1. Pitch Conditioning ---
 let mono = 0.5 * (xL + xR);
@@ -74,6 +84,23 @@ let modSin = I * sin(2.0 * pi * modPhasor.next(fm));
 let a2_even = cos(modSin); // Eq. 5: J0(I) + 2*sum(J_{2n}(I)*cos(2n*wm*t))
 let a3_odd = sin(modSin);  // Eq. 6: 2*sum(J_{2n-1}(I)*sin((2n-1)*wm*t))
 
+// J0(I) (power series, recomputed when I changes). The IIR Hilbert pair passes DC
+// at gain -1 in its imaginary branch, so the even modulator's J0 term must bypass
+// it; otherwise the n = 0 (carrier) term gained a spurious 90-degree copy (+3 dB,
+// rotated 45 degrees) in every sideband group.
+if (I != lastI) {
+	let term = 1.0;
+	let sum = 1.0;
+	let q = 0.25 * I * I;
+	for (let m = 1; m < 30; m++) {
+		term = 0.0 - term * q / (m * m);
+		sum += term;
+	}
+	j0I = sum;
+	lastI = I;
+}
+let a2_evenAc = a2_even - j0I;
+
 // --- 3. Hilbert Transforms for Carrier, Even Mod, and Odd Mod ---
 let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
 let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
@@ -94,14 +121,14 @@ let yci3 = cIm3 * (sCi + cImY[3]) - cImX[3]; cImX[3] = sCi; cImY[3] = yci3;
 let ad = 0.0 - yci3; // negate: this cR/cI order is the negative Hilbert
 
 // Even Modulator Hilbert -> (aae, abe)
-let sE = a2_even;
+let sE = a2_evenAc;
 let ye0 = cRe0 * (sE + eReY[0]) - eReX[0]; eReX[0] = sE; eReY[0] = ye0; sE = ye0;
 let ye1 = cRe1 * (sE + eReY[1]) - eReX[1]; eReX[1] = sE; eReY[1] = ye1; sE = ye1;
 let ye2 = cRe2 * (sE + eReY[2]) - eReX[2]; eReX[2] = sE; eReY[2] = ye2; sE = ye2;
 let ye3 = cRe3 * (sE + eReY[3]) - eReX[3]; eReX[3] = sE; eReY[3] = ye3;
-let aae = eDelRe; eDelRe = ye3;
+let aae = eDelRe + j0I; eDelRe = ye3;
 
-let sEi = a2_even;
+let sEi = a2_evenAc;
 let yei0 = cIm0 * (sEi + eImY[0]) - eImX[0]; eImX[0] = sEi; eImY[0] = yei0; sEi = yei0;
 let yei1 = cIm1 * (sEi + eImY[1]) - eImX[1]; eImX[1] = sEi; eImY[1] = yei1; sEi = yei1;
 let yei2 = cIm2 * (sEi + eImY[2]) - eImX[2]; eImX[2] = sEi; eImY[2] = yei2; sEi = yei2;

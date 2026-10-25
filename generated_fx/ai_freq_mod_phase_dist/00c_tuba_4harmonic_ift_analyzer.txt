@@ -5,7 +5,8 @@
 // ============================================================================
 // Tracks the first 4 harmonics (f1 = f0, f2 = 2*f0, f3 = 3*f0, f4 = 4*f0) of
 // the live tuba simultaneously at audio rate:
-//   1. Locks 4 dual-stage high-Q SVF bandpass filters onto 1x, 2x, 3x, and 4x
+//   1. Locks 4 dual-stage high-Q TPT-SVF bandpass filters (unity peak gain)
+//      onto 1x, 2x, 3x, and 4x
 //      the tracked fundamental f0 (from 00_tuba_freq_tracker on in3, or
 //      its own internal zero-crossing tracker if in3 <= 0).
 //   2. Passes all 4 isolated harmonics through 4 independent 4-stage quadrature
@@ -26,7 +27,9 @@
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (Tuba; mono in1 supported automatically)
 //   in3: Tracked Fundamental f0 in Hz (from 00_tuba_freq_tracker or fluid.pitch~)
-//   in4: Optional Freeze Gate [0 or 1] (from out3 of 00b_tuba_transient_valve_detector)
+//   in4: Optional Freeze Gate [0 or 1] (from out3 of 00b_tuba_transient_valve_detector).
+//        Freezes only while in4 >= 0.5 AND held constant, so a moving ramp such as
+//        the rig's phasor~ 0.5 on in4 never freezes the analyzer.
 // Outlets:
 //   out1: Harmonic 1 Instantaneous Frequency f1 (Hz)
 //   out2: Harmonic 2 Instantaneous Frequency f2 (Hz)
@@ -43,11 +46,12 @@
 @param({ min: 0.0, max: 1.0 }) inharm_range = 0.15;
 @param({ min: 0.0, max: 1.0 }) norm_amplitudes = 0.0;
 
-// 4 Dual-Stage SVF Bandpass Filters (2 stages per harmonic k = 0..3)
-@state svf1_0 = new svf(); @state svf2_0 = new svf();
-@state svf1_1 = new svf(); @state svf2_1 = new svf();
-@state svf1_2 = new svf(); @state svf2_2 = new svf();
-@state svf1_3 = new svf(); @state svf2_3 = new svf();
+// 4 Dual-Stage TPT SVF Bandpass Filters (index 2k = stage 1, 2k+1 = stage 2).
+// The built-in svf (Chamberlin) has peak gain 1/damping plus a cubic limiter in
+// its band state, so at these Q values it saturated and A1..A4 / out9 were
+// meaningless; this one is linear with unity gain at the centre frequency.
+@state svfIc1 = new FixedSampleArray(8);
+@state svfIc2 = new FixedSampleArray(8);
 
 // 4 Quadrature 4-Stage IIR Hilbert Transform State Arrays (indexed [harmonic 0..3][stage 0..3])
 @state hReX = new FixedSampleArray(4, 4);
@@ -68,6 +72,21 @@
 @state zcCount = 0.0;
 @state zcHz = 58.27;
 @state condF0 = 58.27;
+@state prevFreezeIn = 0.0;
+@state in2Hold = 0.0;
+
+// Unity-peak TPT state-variable bandpass (Zavalishin / Simper), one stage
+function svfBp(idx: Int, x, g, kd) {
+	let a1 = 1.0 / (1.0 + g * (g + kd));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - svfIc2[idx];
+	let v1 = a1 * svfIc1[idx] + a2 * v3;
+	let v2 = svfIc2[idx] + a2 * svfIc1[idx] + a3 * v3;
+	svfIc1[idx] = 2.0 * v1 - svfIc1[idx];
+	svfIc2[idx] = 2.0 * v2 - svfIc2[idx];
+	return kd * v1;
+}
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
@@ -75,7 +94,17 @@ let xR = in2;
 let pitchIn = in3;
 let freezeIn = in4;
 
-let mono = (abs(xR) > 0.0000001) ? (0.5 * (xL + xR)) : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(xR) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let mono = (in2Hold > 0.0) ? (0.5 * (xL + xR)) : xL;
+
+// Freeze only on a held gate: a ramp (phasor~) changes every sample and is ignored
+let frozen = (freezeIn >= 0.5 && freezeIn == prevFreezeIn);
+prevFreezeIn = freezeIn;
 
 // ============================================================================
 // 1. FUNDAMENTAL ANCHOR CONDITIONING & FREEZE GATE
@@ -92,7 +121,7 @@ prevTrackSig = monoLow;
 
 let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
 // Only update anchor pitch when freeze gate (in4) is low (< 0.5)
-if (freezeIn < 0.5) {
+if (!frozen) {
 	let f0Slew = 1.0 - exp(-1.0 / (0.004 * sr));
 	condF0 += (rawF0 - condF0) * f0Slew;
 }
@@ -101,8 +130,10 @@ let f0 = clamp(condF0, 24.0, 700.0);
 // ============================================================================
 // 2. 4-HARMONIC DUAL-STAGE SVF ISOLATION
 // ============================================================================
-// Map filter_selectivity [0.2..1.0] to SVF Q in [0.65..0.95]
+// Map filter_selectivity [0.2..1.0] to a resonance in [0.66..0.95], then to the
+// per-stage damping the svf object used: kd = ((1 - q) * 1.2)^2 (Q ~ 6 .. 280)
 let qSvf = clamp(0.55 + 0.40 * pow(clamp(filter_selectivity, 0.2, 1.0), 0.8), 0.55, 0.95);
+let kdSvf = clamp(((1.0 - qSvf) * 1.2) * ((1.0 - qSvf) * 1.2), 0.001, 2.0);
 
 let fNom0 = clamp(f0 * 1.0, 24.0, sr * 0.44);
 let fNom1 = clamp(f0 * 2.0, 48.0, sr * 0.44);
@@ -110,10 +141,14 @@ let fNom2 = clamp(f0 * 3.0, 72.0, sr * 0.44);
 let fNom3 = clamp(f0 * 4.0, 96.0, sr * 0.44);
 
 let hSig = new FixedSampleArray(4);
-hSig[0] = svf2_0.next(svf1_0.next(mono, fNom0, qSvf)[2], fNom0, qSvf)[2] * 2.2;
-hSig[1] = svf2_1.next(svf1_1.next(mono, fNom1, qSvf)[2], fNom1, qSvf)[2] * 2.2;
-hSig[2] = svf2_2.next(svf1_2.next(mono, fNom2, qSvf)[2], fNom2, qSvf)[2] * 2.2;
-hSig[3] = svf2_3.next(svf1_3.next(mono, fNom3, qSvf)[2], fNom3, qSvf)[2] * 2.2;
+let g0 = tan(pi * fNom0 / sr);
+let g1 = tan(pi * fNom1 / sr);
+let g2 = tan(pi * fNom2 / sr);
+let g3 = tan(pi * fNom3 / sr);
+hSig[0] = svfBp(1, svfBp(0, mono, g0, kdSvf), g0, kdSvf);
+hSig[1] = svfBp(3, svfBp(2, mono, g1, kdSvf), g1, kdSvf);
+hSig[2] = svfBp(5, svfBp(4, mono, g2, kdSvf), g2, kdSvf);
+hSig[3] = svfBp(7, svfBp(6, mono, g3, kdSvf), g3, kdSvf);
 
 let fNomArr = new FixedSampleArray(4);
 fNomArr[0] = fNom0;
@@ -170,7 +205,7 @@ for (let k: Int = 0; k < 4; k++) {
 	instAmp[k] = instAmp[k] + (ampK - instAmp[k]) * slewCoeff;
 
 	// Update instantaneous frequency f_k(t) when not frozen and partial energy is above noise floor
-	if (freezeIn < 0.5) {
+	if (!frozen) {
 		let relErr = abs(rawFk - nomFk) / maximum(nomFk, 20.0);
 		if (relErr <= maxDev && ampK > 0.00015) {
 			instHz[k] = instHz[k] + (rawFk - instHz[k]) * slewCoeff;
@@ -193,7 +228,7 @@ let sumAmp = a1 + a2 + a3 + a4 + 0.0001;
 // Spectral centroid in harmonic units [1.0 .. 4.0]:
 // 1.0 = pure fundamental sine (soft dynamics), > 2.2 = bright brassy wave-steepened fortissimo
 let rawCentroid = (1.0 * a1 + 2.0 * a2 + 3.0 * a3 + 4.0 * a4) / sumAmp;
-if ( sumAmp > 0.001 && freezeIn < 0.5 ) {
+if ( sumAmp > 0.001 && !frozen ) {
 	smoothCentroid += (clamp(rawCentroid, 1.0, 4.0) - smoothCentroid) * slewCoeff;
 }
 

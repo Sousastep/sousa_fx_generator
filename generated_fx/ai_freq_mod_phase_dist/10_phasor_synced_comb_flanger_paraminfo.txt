@@ -3,11 +3,12 @@
 ================================================================================
 
 OVERVIEW
-A tempo-synced stereo comb/flange sweeper driven by the 1-bar audio-rate phasor (0 to 1) on in3. Multiplies and wraps the 1-bar phasor into integer rhythmic subdivisions (quarter notes, 8ths, triplets, 16ths) and shapes each cycle into an asymmetric fast-rise / curved-decay riddim whip envelope. Sweeps a pair of cubic-interpolated resonant comb filters across up to 3.5 octaves to turn steady tuba notes into syncopated, metallic riddim chop-sweeps.
+A tempo-synced stereo comb/flange sweeper driven by the 1-bar audio-rate phasor (0 to 1) on in4. Multiplies and wraps the 1-bar phasor into integer rhythmic subdivisions (quarter notes, 8ths, triplets, 16ths) and shapes each cycle into an asymmetric fast-rise / curved-decay riddim whip envelope. Sweeps a pair of cubic-interpolated resonant comb filters across up to 3.5 octaves to turn steady tuba notes into syncopated, metallic riddim chop-sweeps.
 
 INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input (Left / Right)
-- in3: 1-Bar Audio-Rate Phasor [0..1] (automatically falls back to an internal 0.5 Hz LFO if unpatched)
+- in3: Tracked pitch in Hz (rig contract; not used by this effect)
+- in4: 1-Bar Audio-Rate Phasor [0..1] (falls back to an internal 0.5 Hz LFO when in4 has not moved for 100 ms). Earlier versions read the bar from in3, so in the rig the sweep followed the fractional part of the pitch instead of the bar.
 - out1 / out2: Stereo Rhythmic Comb-Swept Audio Output
 
 PARAMETERS (4)

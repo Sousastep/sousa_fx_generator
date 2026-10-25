@@ -6,10 +6,11 @@ OVERVIEW
 Implements the AM/FM Decomposition Digital Audio Effects suite — OctIFer, TransColorIFer, HybridIFer, ChorIFer, and WahIFer — from Goulart, Lazzarini, Timoney, and Queiroz (DAFx-15 Paper 30, Sections 2 & 3.1–3.5, Eq. 4–13; DAFx-18 Paper 28, Sections 2.3 & 3.1–3.3). Unravels the stereo tuba via a 4-stage Hilbert transform into its Instantaneous Amplitude envelope a(t) and Instantaneous Frequency trajectory f(t). Manipulating f(t) by scaling (r = 0.5 sub-octave OctIFer, r = 1.5 fifth TransColorIFer, r = 2.0 metal-slide octave), filtering f(t) through a resonant SVF (WahIFer / chirp smoothing), and detuning (ChorIFer) before multiplying by the original unmodified amplitude envelope a(t) convolves the FM spectrum with the tuba's AM envelope!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
+- in1 / in2: Stereo Audio Input (Tuba; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Optional Tracked Fundamental Pitch f0 in Hz (stabilizes the IF floor during breath pauses)
-- in4: Optional Second Audio Input for HybridIFer Cross-Synthesis (DAFx-15 Section 3.3, Eq. 11: hybridizes the tuba's IF trajectory with a second oscillator, drum loop, or synth patched into in4 while preserving the tuba's amplitude envelope)
+- in4: Optional Second Audio Input for HybridIFer Cross-Synthesis (DAFx-15 Section 3.3, Eq. 11: hybridizes the tuba's IF trajectory with a second oscillator, drum loop, or synth patched into in4 while preserving the tuba's amplitude envelope). In the test rig in4 carries the 0.5 Hz bar phasor, whose IF sits at the 15 Hz floor, so keep hybrid_in4_mix at 0 there unless real audio is patched to in4.
 - out1 / out2: Stereo AM/FM Resynthesized Output
+- Level: follows the input (the instantaneous amplitude is reused unchanged); on the sousa_mic.aif take (-32 dB RMS in) about -34 dB RMS at the defaults (offline render of the real RNBO code).
 
 PARAMETERS (6)
 
@@ -25,11 +26,11 @@ PARAMETERS (6)
 2. if_filter_hz
    - Range: 1.0 to 1000.0 Hz (IF-Domain Filter Cutoff Frequency, Default: 250.0 Hz)
    - Taper: Direct frequency in Hz.
-   - Function: Filters the IF control signal f(t) (DAFx-18 Section 3.1). High values (500–1000 Hz) preserve fast harmonic FM excursions; moderate values (50–250 Hz) smooth rapid articulation into liquid vowel transitions; extreme low values (1–15 Hz) create the DAFx-15 Fig. 7 / DAFx-18 "lowp-if-1" sweeping FM chirp effect!
+   - Function: Filters the IF control signal f(t) (DAFx-18 Section 3.1) with a linear state-variable filter. (Earlier versions used the svf object, whose built-in limiter is scaled for audio: fed the IF in Hz it could diverge to NaN - e.g. at 1000 Hz with wah_if_res 1 - and silence the effect until it was reloaded.) High values (500–1000 Hz) preserve fast harmonic FM excursions; moderate values (50–250 Hz) smooth rapid articulation into liquid vowel transitions; extreme low values (1–15 Hz) create the DAFx-15 Fig. 7 / DAFx-18 "lowp-if-1" sweeping FM chirp effect!
 
 3. wah_if_res
    - Range: 0.0 to 1.0 (WahIFer Bandpass Resonance Injection on IF, Default: 0.35)
-   - Taper: Linear resonance and bandpass injection (DAFx-15 Section 3.5, Eq. 13).
+   - Taper: Linear resonance (filter Q about 3.4 .. 41) and bandpass injection (DAFx-15 Section 3.5, Eq. 13).
    - Function: Adds the resonant bandpass output of the IF filter back into the smoothed IF trajectory, causing note bends and tongue attacks to whip the FM sideband bandwidth dynamically.
 
 4. chorifer_detune

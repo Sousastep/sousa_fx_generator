@@ -6,10 +6,11 @@ OVERVIEW
 Implements the Variable-Delay Feedback Amplitude Modulation (FBAM) Operator and its Variations III, IV, and V from Lazzarini, Timoney, Kleimola, and Välimäki (DAFx-09 Paper 31, Sections 2, 3.3–3.6 & 4.2, Eq. 6, 10–14, Fig. 8–11). Unlike standard additive comb filters (`y = x + g*y(n-D)`), Variation V multiplies the input by its own delayed feedback (`y(n) = x(n) * [1 + beta * y(n-D)]`), acting as a time-varying coefficient-modulated comb filter whose phase and magnitude responses distort simultaneously! Includes the Section 3.6 "Coda" feedback lowpass filter so beta can safely exceed 1.0 on live acoustic tuba inputs.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
+- in1 / in2: Stereo Audio Input (Tuba; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps the feedback delay D for DAFx-09 Section 4.2 "Phase Difference Modulation")
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps the feedback delay D four times per bar for DAFx-09 Section 4.2 "Phase Difference Modulation"; an internal 0.75 Hz LFO takes over when in4 has not moved for 100 ms)
 - out1 / out2: Stereo Feedback-AM Comb Operator Output
+- Level independence: the fed-back y(n - D) is normalised to unit amplitude by its own envelope (1 ms / 60 ms), so beta means the same thing at any playing level, as in the paper's unit-amplitude oscillator. Before, a real tuba signal (~0.05 peak) only produced a 2nd harmonic 34 dB down - nearly a clean pass-through - while a 0.7-peak sine got 15 dB down; now both get about 11-14 dB down at the defaults (offline render of the real RNBO code on a 58 Hz sine). On the sousa_mic.aif take (-32 dB RMS in) the defaults give about -34 dB RMS. Expect sharp, pulse-like waveform edges, especially toward Variation IV.
 
 PARAMETERS (6)
 

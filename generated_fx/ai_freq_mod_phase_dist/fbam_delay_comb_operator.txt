@@ -12,12 +12,16 @@
 //              y(n) = cos(N * w0 * n) * x(n) * [1 + beta * LP(y(n - D))]
 // Sweeping the feedback delay D around fs / f0 creates intense "phase difference
 // modulation" (Section 4.2) and sharp pulse-comb harmonic spectra!
+// The fed-back y(n - D) is normalised by its own envelope, so beta acts as the
+// paper's index (defined for a unit-amplitude oscillator) at any playing level: on
+// raw tuba levels (~0.05 peak) the operator was otherwise almost a clean pass-through.
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
 //   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
-//   in4: Optional 1-Bar Phasor [0..1] (sweeps delay D for "phase difference modulation")
+//   in4: Optional 1-Bar Phasor [0..1] (sweeps delay D for "phase difference modulation";
+//        an in4 that has not moved for 100 ms falls back to an internal 0.75 Hz LFO)
 // Outlets:
 //   out1: Left Feedback-AM Comb Operator Output
 //   out2: Right Feedback-AM Comb Operator Output
@@ -50,10 +54,20 @@
 @state zcHz = 58.27;
 @state smoothF0 = 58.27;
 @state smoothBeta = 0.95;
+@state envDL = 0.0;
+@state envDR = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
 let barIn = in4;
 
@@ -75,9 +89,15 @@ let f0 = clamp(smoothF0, 24.0, 1000.0);
 smoothBeta += (clamp(fbam_beta, 0.0, 1.8) - smoothBeta) * slew;
 
 // --- 2. Feedback Delay D & "Phase Difference Modulation" (Paper Sec 3.5 & 4.2) ---
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// in4 counts as a running bar for 100 ms after it last moved (a held value is not a bar)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let barPh = barActive ? wrap(barIn * 4.0, 0.0, 1.0) : barFallback.next(0.75);
+let fallbackPh = barFallback.next(0.75);
+let barPh = (barHold > 0.0) ? wrap(barIn * 4.0, 0.0, 1.0) : fallbackPh;
 let sweepLfo = sin(2.0 * pi * barPh);
 
 // When delay_harmonic_d = 1.0, D = fs / f0 aligns all cosine product phases (Eq. 12-14, Fig. 9)
@@ -98,8 +118,18 @@ let iYdR: Int = floor(rpYdR);
 let rawYD_R = cubicinterp(rpYdR - iYdR, fbBufR[(iYdR - 1 + 4096) & 4095], fbBufR[iYdR & 4095], fbBufR[(iYdR + 1) & 4095], fbBufR[(iYdR + 2) & 4095]);
 
 let lpCut = clamp(loop_lp_hz, 200.0, 10000.0);
-let yDL = fbLpL.next(rawYD_L, lpCut);
-let yDR = fbLpR.next(rawYD_R, lpCut);
+let yDRawL = fbLpL.next(rawYD_L, lpCut);
+let yDRawR = fbLpR.next(rawYD_R, lpCut);
+
+// Normalise the feedback to unit amplitude (1 ms / 60 ms peak follower); below about
+// -54 dBFS the divisor is held at 0.002, so quiet tails fade out instead of being
+// amplified (and nothing switches abruptly)
+let envAtk = 1.0 - exp(-1.0 / (0.001 * sr));
+let envRel = 1.0 - exp(-1.0 / (0.060 * sr));
+envDL += (abs(yDRawL) - envDL) * ((abs(yDRawL) > envDL) ? envAtk : envRel);
+envDR += (abs(yDRawR) - envDR) * ((abs(yDRawR) > envDR) ? envAtk : envRel);
+let yDL = clamp(yDRawL / maximum(envDL, 0.002), -1.0, 1.0);
+let yDR = clamp(yDRawR / maximum(envDR, 0.002), -1.0, 1.0);
 
 // --- 3. Evaluate Variations V, IV, and III (Paper Eq. 10, 11, 12) ---
 // Variation V (Eq. 12): y(n) = x(n) * [1 + beta * y(n - D)]
@@ -142,9 +172,10 @@ fbBufR[writeIdx] = boundedR;
 writeIdx = (writeIdx + 1) & 4095;
 
 // DC blocker (FBAM generates an inherent x^2 rectified DC component at even powers)
-let outL = boundedL - dcXL + 0.995 * dcYL;
+let dcPole = 1.0 - (2.0 * pi * 10.0 / sr); // 10 Hz (a fixed 0.995 was 38 Hz at 48 kHz: -1.6 dB at 58 Hz, -4 dB at 29 Hz)
+let outL = boundedL - dcXL + dcPole * dcYL;
 dcXL = boundedL; dcYL = outL;
-let outR = boundedR - dcXR + 0.995 * dcYR;
+let outR = boundedR - dcXR + dcPole * dcYR;
 dcXR = boundedR; dcYR = outR;
 
 out1 = outL;

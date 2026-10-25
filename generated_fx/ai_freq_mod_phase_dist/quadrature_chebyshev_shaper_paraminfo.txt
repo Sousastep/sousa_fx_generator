@@ -3,20 +3,21 @@ quadrature_chebyshev_shaper — Parameter Information
 ================================================================================
 
 OVERVIEW
-Implements Phase-Quadrature Chebyshev Waveshaping using Chebyshev Polynomials of the First Kind (T_k) and Second Kind (U_k) from Timoney, Lazzarini, Gibney, and Pekonen (DAFx-10 Paper P65, Section 2.1, Eq. 5–15). Standard Chebyshev waveshaping (`12_adaa_chebyshev_wavefolder`) uses only First-Kind polynomials T_k(cos(wt)) = cos(k*wt), locking every generated harmonic to 0-degree cosine phase. By extracting the quadrature signal pair (x_I = cos(wt), x_Q = sin(wt)) via a 4-stage Hilbert transform and combining T_k(x_I) with x_Q * U_{k-1}(x_I) = sin(k*wt) (Eq. 15), this effect gives you independent control over BOTH the harmonic magnitudes AND the exact phase angles phi_k of harmonics 2 through 6 — allowing you to tilt waveform asymmetry, emulate reactive analog distortion circuits, and continuously spin harmonic phases in opposite stereo directions!
+Implements Phase-Quadrature Chebyshev Waveshaping using Chebyshev Polynomials of the First Kind (T_k) and Second Kind (U_k) from Timoney, Lazzarini, Gibney, and Pekonen (DAFx-10 Paper P65, Section 2.1, Eq. 5–15). Standard Chebyshev waveshaping (`12_adaa_chebyshev_wavefolder`) uses only First-Kind polynomials T_k(cos(wt)) = cos(k*wt), locking every generated harmonic to 0-degree cosine phase. By extracting the quadrature signal pair (x_I = cos(wt), x_Q = sin(wt)) via a 4-stage Hilbert transform and combining T_k(x_I) with x_Q * U_{k-1}(x_I) = sin(k*wt) (Eq. 15), this effect gives you independent control over BOTH the harmonic magnitudes AND the exact phase angles phi_k of harmonics 2 through 6 — allowing you to tilt waveform asymmetry, emulate reactive analog distortion circuits, and continuously spin harmonic phases in opposite stereo directions! The quadrature pair is normalised onto the unit circle (where T_k and U_k are exact) and the level is restored afterwards, so the harmonic recipe is the same whether you play softly or loudly.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (works best after 01_harmonic_isolator or on raw tuba)
-- in3: Optional Modulation Envelope [0..1] (dynamically rotates harmonic phase angles phi_k on attacks)
+- in1 / in2: Stereo Audio Input (works best after 01_harmonic_isolator or on raw tuba; in2 silent for 250 ms -> in1 is used for both sides)
+- in3: Optional Modulation Envelope [-2..2] (dynamically rotates harmonic phase angles phi_k on attacks; values outside that range, such as the rig's pitch in Hz, are ignored)
 - in4: Optional 1-Bar Audio-Rate Phasor [0..1] (drives continuous harmonic phase rotation when phase_spin > 0)
 - out1 / out2: Stereo Phase-Quadrature Chebyshev Output
+- Level & behaviour (offline render of the real RNBO code): on a sine the defaults give a 2nd harmonic about 10 dB and a 3rd about 7 dB below the fundamental at 0.05, 0.3 and 0.9 peak alike. Earlier versions fed the polynomials the raw (sub-unit) magnitude, so at real tuba levels they returned almost only the fundamental (3rd harmonic 35 dB down at 0.05 peak). On the sousa_mic.aif take (-32 dB RMS in) the output is about -35 dB RMS.
 
 PARAMETERS (7)
 
 1. drive_db
-   - Range: 0.0 to 18.0 dB (Quadrature Input Drive into Unit-Disk Saturator, Default: 6.0 dB)
-   - Taper: Logarithmic dB-to-linear gain.
-   - Function: Controls how strongly the quadrature carrier pair (x_I, x_Q) excites higher-order Chebyshev polynomials T_2..T_6 and U_1..U_5.
+   - Range: 0.0 to 18.0 dB (Default: 6.0 dB)
+   - Taper: Logarithmic dB-to-linear gain on the envelope-normalised magnitude, through a tanh to a shaping radius r in [0, 1).
+   - Function: Controls how strongly harmonics 2..6 come through: harmonic k is weighted by r^(k-1), so low drive keeps mostly the 2nd/3rd and high drive opens up the 5th/6th. Independent of playing level.
 
 2. even_harmonics
    - Range: 0.0 to 1.0 (2nd, 4th, and 6th Harmonic Magnitude Weight, Default: 0.55)
@@ -40,8 +41,8 @@ PARAMETERS (7)
 
 6. phase_spin
    - Range: 0.0 to 1.0 (Continuous Harmonic Phase Rotation Depth, Default: 0.35)
-   - Taper: Linear rotation depth locked to the 1-bar phasor on in4.
-   - Function: Continuously rotates each harmonic's phase angle at integer multiples of the bar phasor (1x, 2x, 3x, 4x, 5x), creating a zero-delay harmonic barberpole swirl inside the waveshaper.
+   - Taper: Linear rotation rate locked to the 1-bar phasor on in4: phase_spin turns per half bar for harmonic 2, scaled by 1x..5x for harmonics 2..6 (an internal 0.5 Hz bar takes over when in4 has not moved for 100 ms).
+   - Function: Continuously rotates each harmonic's phase angle, creating a zero-delay harmonic barberpole swirl inside the waveshaper. The rotation is integrated, so it never jumps at the bar wrap (earlier versions clicked twice per bar at fractional settings).
 
 7. stereo_quad_spread
    - Range: 0.0 to 1.0 (maps to 0 to 90 degrees Left/Right Quadrature Phase Offset plus Counter-Rotation)

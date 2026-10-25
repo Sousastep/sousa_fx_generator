@@ -6,12 +6,13 @@ OVERVIEW
 Implements the Nonlinear Acoustic Wave Steepening & Amplitude-Dependent Propagation Delay ("Brassifier") from Charles M. Cooper and Jonathan S. Abel (DAFx-10 Paper P77, Sections 2.1, 3.2, 4.1–4.2 & 5.1–5.2, Eq. 2, 5, 12, Fig. 5–9). Inside a brass instrument bore at fortissimo levels (>140 dB SPL), the speed of sound v(x,t) = c0 + beta * p(x,t)/P0 increases with instantaneous pressure, causing high-pressure peaks to travel faster than troughs and sharpening smooth waveforms into sawtooth-like shock waves ("cuivré" brassiness). Combines both the Equalized Brassifier (Fig. 7: pre-emphasis bore filter c(z) + complementary bell high-pass transmission filter q(z)) and the Sidechain Brassifier (Fig. 8: lowpass-isolated bore pressure modulating a cubic-interpolated variable delay line), allowing even soft, warm tuba playing to erupt into hyper-brassy shock fronts.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
+- in1 / in2: Stereo Audio Input (Tuba; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Optional Tracked Fundamental Pitch f0 in Hz (scales maximum shock excursion proportionally to the note period)
-- in4: Optional External Sidechain Pressure Signal (adds to the internal bore pressure modulator)
+- in4: Optional External Sidechain Pressure Signal (added to the internal bore pressure, scaled by ext_sidechain - off by default, because the test rig sends its 0..1 bar phasor to in4, which at full level swept the bore delay by about 3 ms across every bar and snapped it back at the wrap)
 - out1 / out2: Stereo Brassified / Shock-Steepened Output
+- Level: on the sousa_mic.aif take (-32 dB RMS in) about -28.5 dB RMS / -9 dBFS peak at the defaults (offline render of the real RNBO code). The steepening depends on how loud the bore signal is, as in the physical model: louder playing brassifies more.
 
-PARAMETERS (6)
+PARAMETERS (7)
 
 1. shock_drive_beta
    - Range: 0.0 to 1.0 (Nonlinearity Coefficient beta, Default: 0.65)
@@ -42,3 +43,8 @@ PARAMETERS (6)
    - Range: 0.0 to 1.0 (maps to +/- 18% Left/Right Bore Length Offset)
    - Taper: Linear stereo path-length difference.
    - Function: Creates a wider stereo image by simulating slightly different nonlinear tube lengths on Left and Right channels.
+
+7. ext_sidechain
+   - Range: 0.0 to 1.0 (Default: 0.0)
+   - Taper: Linear gain on in4 before it joins the bore pressure.
+   - Function: Lets an external audio signal on in4 (a kick, another instrument) push the propagation speed. Leave at 0 when in4 carries a bar phasor or other control signal.

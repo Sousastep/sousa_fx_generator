@@ -3,11 +3,13 @@
 ================================================================================
 
 OVERVIEW
-Combines First-Order Antiderivative Antialiased (ADAA1) Wavefolding (Bilbao, Esqueda, Parker, & Välimäki, IEEE SPL 2017) with Chebyshev Polynomial Harmonic Synthesis (Arfib 1979 / Airwindows Pafnuty2) and low-octave preservation (Focus / UnBox). Evaluating the analytical antiderivative F1(x) = -cos(pi*x)/pi + 0.5*ln(cosh(x)) over each sample interval suppresses foldback aliasing without brute-force oversampling, while the Chebyshev T2–T5 stage injects deterministic 2nd–5th harmonics that never alias on tuba fundamentals.
+Combines First-Order Antiderivative Antialiased (ADAA1) Wavefolding (Bilbao, Esqueda, Parker, & Välimäki, IEEE SPL 2017) with Chebyshev Polynomial Harmonic Synthesis (Arfib 1979 / Airwindows Pafnuty2) and low-octave preservation (Focus / UnBox). Evaluating the analytical antiderivative F1(x) = -cos(pi*x)/pi + 0.5*ln(cosh(x)) over each sample interval reduces foldback aliasing without brute-force oversampling, while the Chebyshev T2–T5 stage injects mostly deterministic 2nd–5th harmonics. Neither path is alias-free: measured on a 1.2 kHz sine at 30 dB drive, the inharmonic (aliased) energy is about 12 dB below the harmonics for the folder and 27 dB below for the Chebyshev side (it follows a soft tanh limiter). On the tuba's low notes this is far less.
 
 INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input (works great on both raw tuba and 01_harmonic_isolator)
 - out1 / out2: Stereo Antialiased Wavefolded / Chebyshev Output
+- No in3 / in4 (no pitch or tempo input).
+- Level: on the sousa_mic.aif take (-32 dB RMS in) the defaults give about -20 / -17.5 dB RMS (L / R; the bias has opposite polarity per side) with peaks around -6 / -2.5 dBFS (offline render of the real RNBO code). Silence stays silent: the output at the bias point is removed before the DC blocker and the bias glides over 10 ms, so loading the effect or moving asym_bias no longer clicks (it used to spike to -0.6 dBFS on load).
 
 PARAMETERS (4)
 
@@ -23,7 +25,7 @@ PARAMETERS (4)
 
 3. asym_bias
    - Range: -0.60 to +0.60 (DC Offset / Single-Ended Triode Asymmetry)
-   - Taper: Linear bipolar offset (applied in opposite polarity on Left and Right channels for stereo harmonic spread, followed by a 15 Hz DC blocker).
+   - Taper: Linear bipolar offset (applied in opposite polarity on Left and Right channels for stereo harmonic spread; glides over 10 ms, and the resulting static offset is subtracted before a 15 Hz DC blocker).
    - Function: Shifts the operating point of the folder/Chebyshev curve to inject warm even-order harmonics (2nd, 4th) that fatten the tuba's odd-dominant natural spectrum.
 
 4. sub_preserve

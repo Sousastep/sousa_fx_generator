@@ -16,7 +16,10 @@
 //   in1: Left Audio Input (Tuba Carrier)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
 //   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
-//   in4: Optional External Modulator [-1..1] (if unpatched, uses internal ratio oscillator)
+//   in4: Optional External Modulator [-1..1], crossfaded in by ext_mod (default 0 = the
+//        internal pitch-locked ratio oscillator). Earlier versions switched to in4 whenever
+//        it was non-zero, so the rig's bar phasor swept the carrier up to exp_octaves over
+//        every bar and the re-tuned pitch lock was lost.
 // Outlets:
 //   out1: Left Re-Tuned Exponential FM Output
 //   out2: Right Re-Tuned Exponential FM Output
@@ -27,6 +30,8 @@
 @param({ min: 0.0, max: 1.0 }) retune_comp = 1.0;
 @param({ min: 0.0, max: 1.0 }) delay_synth_blend = 0.35;
 @param({ min: 0.0, max: 1.0 }) stereo_spread = 0.25;
+// External modulator amount (in4)
+@param({ min: 0.0, max: 1.0 }) ext_mod = 0.0;
 
 // Delay lines for applying Re-Tuned Exp-FM directly to the full acoustic tuba spectrum
 @state delayBufL = new FixedSampleArray(4096);
@@ -48,6 +53,7 @@
 @state smoothF0 = 58.27;
 @state smoothEnv = 0.0;
 @state smoothOct = 1.6;
+@state in2Hold = 0.0;
 
 // Abramowitz & Stegun polynomial approximation of Modified Bessel I0(x) (DAFx-20 Eq. 19)
 function besselI0(x: number): number {
@@ -66,7 +72,13 @@ function besselI0(x: number): number {
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
 let extMod = in4;
 
@@ -104,9 +116,11 @@ let triM_L = 2.0 * triangle(phM, 0.5) - 1.0;
 let sinM_R = sin(2.0 * pi * phMR);
 let triM_R = 2.0 * triangle(phMR, 0.5) - 1.0;
 
-let hasExt = (abs(extMod) > 0.0001) ? 1.0 : 0.0;
-let mL = hasExt ? clamp(extMod, -1.0, 1.0) : linearinterp(triBlend, sinM_L, triM_L);
-let mR = hasExt ? clamp(extMod, -1.0, 1.0) : linearinterp(triBlend, sinM_R, triM_R);
+// Internal sine/triangle modulator, crossfaded with the external modulator on in4.
+// (The drift factor E below assumes the internal waveform; an external one is not re-tuned.)
+let extAmt = clamp(ext_mod, 0.0, 1.0);
+let mL = linearinterp(extAmt, linearinterp(triBlend, sinM_L, triM_L), clamp(extMod, -1.0, 1.0));
+let mR = linearinterp(extAmt, linearinterp(triBlend, sinM_R, triM_R), clamp(extMod, -1.0, 1.0));
 
 // Compute analytic pitch-drift factor E for sine (Eq. 19) and triangle (Eq. 20)
 let aLn2 = maximum(smoothOct * 0.69314718056, 0.0001);

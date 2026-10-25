@@ -3,9 +3,12 @@
 // Unix-Style Effect 4: Analytic Phasor Extractor & PolyBLEP Hard/Soft Sync
 // Implements Kleimola, Lazzarini, Timoney & Valimaki (SMC 2010):
 // "Phaseshaping Oscillator Algorithms for Musical Sound Synthesis" (Sec 2.1, 2.2, 3.2, 3.3).
-// Extracts the instantaneous phase phi(t) in [0, 1) from the tuba via a 4-stage
-// quadrature IIR Hilbert allpass pair, then applies single-oscillator hard sync
-// (mod1 o glin) and soft sync (gtri) with 2-sample PolyBLEP antialiasing.
+// Extracts the instantaneous phase of the tuba's fundamental (2-stage bandpass at
+// f0 -> 4-stage quadrature IIR Hilbert allpass pair) and locks a monotonic PLL
+// phasor phi(t) in [0, 1) to it, then applies single-oscillator hard sync
+// (mod1 o glin) and soft sync (gtri) with 2-sample PolyBLEP antialiasing at the
+// slave and master resets. (Raw atan2 of the audio is not monotonic and, with the
+// tuba's strong 2nd harmonic, wrapped about twice per period.)
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (prefer sine-ified tuba from 01_harmonic_isolator)
@@ -37,6 +40,26 @@
 @state smoothF0 = 55.0;
 @state smoothRatio = 2.5;
 
+// Fundamental-isolating bandpass (2 TPT stages), PLL phasor and amplitude follower
+@state bpIc1 = new FixedSampleArray(2);
+@state bpIc2 = new FixedSampleArray(2);
+@state pllPhase = 0.0;
+@state ampEnv = 0.0;
+@state in2Hold = 0.0;
+
+// Unity-peak TPT state-variable bandpass (Zavalishin / Simper), one stage
+function svfBp(idx: Int, x, g, kd) {
+	let a1 = 1.0 / (1.0 + g * (g + kd));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - bpIc2[idx];
+	let v1 = a1 * bpIc1[idx] + a2 * v3;
+	let v2 = bpIc2[idx] + a2 * bpIc1[idx] + a3 * v3;
+	bpIc1[idx] = 2.0 * v1 - bpIc1[idx];
+	bpIc2[idx] = 2.0 * v2 - bpIc2[idx];
+	return kd * v1;
+}
+
 // PolyBLEP helper function (Paper Eq. 21)
 function polyblep(t: number, dt: number): number {
 	let corr = 0.0;
@@ -53,8 +76,15 @@ function polyblep(t: number, dt: number): number {
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = in2;
 let pitchIn = in3;
+
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 
 // --- 1. Pitch Conditioning ---
 let mono = 0.5 * (xL + xR);
@@ -74,6 +104,12 @@ smoothF0 += (rawF0 - smoothF0) * slew;
 // Exponentially tapered sync ratio feel if desired, or smooth direct ratio
 smoothRatio += (clamp(sync_ratio, 1.0, 12.0) - smoothRatio) * slew;
 
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// Isolate the fundamental (Q 2 per stage: the 2nd harmonic is about 20 dB down)
+let gBp = tan(pi * f0 / sr);
+let fund = svfBp(1, svfBp(0, monoLow, gBp, 0.5), gBp, 0.5);
+
 // --- 2. Analytic Signal Extraction via Quadrature Allpass Pair ---
 // Allpass coefficients a^2 for 90-deg Hilbert pair
 let cRe0 = 0.4794008656;
@@ -87,7 +123,7 @@ let cIm2 = 0.9453497003;
 let cIm3 = 0.9905991567;
 
 // Branch 1 (Real / 0 deg)
-let sRe = monoLow;
+let sRe = fund;
 let yRe0 = cRe0 * (sRe + hReY[0]) - hReX[0]; hReX[0] = sRe; hReY[0] = yRe0; sRe = yRe0;
 let yRe1 = cRe1 * (sRe + hReY[1]) - hReX[1]; hReX[1] = sRe; hReY[1] = yRe1; sRe = yRe1;
 let yRe2 = cRe2 * (sRe + hReY[2]) - hReX[2]; hReX[2] = sRe; hReY[2] = yRe2; sRe = yRe2;
@@ -96,18 +132,29 @@ let outRe = hDelayRe;
 hDelayRe = yRe3;
 
 // Branch 2 (Imag / 90 deg)
-let sIm = monoLow;
+let sIm = fund;
 let yIm0 = cIm0 * (sIm + hImY[0]) - hImX[0]; hImX[0] = sIm; hImY[0] = yIm0; sIm = yIm0;
 let yIm1 = cIm1 * (sIm + hImY[1]) - hImX[1]; hImX[1] = sIm; hImY[1] = yIm1; sIm = yIm1;
 let yIm2 = cIm2 * (sIm + hImY[2]) - hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm = yIm2;
 let yIm3 = cIm3 * (sIm + hImY[3]) - hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;
 let outIm = 0.0 - yIm3; // negate: this cR/cI order is the negative Hilbert (+f analytic phase)
 
-// Instantaneous amplitude A(t) and normalized phasor phBase in [0, 1)
+// Analytic phase of the fundamental in cycles [0, 1)
 let pol = cartopol(outRe, outIm);
-let instAmp = pol[0];
 let instTheta = pol[1]; // [-pi, pi]
-let phBase = wrap((instTheta + pi) / (2.0 * pi), 0.0, 1.0);
+let fundPh = wrap((instTheta + pi) / (2.0 * pi), 0.0, 1.0);
+
+// PLL: integrate f0 and pull toward the fundamental's phase (~8 Hz loop). The
+// increment never drops below 0.25 * f0 / sr, so the phasor is strictly monotonic.
+let dtMaster = f0 / sr;
+let phErr = wrap(fundPh - pllPhase + 0.5, 0.0, 1.0) - 0.5;
+let pllGain = (pol[0] > 0.0003) ? (2.0 * pi * 8.0 / sr) : 0.0;
+pllPhase = wrap(pllPhase + maximum(dtMaster + pllGain * phErr, 0.25 * dtMaster), 0.0, 1.0);
+let phBase = pllPhase;
+
+// Player's amplitude envelope A(t): 15 ms follower on |monoLow| (sine peak scale)
+ampEnv += (abs(monoLow) * 1.5708 - ampEnv) * (1.0 - exp(-1.0 / (0.015 * sr)));
+let instAmp = ampEnv;
 
 // Stereo phase offset for wide stereo sync image
 let phiL = phBase;
@@ -118,13 +165,15 @@ let a1 = smoothRatio;
 let Ts = clamp((smoothF0 * a1) / sr, 0.0001, 0.45);
 
 // Hard Sync phase: mod1(a1 * phi) with PolyBLEP at slave & master resets
+// (the master reset drops the saw by 2 * frac(a1), so its BLEP is scaled by frac(a1))
+let fracA = a1 - floor(a1);
 let scaledL = a1 * phiL;
 let hardPhL = scaledL - floor(scaledL);
-let hardSawL = (2.0 * hardPhL - 1.0) - polyblep(hardPhL, Ts);
+let hardSawL = (2.0 * hardPhL - 1.0) - polyblep(hardPhL, Ts) - fracA * polyblep(phiL, dtMaster);
 
 let scaledR = a1 * phiR;
 let hardPhR = scaledR - floor(scaledR);
-let hardSawR = (2.0 * hardPhR - 1.0) - polyblep(hardPhR, Ts);
+let hardSawR = (2.0 * hardPhR - 1.0) - polyblep(hardPhR, Ts) - fracA * polyblep(phiR, dtMaster);
 
 // Soft Sync phase (Paper Eq. 12 & 24): gtri(phi, a1) = mod1(a1 * abs(2*phi - 1))
 let triBaseL = abs(2.0 * phiL - 1.0);
@@ -139,19 +188,18 @@ let softWaveR = 1.0 - 2.0 * abs(2.0 * softPhR - 1.0);
 let syncGeoL = linearinterp(soft_hard, softWaveL, hardSawL);
 let syncGeoR = linearinterp(soft_hard, softWaveR, hardSawR);
 
-// Optional sinusoidal terminal waveshaper cos(2*pi*g(phi)) (Paper Eq. 6)
-let syncPhL = linearinterp(soft_hard, softPhL, hardPhL);
-let syncPhR = linearinterp(soft_hard, softPhR, hardPhR);
-let syncSinL = cos(2.0 * pi * syncPhL);
-let syncSinR = cos(2.0 * pi * syncPhR);
+// Optional sinusoidal terminal waveshaper cos(2*pi*g(phi)) (Paper Eq. 6). The two
+// cosines are crossfaded (a crossfade of the two wrapping phases would jump)
+let syncSinL = linearinterp(soft_hard, cos(2.0 * pi * softPhL), cos(2.0 * pi * hardPhL));
+let syncSinR = linearinterp(soft_hard, cos(2.0 * pi * softPhR), cos(2.0 * pi * hardPhR));
 
 let shapedL = linearinterp(wave_sin, syncGeoL, syncSinL);
 let shapedR = linearinterp(wave_sin, syncGeoR, syncSinR);
 
 // Restore player's natural amplitude envelope A(t) with silence gating
 let envGate = clamp((instAmp - 0.001) * 200.0, 0.0, 1.0);
-let wetL = shapedL * instAmp * 1.6 * envGate;
-let wetR = shapedR * instAmp * 1.6 * envGate;
+let wetL = shapedL * instAmp * 2.4 * envGate;
+let wetR = shapedR * instAmp * 2.4 * envGate;
 
 out1 = linearinterp(mix, xL, wetL);
 out2 = linearinterp(mix, xR, wetR);

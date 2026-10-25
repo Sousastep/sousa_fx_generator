@@ -3,12 +3,13 @@
 ================================================================================
 
 OVERVIEW
-Combines zero-drift Analytic Phase-Divided Sub-Octave Ring Modulation (Approach 3b & 5 from "Novel Distortion Approaches for Live Tuba") with Feedback Amplitude Modulation (Kleimola et al., 2011). Instead of running a separate f0/2 oscillator that slowly drifts and beats against the tuba, this effect unwraps the tuba's analytic phase modulo 6 cycles to compute cos(theta/2) and cos(theta/3) directly from the player's waveform. Every lip bend and vibrato stays 100% phase-locked, while Feedback AM (y[n] = x[n]*(1 + k*y[n-1])) injects sawtooth-like upper harmonic bite.
+Combines zero-drift Analytic Phase-Divided Sub-Octave Ring Modulation (Approach 3b & 5 from "Novel Distortion Approaches for Live Tuba") with Feedback Amplitude Modulation (Kleimola et al., 2011). Instead of running a separate f0/2 oscillator that slowly drifts and beats against the tuba, this effect isolates the tuba's fundamental (2-stage bandpass at f0), locks a monotonic phase-locked loop (about 8 Hz loop) to its analytic phase, and counts the loop's cycles modulo 6 to compute cos(theta/2) and cos(theta/3). (Earlier versions unwrapped the raw analytic phase of the lowpassed audio; with the tuba's usually stronger 2nd harmonic it wrapped twice per period and the "sub-octave" landed on f0.) Every lip bend and vibrato stays 100% phase-locked, while Feedback AM (y[n] = x[n]*(1 + k*y[n-1])) injects sawtooth-like upper harmonic bite.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Left / Right)
-- in3: Optional Tracked Pitch in Hz (if connected > 20 Hz, tunes the pre-Hilbert fundamental lowpass to 1.35 * f0 for rock-solid wrap counting)
+- in1 / in2: Stereo Audio Input (Left / Right; in2 silent for 250 ms -> in1 is used for both sides)
+- in3: Tracked Pitch in Hz (tunes the fundamental bandpass and the loop; outside 20..1000 Hz an internal zero-crossing tracker is used)
 - out1 / out2: Stereo Sub-Octave Ring-Mod / Feedback AM Output
+- Level: on the sousa_mic.aif take (-32 dB RMS in) the defaults give about -36 dB RMS (offline render of the real RNBO code); ring modulation removes energy, so expect it a few dB under the dry signal.
 
 PARAMETERS (4)
 

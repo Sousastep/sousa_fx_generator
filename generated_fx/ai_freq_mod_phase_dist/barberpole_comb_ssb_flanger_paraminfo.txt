@@ -8,21 +8,22 @@ Implements Endless Barberpole Flanging and Spectral-Delay-Warped SSB Phasing fro
 2. Warped SSB Barberpole (Section 4 & 4.1, Fig. 10): Combines a 4-stage Hilbert Single-Sideband (SSB) frequency shifter with a 6-stage allpass spectral delay line so the endlessly moving comb notches warp from linear to logarithmic octave spacing!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
-- in3: Optional Tracked Fundamental Pitch f0 in Hz (if > 25 Hz, biases the center comb delay toward the tuba's half-period)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (locks the barberpole sweep cycle to host tempo)
+- in1 / in2: Stereo Audio Input (Tuba; in2 silent for 250 ms -> in1 is used for both sides)
+- in3: Optional Tracked Fundamental Pitch f0 in Hz (if 25..1000 Hz, the center comb delay sits halfway between center_delay_ms and the tuba's half-period; it glides over 6 ms on note changes)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (locks the barberpole sweep cycle to the bar). While in4 moves, sweep_rate_hz is read as whole cycles per bar; when in4 has not moved for 100 ms the sweep free-runs in Hz. A held value no longer freezes the sweep.
 - out1 / out2: Stereo Endless Barberpole Comb/SSB Output
+- Level: on the sousa_mic.aif take (-32 dB RMS in) the defaults give about -38 dB RMS with the tracker on in3 (offline render of the real RNBO code).
 
 PARAMETERS (6)
 
 1. sweep_rate_hz
-   - Range: -4.00 to +4.00 Hz (or Cycles per Bar when in4 is patched; Default: +0.50)
-   - Taper: Linear bipolar rate. Positive values sweep spectral notches endlessly upward; negative values sweep spectral notches endlessly downward.
+   - Range: -16.0 to +16.0 (Default: +3.0). In Hz when free-running; with a moving bar phasor on in4 (as in the test rig) it is rounded to whole cycles per bar, minimum 1, keeping its sign - so with the rig's 2 s bar the default sweeps at 1.5 Hz and the sweep cannot be stopped.
+   - Taper: Linear bipolar rate (slewed over 20 ms). Positive values sweep spectral notches endlessly upward; negative values sweep spectral notches endlessly downward.
    - Function: Controls both the speed and direction of the infinite barberpole illusion.
 
 2. center_delay_ms
    - Range: 0.40 to 12.00 ms (Nominal Comb Delay Time, Default: 2.20 ms)
-   - Taper: Direct delay time in milliseconds (automatically sets D_min = 0.68*D0 and D_max = 1.32*D0 per DAFx-15 Section 3 to guaranteeD_min > 0.5*D_max for seamless reset masking).
+   - Taper: Direct delay time in milliseconds (automatically sets D_min = 0.68*D0 and D_max = 1.32*D0 per DAFx-15 Section 3 to guarantee D_min > 0.5*D_max for seamless reset masking).
    - Function: Controls the spectral density and number of moving comb notches M = D/2.
 
 3. feedback

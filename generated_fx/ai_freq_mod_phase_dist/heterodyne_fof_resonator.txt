@@ -47,6 +47,7 @@
 @state zcHz = 58.27;
 @state smoothF0 = 58.27;
 @state smoothEnv = 0.0;
+@state in2Hold = 0.0;
 @state smoothRatio = 4.5;
 @state smoothQ = 12.0;
 @state dcXL = 0.0; @state dcYL = 0.0;
@@ -54,7 +55,13 @@
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
 let barIn = in4;
 
@@ -176,9 +183,10 @@ let rawOutL = linearinterp(b, fofWaveL, ringTubaL);
 let rawOutR = linearinterp(b, fofWaveR, ringTubaR);
 
 // DC blocker
-let dcOutL = rawOutL - dcXL + 0.995 * dcYL;
+let dcPole = 1.0 - (2.0 * pi * 10.0 / sr); // 10 Hz (a fixed 0.995 was 38 Hz at 48 kHz: -1.6 dB at 58 Hz, -4 dB at 29 Hz)
+let dcOutL = rawOutL - dcXL + dcPole * dcYL;
 dcXL = rawOutL; dcYL = dcOutL;
-let dcOutR = rawOutR - dcXR + 0.995 * dcYR;
+let dcOutR = rawOutR - dcXR + dcPole * dcYR;
 dcXR = rawOutR; dcYR = dcOutR;
 
 out1 = tanh(dcOutL);

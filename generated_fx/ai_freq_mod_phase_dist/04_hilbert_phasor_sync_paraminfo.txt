@@ -3,12 +3,13 @@
 ================================================================================
 
 OVERVIEW
-Implements the single-oscillator Hard Sync (Eq. 22) and Soft Sync (Eq. 12 & 24) phaseshaping algorithms from Kleimola, Lazzarini, Timoney, and Välimäki (SMC 2010), driven directly by the tuba player's instantaneous phase. A 4-stage quadrature IIR Hilbert allpass network extracts the analytic signal s_a(t) = A(t)*e^(j*theta(t)), turning the tuba into a player-driven phasor phi(t) in [0, 1). Because no free-running oscillator is used, every lip bend, vibrato, and articulation is 100% phase-locked to the brass fundamental, with 2-sample PolyBLEP antialiasing smoothing the phase-reset discontinuities.
+Implements the single-oscillator Hard Sync (Eq. 22) and Soft Sync (Eq. 12 & 24) phaseshaping algorithms from Kleimola, Lazzarini, Timoney, and Välimäki (SMC 2010), driven directly by the tuba player's instantaneous phase. The fundamental is isolated with a 2-stage bandpass at the tracked f0, a 4-stage quadrature IIR Hilbert allpass network extracts its analytic phase, and a phase-locked loop (about 8 Hz loop bandwidth) turns it into a strictly monotonic phasor phi(t) in [0, 1) running at f0 and locked to the fundamental's phase, so lip bends and vibrato carry through while noise and the tuba's strong 2nd harmonic no longer cause extra resets (the raw analytic phase reset about twice per period on low notes). 2-sample PolyBLEP antialiasing smooths both the slave and the master (hard-sync) resets.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (works best when fed by 01_harmonic_isolator)
-- in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0, used to compute the PolyBLEP phase increment Ts = f0/fs)
-- out1 / out2: Stereo Phaseshaped Sync Output
+- in1 / in2: Stereo Audio Input (works best when fed by 01_harmonic_isolator; in2 silent for 250 ms -> in1 is used for both sides)
+- in3: Tracked Fundamental Pitch in Hz (sets the PLL / bandpass frequency and the PolyBLEP increments; values outside 20..1000 Hz fall back to an internal zero-crossing tracker)
+- out1 / out2: Stereo Phaseshaped Sync Output (Right runs 0.04 cycle ahead for width)
+- Level: the wet signal follows the tuba's envelope (15 ms follower) and is gated below about -60 dBFS. On the sousa_mic.aif take (-32 dB RMS in) the defaults give about -35 dB RMS (offline render of the real RNBO code).
 
 PARAMETERS (4)
 
@@ -25,7 +26,7 @@ PARAMETERS (4)
 3. wave_sin
    - Range: 0.0 to 1.0 (0.0 = Geometric Saw/Triangle Terminal, 1.0 = Sinusoidal Waveshaper cos(2*pi*g(phi)))
    - Taper: Linear crossfade.
-   - Function: Selects the outer terminal function f[.] of the nested phaseshaper composition (SMC 2010 Eq. 6 & 8): either raw geometric sync waveforms (0.0) or rounded sinusoidal phase distortion (1.0).
+   - Function: Selects the outer terminal function f[.] of the nested phaseshaper composition (SMC 2010 Eq. 6 & 8): either raw geometric sync waveforms (0.0) or rounded sinusoidal phase distortion (1.0). In the sinusoidal case soft_hard crossfades cos(soft phase) with cos(hard phase).
 
 4. mix
    - Range: 0.0 to 1.0 (0% Dry to 100% Wet)

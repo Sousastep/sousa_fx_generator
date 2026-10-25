@@ -85,7 +85,10 @@ let rMinus = 0.5 * (r - 1.0 / r);
 
 // Blend between ASDFM1 (Eq. 3: standard Bessel Jn) and ASDFM2 (Eq. 4: Modified Bessel In moving formants)
 let mMode = clamp(bessel_mode, 0.0, 1.0);
-let kDelay = k * linearinterp(mMode, rPlus, abs(rMinus));
+// The phase index keeps its sign (Eq. 4 uses k * rMinus, negative for r < 1); a
+// negative index is realised by inverting the delay modulation below
+let kDelay = k * linearinterp(mMode, rPlus, rMinus);
+let pmSign = (kDelay < 0.0) ? -1.0 : 1.0;
 let kAmp = k * linearinterp(mMode, rMinus, rPlus);
 // Keep kAmp bounded for numerical stability
 kAmp = clamp(kAmp, -8.0, 8.0);
@@ -96,11 +99,11 @@ let phL = modPhasor.next(fm);
 let phR = wrap(phL + 0.06, 0.0, 1.0); // Slight stereo modulator phase spread
 
 // Raised, scaled, inverted sine for delay modulation (Paper Sec 2.1: pi/2 offset from cosine)
-let modSinL = 0.5 * (1.0 - sin(2.0 * pi * phL));
-let modSinR = 0.5 * (1.0 - sin(2.0 * pi * phR));
+let modSinL = 0.5 * (1.0 - pmSign * sin(2.0 * pi * phL));
+let modSinR = 0.5 * (1.0 - pmSign * sin(2.0 * pi * phR));
 
 // Delay modulation depth in samples: adt = (kDelay / (pi * f0)) * sr * modSin + 2 samples offset
-let maxDelaySamps = clamp((kDelay / (pi * f0)) * sr, 0.0, 2000.0);
+let maxDelaySamps = clamp((abs(kDelay) / (pi * f0)) * sr, 0.0, 2000.0);
 let delaySampsL = 2.0 + maxDelaySamps * modSinL;
 let delaySampsR = 2.0 + maxDelaySamps * modSinR;
 

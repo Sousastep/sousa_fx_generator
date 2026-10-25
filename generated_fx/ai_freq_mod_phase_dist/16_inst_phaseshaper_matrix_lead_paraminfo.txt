@@ -10,10 +10,11 @@ A full phaseshaping synthesizer instrument driven by the tuba's analytic phase p
 Includes a phase-unwrapped sub-octave foundation cos(theta/2) so every voice stays anchored to massive dubstep sub-bass.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Tuba Audio Input (Left / Right)
+- in1 / in2: Stereo Tuba Audio Input (Left / Right; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
-- in4: 1-Bar Audio-Rate Phasor [0..1] (drives rhythmic sync-ratio sweeps and supersaw LFO; internal 0.5 Hz fallback if unpatched)
+- in4: 1-Bar Audio-Rate Phasor [0..1] (drives rhythmic sync-ratio sweeps and supersaw LFO; an internal 0.5 Hz bar takes over when in4 has not moved for 100 ms - a held value no longer freezes them)
 - out1 / out2: Stereo Phaseshaper Matrix Instrument Output
+- Level & dynamics: follows the tuba through a 15 ms envelope follower, then a 15 Hz DC blocker and a tanh soft limiter. On the sousa_mic.aif take (-32 dB RMS in) the defaults give about -21 dB RMS / -5 dBFS peak, and -17..-21 dB RMS across the Joy Y, pre_sine_iso and sub_lock_mix range (offline render of the real RNBO code). Earlier versions took the level from the isolation bandpass (about 45x gain), which pinned the output at the limiter and made pre_sine_iso an 18 dB volume knob; Voice 2's Triangle Modulation also carried a -0.9 DC term that thumped with every note (now centred).
 
 PARAMETERS (8)
 
@@ -55,4 +56,4 @@ PARAMETERS (8)
 8. pre_sine_iso
    - Range: 0.0 to 1.0 (0% Raw Tuba into Hilbert to 100% SVF-Isolated Fundamental into Hilbert)
    - Taper: Linear crossfade with Q scaling.
-   - Function: Controls the purity of the analytic phasor phi(t). At 1.0, phi(t) is a glass-smooth ramp; lower values let residual brass overtones inject organic phase grain.
+   - Function: Controls the purity of the analytic phasor phi(t). At 1.0, phi(t) is a glass-smooth ramp; lower values let residual brass overtones inject organic phase grain. It no longer changes the output level.

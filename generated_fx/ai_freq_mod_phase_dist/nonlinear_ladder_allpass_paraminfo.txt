@@ -6,17 +6,19 @@ OVERVIEW
 Implements Passive Energy-Conserving Nonlinear Allpass Ladder Filtering inside a Pitch-Tracked Waveguide Loop from Julius O. Smith and Romain Michon (DAFx-11 Paper 38_e, Sections 2, 3 & 4.1–4.4, Fig. 2–5). Standard time-varying allpass filters can create artificial energy spikes and explode in feedback loops when modulated rapidly. By formulating each allpass stage as a Normalized Ladder Filter (NLF) with orthogonal rotation coefficients c(n) = cos(theta(n)) and s(n) = sin(theta(n)) driven directly by the instantaneous audio signal theta(n) = base_angle + g * x(n), signal power is strictly conserved at every sample (c^2 + s^2 = 1). This produces lossless nonlinear spectral brightening and evolving gong/cymbal/sitar-like modal energy transfer across the tuba's overtones.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
+- in1 / in2: Stereo Audio Input (Tuba; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Optional Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0 to tune the waveguide resonator loop)
-- in4: Optional External Sidechain Modulator (adds to the signal-dependent angle modulation theta(n))
+- in4: Optional External Sidechain Modulator (adds to the signal-dependent angle modulation theta(n), scaled by sidechain_amt - off by default: the test rig sends its 0..1 bar phasor to in4, which at full level swept the angle across every bar and clicked at each bar wrap)
 - out1 / out2: Stereo Nonlinear Allpass Ladder Output
+- Level: on the sousa_mic.aif take (-32 dB RMS in) about -29 dB RMS at the defaults (offline render of the real RNBO code).
+- Tuning note: the waveguide delay is half a period of f0, but the ladder's own (signal-dependent) dispersion sits inside the loop, so the loop resonances are inharmonic and move with level - that is where the gong/cymbal character comes from.
 
-PARAMETERS (6)
+PARAMETERS (7)
 
 1. nl_drive_g
    - Range: 0.0 to 3.14159 rad (Signal-Dependent Angle Modulation Index g, Default: 1.15)
    - Taper: Linear in radians (0 = linear time-invariant allpass; pi = full 180-degree instantaneous reflection angle swing).
-   - Function: Controls the lossless nonlinear spectral expansion (DAFx-11 Section 4.1, Fig. 5).Louder brass notes dynamically scatter more energy into shimmering upper partials without changing total signal power.
+   - Function: Controls the lossless nonlinear spectral expansion (DAFx-11 Section 4.1, Fig. 5). Louder brass notes dynamically scatter more energy into shimmering upper partials without changing total signal power.
 
 2. base_angle
    - Range: -1.40 to +1.40 rad (Static Allpass Pole/Zero Angle Offset theta_0, Default: -0.35)
@@ -25,7 +27,7 @@ PARAMETERS (6)
 
 3. ladder_order
    - Range: 1.0 to 12.0 Cascaded NLF Allpass Stages (Default: 8.0)
-   - Taper: Continuous fractional order interpolation.
+   - Taper: Rounded to whole stages; the order glides there over about 6 ms (a held fractional order would be a phaser mix with notches).
    - Function: Sets the number of cascaded nonlinear allpass stages (DAFx-11 Section 3). Higher orders increase modal coupling density and metallic dispersion.
 
 4. loop_feedback
@@ -42,3 +44,8 @@ PARAMETERS (6)
    - Range: 0.0 to 1.0 (Stereo Angle & Waveguide Length Asymmetry, Default: 0.25)
    - Taper: Linear stereo spread.
    - Function: Inverts the nonlinear angle modulation polarity and offsets the base angle and waveguide delay slightly on the Right channel for wide stereo metallic shimmer.
+
+7. sidechain_amt
+   - Range: 0.0 to 1.0 (Default: 0.0)
+   - Taper: Linear gain on in4 before it joins the angle modulation.
+   - Function: Lets an external audio or smooth control signal on in4 push the ladder angles (Right channel gets the opposite polarity). Setting it to 1 with the rig's bar phasor recreates the old bar sweep, including its click at every bar wrap.

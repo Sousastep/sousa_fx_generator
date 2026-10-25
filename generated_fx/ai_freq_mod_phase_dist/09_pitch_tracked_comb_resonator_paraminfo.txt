@@ -9,6 +9,8 @@ INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input (Left / Right)
 - in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
 - out1 / out2: Stereo Comb-Resonated Audio Output
+- Tuning: the delay is corrected for the phase of the in-loop damping lowpass and DC blocker, so the resonance lands on f0 * tune_ratio (measured within about 8 cents for ratios 2..16; earlier versions were +36 cents at 2, -43 at 16 and +216 at 0.5).
+- Level: on the sousa_mic.aif take (-32 dB RMS in) the defaults give about -26 dB RMS / -9 dBFS peak (offline render of the real RNBO code); at feedback +/-0.98 about -21 dB RMS / -5 dBFS peak. The tanh in the loop keeps it from running away.
 
 PARAMETERS (4)
 

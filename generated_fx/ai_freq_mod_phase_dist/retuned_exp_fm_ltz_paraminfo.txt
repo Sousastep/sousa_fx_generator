@@ -6,12 +6,13 @@ OVERVIEW
 Implements Re-Tuned Exponential Frequency Modulation with Linear-Through-Zero (LTZ) Phase Integration from Timoney & Lazzarini (DAFx-11 Paper 60_e) and DAFx-20 Paper 61 (Sections 2.2 & 4.1–4.3, Eq. 14–23, Fig. 6–7). In modular analog synthesizers, Exponential FM (w(t) = w_c * 2^(alpha * m(t))) produces punchy, asymmetrical sideband spectra, but suffers from severe upward pitch drift proportional to the zeroth Modified Bessel function E = I0(alpha * ln(2)) (Eq. 19). By subtracting (E - 1)*w_c inside a Through-Zero phase integrator (where negative instantaneous frequencies reverse phase angle cleanly) AND applying the zero-mean exponential integral to a time-varying delay line on the live tuba, this effect delivers concert-tuned, zero-drift Exponential FM across 4.5 octaves of excursion.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba Carrier)
+- in1 / in2: Stereo Audio Input (Tuba Carrier; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
-- in4: Optional External Audio-Rate Modulator [-1..1] (if unpatched, uses internal pitch-locked modulator)
+- in4: Optional External Modulator [-1..1], blended in by ext_mod (default 0 = the internal pitch-locked sine/triangle modulator). Earlier versions switched to in4 whenever it was non-zero, so in the test rig the 0..1 bar phasor swept the carrier pitch over every bar and the re-tuning (the point of this effect) was lost: on a 58 Hz note the synth path's strongest partial landed at 44 Hz instead of 58 Hz.
 - out1 / out2: Stereo Re-Tuned Exponential FM Output
+- Level: on the sousa_mic.aif take (-32 dB RMS in) about -35 dB RMS at the defaults (offline render of the real RNBO code).
 
-PARAMETERS (6)
+PARAMETERS (7)
 
 1. exp_octaves
    - Range: 0.0 to 4.5 Octaves of Exponential Frequency Deviation alpha (Default: 1.6)
@@ -42,3 +43,8 @@ PARAMETERS (6)
    - Range: 0.0 to 1.0 (maps to 0 to 90 degrees Quadrature Modulator Phase Offset on Right Channel)
    - Taper: Linear phase spread.
    - Function: Spreads the exponential sideband phase between Left and Right channels.
+
+7. ext_mod
+   - Range: 0.0 to 1.0 (Default: 0.0)
+   - Taper: Linear crossfade from the internal modulator (0.0) to the signal on in4 (1.0).
+   - Function: Use an external audio-rate modulator (e.g. 01_harmonic_isolator's sine) on in4. The re-tuning factor only matches the internal waveforms, so pitch may drift with an external modulator. Leave at 0 when in4 carries the bar phasor.

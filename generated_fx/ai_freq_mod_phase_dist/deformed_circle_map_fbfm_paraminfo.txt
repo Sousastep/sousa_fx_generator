@@ -6,10 +6,11 @@ OVERVIEW
 Implements the Iterative Sine Circle Map (Feedback FM) over Deformed 2D Closed-Loop Geometries from Georg Essl (DAFx-22 Paper 23, Sections 3.1–3.4, 4.1–4.4 & 6.2, Eq. 2, 5–6). Formulates Feedback FM as a discrete dynamical map on the topological circle S^1: x_n = (x_{n-1} + Omega + (k / 2*pi)*sin(2*pi*x_{n-1})) mod 1, coupled to the tuba's analytic phase. The normalized perturbation strength k gives direct access to Arnold-tongue nonlinear dynamics: k < 1 produces smooth sawtooth Feedback FM, k = 1.0 is the exact topological point of invertibility, and 1.0 < k <= 3.5 enters mode-locked subharmonic period-doubling and tearout chaos! Independently of the phase dynamics, the phase x_n is mapped into R^2 along a deformable closed loop (Circle -> 4-Point Diamond -> Concave L-Loop) and projected onto orthogonal X/Y stereo axes.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba or 01_harmonic_isolator)
+- in1 / in2: Stereo Audio Input (Tuba or 01_harmonic_isolator; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
 - in4: Optional 1-Bar Audio-Rate Phasor [0..1] (rotates the 2D geometric projection angle when angle_spin > 0)
 - out1 / out2: Stereo Deformed Loop Output (out1 = X-Projection, out2 = Orthogonal Y-Projection)
+- Level: a synthesized signal scaled by the breath envelope; on the sousa_mic.aif take (-32 dB RMS in) about -22 dB RMS / -11 dBFS peak at the defaults (offline render of the real RNBO code).
 
 PARAMETERS (6)
 
@@ -33,7 +34,7 @@ PARAMETERS (6)
 3. phase_lock_strength
    - Range: 0.0 to 1.0 (Analytic Tuba Phase-Locking Strength, Default: 0.65)
    - Taper: Linear phase-error coupling.
-   - Function: Controls how tightly the iterative circle map phase x_n is pulled toward the tuba's instantaneous Hilbert phase. Lower values allow free-running Arnold-tongue subharmonics at k > 1.2; higher values force even chaotic k settings to reset in lockstep with every period of the tuba.
+   - Function: Controls how tightly the iterative circle map phase x_n is pulled toward the tuba's instantaneous Hilbert phase. Up to k = 1 a continuous pull keeps the map on f0 (any value >= 0.1 holds the pitch; at exactly 0 the map runs free and detunes - a 58 Hz note gives about a 30 Hz series at k = 0.95). Above k = 1.2 only a once-per-period sync acts: below 0.8 it syncs every 2nd period, so the output locks a sub-octave below (measured period 29.1 Hz on a 58.3 Hz note at k = 1.5..3.5) with chaotic grit; at 0.8 and above it resets every period and stays on f0. (Earlier versions applied the continuous pull at every k, which kept the map 1:1 and the sub-octave regime never appeared.)
 
 4. proj_angle_rad
    - Range: -3.14159 to +3.14159 rad (-180 to +180 degrees Planar Projection Angle, Default: 0.0 rad)

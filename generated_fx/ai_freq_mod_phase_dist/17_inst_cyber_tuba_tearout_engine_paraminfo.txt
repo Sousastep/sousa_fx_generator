@@ -6,16 +6,17 @@ OVERVIEW
 An aggressive tearout / machine-gun dubstep instrument combining Rotating Analytic Ring Modulation (Approach 3f: y = Re{s_a * e^(j*psi)}), Feedback FM Delay Modulation (Approach 1c: d(t) = d0 + k*y(t-1)), a 16-stage Allpass Phase Disperser, and a 1-bar-phasor-synced trapezoid machine-gun chopper with per-hit pitch/dispersion drop envelopes.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Tuba Audio Input (Left / Right)
+- in1 / in2: Stereo Tuba Audio Input (Left / Right; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
-- in4: 1-Bar Audio-Rate Phasor [0..1] (drives the machine-gun chop and pitch-drop envelopes; internal 0.5 Hz fallback if unpatched)
-- out1 / out2: Stereo Tearout Engine Output
+- in4: 1-Bar Audio-Rate Phasor [0..1] (drives the machine-gun chop and pitch-drop envelopes; an internal 0.5 Hz bar takes over when in4 has not moved for 100 ms - a held value no longer freezes them)
+- out1 / out2: Stereo Tearout Engine Output (L and R are identical with Joy Y at -1..0 spread; the stereo phase rotation spread grows with Joy Y)
+- Level: on the sousa_mic.aif take (-32 dB RMS in) the defaults give about -26 dB RMS / -5 dBFS peak (offline render of the real RNBO code).
 
 PARAMETERS (8)
 
 1. joy_x_disperse_freq (Joystick X-Axis)
    - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
-   - Taper: Exponential frequency sweep (220 * 12^x Hz, spanning 18 Hz sub-thump dispersion to 2,640 Hz laser transient smear).
+   - Taper: Exponential frequency sweep (220 * 12^x Hz, floored at 45 Hz - so the bottom quarter of the stick sits at 45 Hz - up to 2,640 Hz laser transient smear; each machine-gun hit adds up to +0.5 of that exponent, capped at 5 kHz).
    - Function: Sweeps the corner frequency of the 16-stage allpass disperser cascade.
 
 2. joy_y_fb_tearout (Joystick Y-Axis)
@@ -25,8 +26,8 @@ PARAMETERS (8)
 
 3. rot_harmonic
    - Range: -1.0 to +2.0 (Analytic Phase Rotation Multiplier in Re{s_a * e^(j * rot * theta)})
-   - Taper: Continuous linear harmonic slider (-0.5 = locked sub-octave; 0.0 = fundamental; +1.0 = locked 2nd harmonic; fractional values sweep smoothly through the harmonic series without classic RM dual-sideband clash).
-   - Function: Slides the entire harmonic series of the tuba up or down in the analytic phase domain.
+   - Taper: Continuous linear harmonic slider: every partial is shifted by rot_harmonic * f0 (-0.5 = sub-octave series at odd multiples of f0/2; 0.0 = original; +1.0 = each partial moves up one harmonic; fractional values sweep smoothly through inharmonic spectra without classic RM dual-sideband clash).
+   - Function: Slides the entire harmonic series of the tuba up or down in the analytic phase domain (a single-sideband shift that tracks the pitch). The rotation phase is integrated, so moving this or the pitch-drop envelope never clicks (earlier versions scaled a wrap-counted phase and clicked many times a second at fractional settings).
 
 4. gun_subdiv
    - Range: 1 to 16 hits per bar (Quantized in 16 integer steps)

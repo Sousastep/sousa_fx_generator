@@ -10,10 +10,11 @@ Implements the Modal Heterodyne-Smooth-Modulate Distortion, Pitch Shifting, and 
 4. Applies memoryless saturation to each mode INDIVIDUALLY before summing (Fig. 12), generating rich harmonic distortion with zero intermodulation dissonance, and routes the Real part to Left and Imaginary part to Right (Section 2) for true quadrature stereo!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
+- in1 / in2: Stereo Audio Input (Tuba; summed to mono for the modes. in2 silent for 250 ms -> in1 alone is used)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
-- in4: Optional Thru / Control Inlet
+- No in4 (no tempo or gate input).
 - out1 / out2: Stereo Modal Output (out1 = Real Mode Sum, out2 = Quadrature Imaginary Mode Sum)
+- Level: on the sousa_mic.aif take (-32 dB RMS in) about -28 dB RMS / -9 dBFS peak at the defaults (offline render of the real RNBO code).
 
 PARAMETERS (6)
 
@@ -30,7 +31,7 @@ PARAMETERS (6)
 3. spectral_invert
    - Range: 0.0 to 1.0 (0.0 = Normal Harmonic Order {1, 2, 3, 4}, 1.0 = Inverted Harmonic Order {4, 3, 2, 1})
    - Taper: Continuous frequency glide between normal and inverted modal synthesis frequencies (DAFx-15 Section 3.3, Eq. 14, Fig. 11).
-   - Function: Flips the tuba's harmonic spectrum upside down around the 2.5*f0 pivot so soft fundamental playing excites high screaming partials while brassy overtones drop into the sub-fundamental!
+   - Function: Flips the tuba's harmonic spectrum upside down around the 2.5*f0 pivot (mode m is re-synthesised at harmonic 5 - m; the paper's exact w_c^2 / w_m inversion would give 4, 2, 1.33, 1) so soft fundamental playing excites high screaming partials while brassy overtones drop into the sub-fundamental!
 
 4. pitch_shift_semi
    - Range: -12.0 to +12.0 Semitones (Modal Re-Modulation Transposition sigma, Default: 0.0 st)
@@ -38,7 +39,7 @@ PARAMETERS (6)
    - Function: Pitch-shifts all four modal synthesis oscillators across +/- 1 octave with zero FFT window latency.
 
 5. odd_even_mode_tilt
-   - Range: -1.0 to +1.0 (-1.0 = Emphasize Modes 1 & 3, +1.0 = Emphasize Modes 2 & 4)
+   - Range: -1.0 to +1.0 (-1.0 = Emphasize Modes 1 & 3, +1.0 = Emphasize Modes 2 & 4; earlier versions declared the parameter 0..1, so the odd side could not be reached)
    - Taper: Linear modal balance.
    - Function: Tilts the output mix between odd and even heterodyne modes.
 

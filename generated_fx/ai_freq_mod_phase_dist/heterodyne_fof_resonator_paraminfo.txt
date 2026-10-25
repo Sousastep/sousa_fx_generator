@@ -6,10 +6,11 @@ OVERVIEW
 Implements Filterless Heterodyne & FOF (Fonction d'Onde Formantique) Resonant Synthesis from Lazzarini and Timoney (DAFx-12 Paper 58, Sections 2.1, 2.2, 3 & 3.1, Eq. 4–14, Fig. 2–4). Synthesizes sharp vocal/brass formant resonances and Casio CZ-style resonant waveforms without an IIR filter (eliminating filter instability and phase smearing). Synchronizes a periodic decaying exponential modulator `ephasor` M(n) = R^(n mod T0) — plus an optional FOF attack-skirt exponential Ma(n) - Mb(n) (Eq. 12) — to each period of the tuba's analytic phase, and multiplies it by two interpolated adjacent-harmonic cosine carriers (1-a)*cos(k*w0*n) + a*cos((k+1)*w0*n) (Eq. 8–10) for alias-free continuous formant sweeps.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
+- in1 / in2: Stereo Audio Input (Tuba; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps formant_ratio when sweep_depth > 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps formant_ratio twice per bar when sweep_depth > 0; an internal 0.5 Hz LFO takes over when in4 has not moved for 100 ms)
 - out1 / out2: Stereo Heterodyne / FOF Resonant Output
+- Level: on the sousa_mic.aif take (-32 dB RMS in) about -33 dB RMS / -13 dBFS peak at the defaults (offline render of the real RNBO code).
 
 PARAMETERS (6)
 

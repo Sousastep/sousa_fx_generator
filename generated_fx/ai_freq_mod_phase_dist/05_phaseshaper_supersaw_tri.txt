@@ -6,12 +6,16 @@
 //     y = 2*(xT - ceil(xT) - 0.5)) -> odd-harmonic formant sweeps with dominant 3rd partial.
 //   - Mode 0.5..1.0: Single-oscillator Ripple Supersaw (Eq. 28: sin(2*pi*gb(modm(modm(a1*phi,m1)+a1*phi,m2))))
 //     plus Variable-Slope Tilted Triangle Phase (Eq. 16-17: gvtri) for stereo unison & spectral tilt.
+// The driving phasor is a monotonic PLL at the tracked f0, locked to the analytic
+// phase of the bandpassed fundamental (raw atan2 of the audio wrapped about twice
+// per period on low notes and ran backwards on up to 10% of samples).
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input
 //   in2: Right Audio Input
-//   in3: Tracked Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
-//   in4: Optional 1-Bar Phasor [0..1] (modulates supersaw ripple detune if connected)
+//   in3: Tracked Pitch in Hz (from fluid.pitch~; fallback ZC if outside 20..1000 Hz)
+//   in4: Optional 1-Bar Phasor [0..1] (modulates supersaw ripple detune; an in4 that
+//        has not moved for 100 ms falls back to an internal 0.35 Hz LFO)
 // Outlets:
 //   out1: Left Phaseshaped Output
 //   out2: Right Phaseshaped Output
@@ -30,6 +34,33 @@
 
 // Internal slow LFO for Supersaw m1 animation (Paper Fig. 13)
 @state lfoPhasor = new phasor();
+@state prevBar = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
+
+// Fallback ZC pitch tracker, fundamental bandpass, PLL phasor, amplitude follower
+@state lpTrack = new onepole();
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+@state bpIc1 = new FixedSampleArray(2);
+@state bpIc2 = new FixedSampleArray(2);
+@state pllPhase = 0.0;
+@state ampEnv = 0.0;
+
+// Unity-peak TPT state-variable bandpass (Zavalishin / Simper), one stage
+function svfBp(idx: Int, x, g, kd) {
+	let a1 = 1.0 / (1.0 + g * (g + kd));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - bpIc2[idx];
+	let v1 = a1 * bpIc1[idx] + a2 * v3;
+	let v2 = bpIc2[idx] + a2 * bpIc1[idx] + a3 * v3;
+	bpIc1[idx] = 2.0 * v1 - bpIc1[idx];
+	bpIc2[idx] = 2.0 * v2 - bpIc2[idx];
+	return kd * v1;
+}
 
 // Real-valued modulo helper modm[x, m] = x - m * floor(x / m) (Paper Eq. 18)
 function modm(x: number, m: number): number {
@@ -39,17 +70,41 @@ function modm(x: number, m: number): number {
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = in2;
-let unused_in3 = in3;
+let pitchIn = in3;
 let barPhasor = in4;
 
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let mono = 0.5 * (xL + xR);
+
+// --- 0. Pitch: in3, else zero-crossing fallback ---
+let monoLow = lpTrack.next(mono, 200.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+smoothF0 += (rawF0 - smoothF0) * (1.0 - exp(-1.0 / (0.005 * sr)));
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// Isolate the fundamental (Q 2 per stage: the 2nd harmonic is about 20 dB down)
+let gBp = tan(pi * f0 / sr);
+let fund = svfBp(1, svfBp(0, mono, gBp, 0.5), gBp, 0.5);
 
 // --- 1. Hilbert Transform Analytic Phase Extraction ---
 let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
 let cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;
 
-let sRe = mono;
+let sRe = fund;
 let yRe0 = cRe0 * (sRe + hReY[0]) - hReX[0]; hReX[0] = sRe; hReY[0] = yRe0; sRe = yRe0;
 let yRe1 = cRe1 * (sRe + hReY[1]) - hReX[1]; hReX[1] = sRe; hReY[1] = yRe1; sRe = yRe1;
 let yRe2 = cRe2 * (sRe + hReY[2]) - hReX[2]; hReX[2] = sRe; hReY[2] = yRe2; sRe = yRe2;
@@ -57,7 +112,7 @@ let yRe3 = cRe3 * (sRe + hReY[3]) - hReX[3]; hReX[3] = sRe; hReY[3] = yRe3;
 let outRe = hDelayRe;
 hDelayRe = yRe3;
 
-let sIm = mono;
+let sIm = fund;
 let yIm0 = cIm0 * (sIm + hImY[0]) - hImX[0]; hImX[0] = sIm; hImY[0] = yIm0; sIm = yIm0;
 let yIm1 = cIm1 * (sIm + hImY[1]) - hImX[1]; hImX[1] = sIm; hImY[1] = yIm1; sIm = yIm1;
 let yIm2 = cIm2 * (sIm + hImY[2]) - hImX[2]; hImX[2] = sIm; hImY[2] = yIm2; sIm = yIm2;
@@ -65,8 +120,19 @@ let yIm3 = cIm3 * (sIm + hImY[3]) - hImX[3]; hImX[3] = sIm; hImY[3] = yIm3;
 let outIm = 0.0 - yIm3; // negate: this cR/cI order is the negative Hilbert (+f analytic phase)
 
 let pol = cartopol(outRe, outIm);
-let instAmp = pol[0];
-let phVal = wrap((pol[1] + pi) / (2.0 * pi), 0.0, 1.0);
+let fundPh = wrap((pol[1] + pi) / (2.0 * pi), 0.0, 1.0);
+
+// PLL: integrate f0 and pull toward the fundamental's phase (~8 Hz loop); the
+// increment never drops below 0.25 * f0 / sr, so phVal is strictly monotonic
+let dtMaster = f0 / sr;
+let phErr = wrap(fundPh - pllPhase + 0.5, 0.0, 1.0) - 0.5;
+let pllGain = (pol[0] > 0.0003) ? (2.0 * pi * 8.0 / sr) : 0.0;
+pllPhase = wrap(pllPhase + maximum(dtMaster + pllGain * phErr, 0.25 * dtMaster), 0.0, 1.0);
+let phVal = pllPhase;
+
+// Player's amplitude envelope: 15 ms follower on |monoLow| (sine peak scale)
+ampEnv += (abs(monoLow) * 1.5708 - ampEnv) * (1.0 - exp(-1.0 / (0.015 * sr)));
+let instAmp = ampEnv;
 
 // --- 2. Variable-Slope Parabolic Triangle Phase svtri (Paper Eq. 16) ---
 let w = clamp(tilt_duty, 0.1, 0.9);
@@ -87,15 +153,24 @@ let aTM = 0.7 + 0.3 * clamp(shape_mod, 0.0, 1.0);
 
 let gtri2L = wrap(2.0 * abs(2.0 * basePhiL - 1.0), 0.0, 1.0);
 let xTL = aTM * gtri2L - 1.0;
-let yTriModL = 2.0 * (xTL - ceil(xTL) - 0.5);
+// (+2 centres it: 2 * (xT - ceil(xT) - 0.5) alone spans (-3, -1] and was all DC)
+let yTriModL = 2.0 * (xTL - ceil(xTL) - 0.5) + 2.0;
 
 let gtri2R = wrap(2.0 * abs(2.0 * basePhiR - 1.0), 0.0, 1.0);
 let xTR = aTM * gtri2R - 1.0;
-let yTriModR = 2.0 * (xTR - ceil(xTR) - 0.5);
+let yTriModR = 2.0 * (xTR - ceil(xTR) - 0.5) + 2.0;
 
 // --- 4. Algorithm B: Ripple Supersaw Simulation (Paper Eq. 28 & Fig. 13) ---
 // y(n) = sin(2*pi * gb{ modm[ modm[a1*phi, m1] + a1*phi, m2 ] })
-let lfoPhase = (barPhasor > 0.0001 && barPhasor < 0.9999) ? barPhasor : lfoPhasor.next(0.35);
+// in4 counts as a running bar for 100 ms after it last moved (a held value is not a bar)
+if (abs(barPhasor - prevBar) > 0.0000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBar = barPhasor;
+let lfoFree = lfoPhasor.next(0.35);
+let lfoPhase = (barHold > 0.0) ? wrap(barPhasor, 0.0, 1.0) : lfoFree;
 let lfoL = 0.5 + 0.5 * sin(2.0 * pi * lfoPhase);
 let lfoR = 0.5 + 0.5 * cos(2.0 * pi * lfoPhase);
 

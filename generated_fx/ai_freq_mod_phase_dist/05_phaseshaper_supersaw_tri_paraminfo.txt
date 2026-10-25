@@ -8,10 +8,11 @@ Implements the two flagship Roland JP-8000 phaseshaping algorithms plus the Vari
 2. Single-Oscillator Ripple Supersaw (Eq. 28 & Fig. 13): Uses nested real-valued modulo operations (gripple) inside a single sinusoidal waveshaper to synthesize a thick, 7-saw detuned unison pad phase-locked to the live tuba note.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (ideally fed from 01_harmonic_isolator)
-- in3: Optional Tracked Pitch in Hz (reserved for chain compatibility)
-- in4: Optional 1-Bar Phasor [0..1] (if patched, locks the Supersaw m1 quadrature detune animation to the bar tempo; otherwise uses an internal 0.35 Hz LFO)
-- out1 / out2: Stereo Phaseshaped Output
+- in1 / in2: Stereo Audio Input (ideally fed from 01_harmonic_isolator; in2 silent for 250 ms -> in1 is used for both sides)
+- in3: Tracked Pitch in Hz. Drives a phase-locked loop: a strictly monotonic phasor at f0, locked to the phase of the tuba's bandpassed fundamental (about 8 Hz loop). Outside 20..1000 Hz an internal zero-crossing tracker is used. (Earlier versions took the raw analytic phase of the whole signal, which wrapped about twice per period on low notes and ran backwards on up to 10% of samples.)
+- in4: Optional 1-Bar Phasor [0..1] (if moving, locks the Supersaw m1 quadrature detune animation to the bar; when in4 has not moved for 100 ms an internal 0.35 Hz LFO takes over)
+- out1 / out2: Stereo Phaseshaped Output (wet only; follows the tuba's envelope with a 15 ms follower)
+- Level: on the sousa_mic.aif take (-32 dB RMS in), about -35 dB RMS with mode_blend 0 and -32 dB RMS with mode_blend 1 (offline render of the real RNBO code). The Triangle Modulation output is now centred: as written, Eq. 26 spanned (-3, -1] and pushed out1 to +1.4 dBFS of mostly DC.
 
 PARAMETERS (4)
 

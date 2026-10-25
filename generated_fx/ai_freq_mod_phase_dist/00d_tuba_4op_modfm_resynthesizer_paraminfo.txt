@@ -3,7 +3,7 @@
 ================================================================================
 
 OVERVIEW
-A 4-Operator Adaptive ModFM & Phaseshaper Vocoder Resynthesizer designed to be patched directly 1-to-1 from the 9 outlets of `00c_tuba_4harmonic_sift_analyzer.txt` (plus an optional 1-bar phasor on `in10`).
+A 4-Operator Adaptive ModFM & Phaseshaper Vocoder Resynthesizer designed to be patched directly 1-to-1 from the 9 outlets of `00c_tuba_4harmonic_ift_analyzer.txt` (plus an optional 1-bar phasor on `in10`).
 Implements the ModFM Synthesis Vocoder concept from Lazzarini & Timoney (ICMC 2011 / DAFx-08) combined with SMC 2010 PolyBLEP Hard-Sync Phaseshaping:
 - Each of the 4 tracked tuba harmonics (f1..f4, A1..A4) drives its own ModFM operator s_k(t) = A_k(t) * carrier_k(phi_k) * exp(k_op * (cos(2*pi*phi_mod) - 1)), generating strictly monotonic Modified Bessel sidebands around each partial that never cancel or clip.
 - The tuba's real-time Spectral Centroid (`in9`) automatically couples your acoustic brass brightness (soft dark tone vs. brassy fortissimo) to the ModFM index and sync formant ratio.
@@ -13,19 +13,20 @@ INLETS & OUTLETS
 - in1..in4: Harmonics 1..4 Instantaneous Frequencies f1, f2, f3, f4 in Hz (from out1..out4 of 00c)
 - in5..in8: Harmonics 1..4 Instantaneous Amplitudes A1, A2, A3, A4 (from out5..out8 of 00c)
 - in9: Real-Time Brass Spectral Centroid Ratio [1.0 to 4.0] (from out9 of 00c)
-- in10: Optional 1-Bar Audio-Rate Phasor [0.0 to 1.0] (syncs rhythmic ModFM/Sync wobble; falls back to internal 0.5 Hz LFO if unpatched)
+- in10: Optional 1-Bar Audio-Rate Phasor [0.0 to 1.0] (syncs rhythmic ModFM/Sync wobble; falls back to an internal 0.5 Hz / 2 s bar when in10 has not moved for 100 ms)
 - out1 / out2: Stereo 4-Operator ModFM Resynthesizer Output
+- Level: follows the A1..A4 inputs. Fed from 00c on the sousa_mic.aif take (input -32 dB RMS) the output measures about -36 dB RMS at the defaults (offline render of the real RNBO code); a final tanh soft-clips anything hot.
 
 PARAMETERS (8)
 
 1. joy_x_sync_formant (Joystick X-Axis)
    - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
-   - Taper: Exponential sync ratio (1.8 * 2.6^x, spanning 1.0x pure sinusoidal ModFM at -1.0 to 10.0x screaming PolyBLEP hard-sync formant at +1.0) coupled with a sinusoidal-to-sawtooth carrier morph.
+   - Taper: Exponential sync ratio 1.8 * 2.6^x (clamped to 1.0x below about x = -0.6; 4.7x at +1.0, up to about 7.5x when bright playing and the wobble push it) coupled with a sinusoid-to-PolyBLEP-sawtooth carrier morph (sawtooth share 0..75%).
    - Function: Sweeps the internal hard-sync formant ratio of all 4 harmonic operators simultaneously.
 
 2. joy_y_modfm_index (Joystick Y-Axis)
    - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
-   - Taper: Power curve (x^1.35) scaling the ModFM exponential bandwidth index k_op from 0.3 to 12.0 while progressively boosting operators 2, 3, and 4.
+   - Taper: Power curve (x^1.35) scaling the ModFM exponential bandwidth index k_op from about 0.1 (dark, soft playing) up to 12.0 (clamped), while progressively boosting operators 2, 3, and 4.
    - Function: Expands each of the 4 tuba partials from a narrow harmonic into a wide, growling Modified-Bessel formant cluster.
 
 3. inharm_stretch
@@ -34,11 +35,11 @@ PARAMETERS (8)
      * 0.0: Forces all 4 operators into strict integer harmonic lock (1x, 2x, 3x, 4x f1)
      * 1.0: Preserves the exact natural bore micro-inharmonicity of your tuba
      * 1.0 to 4.0: Exaggerates ghost-note pull and wave-steepening deviations into metallic dubstep bell/tearout sidebands
-   - Function: Scales the physical inharmonicity measured by the 4-harmonic SIFT analyzer.
+   - Function: Scales the physical inharmonicity measured by the 4-harmonic IFT analyzer (00c).
 
 4. cross_op_fm
    - Range: 0.0 to 1.0 (Default: 0.35)
-   - Taper: Power curve (x^1.3) scaling inter-operator phase modulation depth from 0.0 to 0.45 radians.
+   - Taper: Power curve (x^1.3) scaling inter-operator phase modulation depth from 0.0 to 0.45 cycles (about 2.8 radians).
    - Function: Routes the output of Operator k-1 to phase-modulate Operator k (with Operator 4 feeding back into Operator 1), turning the 4 additive ModFM operators into a circular 4-op FM synthesis matrix.
 
 5. sub_octave_mix

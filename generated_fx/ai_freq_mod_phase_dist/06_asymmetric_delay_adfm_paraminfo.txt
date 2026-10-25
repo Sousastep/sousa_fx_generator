@@ -9,6 +9,7 @@ INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input (Full Tuba Carrier)
 - in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
 - out1 / out2: Stereo Asymmetric Adaptive FM Output
+- Level: the I0-normalised exponential envelope keeps the average gain near unity but is peaky: on the sousa_mic.aif take (-32 dB RMS, -14 dBFS peak in) the defaults give about -28 dB RMS and -5 dBFS peaks (offline render of the real RNBO code). About 2 samples of latency plus the modulated delay.
 
 PARAMETERS (4)
 
@@ -25,7 +26,7 @@ PARAMETERS (4)
 3. symmetry_r
    - Range: -1.0 to +1.0 (maps exponentially to Palamin symmetry factor r = 4^symmetry_r in [0.25, 4.00])
    - Taper: Exponential octave-symmetric taper centered at 0.0 (r = 1.0, classic symmetric FM). Positive values (r > 1.0) shift sideband energy into the upper spectrum (bright formant boost without muddying sub-bass); negative values (r < 1.0) shift energy into lower sub-harmonics.
-   - Function: Dislocates the center of spectral symmetry above or below each carrier harmonic.
+   - Function: Dislocates the center of spectral symmetry above or below each carrier harmonic. Works in both bessel_mode settings (earlier versions dropped the sign of the phase index in ASDFM2 mode, so +x and -x sounded identical there).
 
 4. bessel_mode
    - Range: 0.0 to 1.0 (0.0 = ASDFM1 Standard Bessel Jn, 1.0 = ASDFM2 Modified Bessel In)

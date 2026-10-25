@@ -9,8 +9,9 @@
 // Inlets:
 //   in1: Left Audio Input
 //   in2: Right Audio Input
-//   in3: Optional Tracked Pitch in Hz (if > 20 Hz, gently biases cutoff tracking)
-//   in4: Optional 1-Bar Phasor [0..1] (unused when static, available for chain thru)
+//   in3: Optional Tracked Pitch in Hz (if 20..1000 Hz, freq_hz is scaled by pitch / 110,
+//        so the corner follows the tuba's register)
+//   (no in4: this effect has no tempo input)
 // Outlets:
 //   out1: Left Dispersed Audio Output
 //   out2: Right Dispersed Audio Output
@@ -29,6 +30,7 @@
 @state smoothFreq = 180.0;
 @state smoothQ = 2.2;
 @state smoothSpread = 0.25;
+@state smoothStages = 16.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
@@ -46,7 +48,7 @@ smoothFreq += (targetFreq - smoothFreq) * slew;
 smoothQ += (clamp(pinch_q, 0.707, 12.0) - smoothQ) * slew;
 smoothSpread += (clamp(spread, 0.0, 1.0) - smoothSpread) * slew;
 
-// Stereo frequency offset (up to +/- 1 octave spread at max spread)
+// Stereo frequency offset (up to +/- 0.75 octave spread at max spread)
 let spreadRatio = pow(2.0, smoothSpread * 0.75);
 let freqL = clamp(smoothFreq / spreadRatio, 24.0, sr * 0.45);
 let freqR = clamp(smoothFreq * spreadRatio, 24.0, sr * 0.45);
@@ -68,8 +70,12 @@ let a0R_inv = 1.0 / (1.0 + alphaR);
 let b0R = (1.0 - alphaR) * a0R_inv;
 let b1R = (-2.0 * cosR) * a0R_inv;
 
-// Fractional stage count allows click-free morphing of dispersion depth
-let stagePos = clamp(stages, 1.0, 32.0);
+// The stage count glides (30 ms) to the nearest integer: the N / N+1 crossfade
+// only exists while it moves (click-free), because a held 50% mix of an allpass
+// with its input is a phaser and notched freq_hz by 15-19 dB
+let stageSlew = 1.0 - exp(-1.0 / (0.030 * sr));
+smoothStages += (floor(clamp(stages, 1.0, 32.0) + 0.5) - smoothStages) * stageSlew;
+let stagePos = clamp(smoothStages, 1.0, 32.0);
 let numFull: Int = floor(stagePos);
 let frac = stagePos - numFull;
 
@@ -93,6 +99,12 @@ for (let i: Int = 0; i < 32; i++) {
 		z1R[i] = b1R * sigR - b1R * yR + z2R[i];
 		z2R[i] = sigR - b0R * yR;
 		sigR = yR;
+	} else {
+		// dormant stage: clear it so it re-enters from silence, not stale state
+		z1L[i] = 0.0;
+		z2L[i] = 0.0;
+		z1R[i] = 0.0;
+		z2R[i] = 0.0;
 	}
 }
 

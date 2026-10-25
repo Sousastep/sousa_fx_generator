@@ -16,8 +16,12 @@
 // Inlets:
 //   in1: Left Audio Input (Tuba or 01_harmonic_isolator)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Mod Envelope [0..1] (modulates Buchla timbre folding drive)
-//   in4: Optional 1-Bar Phasor [0..1] (sweeps symmetry offset when sym_wobble > 0)
+//   in3: Optional Mod Envelope [0..1.5] (modulates Buchla timbre folding drive). Values
+//        above 1.5 are read as the rig's tracked pitch in Hz (the IO contract for in3):
+//        the envelope is then followed from the input itself. (Clamping a pitch to
+//        1.5 used to add a constant +5 V * env_timbre_mod * 1.5 of drive.)
+//   in4: Optional 1-Bar Phasor [0..1] (sweeps symmetry offset when sym_wobble > 0; an
+//        in4 that has not moved for 100 ms falls back to an internal 0.5 Hz bar)
 // Outlets:
 //   out1: Left Buchla 259 Wavefolded Output
 //   out2: Right Buchla 259 Wavefolded Output
@@ -41,6 +45,9 @@
 
 @state barFallback = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
+@state envFollow = 0.0;
 @state smoothDrive = 4.2;
 @state smoothSym = 0.0;
 
@@ -83,17 +90,35 @@ function buchla259Antideriv(v: number): number {
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
-let envIn = clamp(in3, 0.0, 1.5);
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let barIn = in4;
+
+// Envelope: in3 when it carries one (0..1.5), else a 2 ms / 150 ms peak follower on
+// the input, scaled so a -14 dBFS-peak tuba take reaches about 0.6
+let peakIn = 0.5 * (abs(xL) + abs(xR));
+let envCoeff = (peakIn > envFollow) ? (1.0 - exp(-1.0 / (0.002 * sr))) : (1.0 - exp(-1.0 / (0.150 * sr)));
+envFollow += (peakIn - envFollow) * envCoeff;
+let envIn = (in3 >= 0.0 && in3 <= 1.5) ? in3 : clamp(envFollow * 3.0, 0.0, 1.5);
 
 let slew = 1.0 - exp(-1.0 / (0.005 * sr));
 smoothDrive += (clamp(timbre_drive_v, 0.2, 10.0) - smoothDrive) * slew;
 smoothSym += (clamp(symmetry_offset_v, -2.5, 2.5) - smoothSym) * slew;
 
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// in4 counts as a running bar for 100 ms after it last moved (a held value is not a bar)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let barPh = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : barFallback.next(0.5);
+let fallbackPh = barFallback.next(0.5);
+let barPh = (barHold > 0.0) ? wrap(barIn * 2.0, 0.0, 1.0) : fallbackPh;
 let symLfo = sin(2.0 * pi * barPh) * clamp(sym_wobble, 0.0, 1.0) * 1.4;
 
 let effDrive = clamp(smoothDrive + clamp(env_timbre_mod, 0.0, 1.0) * envIn * 5.0, 0.2, 11.0);
@@ -113,15 +138,21 @@ let foldR = (abs(diffVR) > 0.00001) ? ((curF1R - prevF1R) / diffVR) : buchla259D
 prevVR = vInR;
 prevF1R = curF1R;
 
+// Remove the folder's output at the symmetry operating point (what silence gives), so
+// the slow symmetry wobble does not leak through the DC blocker (-40 dBFS in silence)
+let restL = buchla259Direct(clamp(smoothSym + symLfo, -11.0, 11.0));
+let restR = buchla259Direct(clamp(0.0 - smoothSym - symLfo, -11.0, 11.0));
+
 // --- Buchla 259 Upper Summing Amplifier Active Lowpass Filter (Paper Sec 3.1) ---
 let lpCut = clamp(buchla_lp_hz, 300.0, 16000.0);
-let filtL = outLpL.next(foldL, lpCut);
-let filtR = outLpR.next(foldR, lpCut);
+let filtL = outLpL.next(foldL - restL, lpCut);
+let filtR = outLpR.next(foldR - restR, lpCut);
 
 // DC blocker
-let dcOutL = filtL - dcXL + 0.995 * dcYL;
+let dcPole = 1.0 - (2.0 * pi * 10.0 / sr); // 10 Hz (a fixed 0.995 was 38 Hz at 48 kHz: -1.6 dB at 58 Hz, -4 dB at 29 Hz)
+let dcOutL = filtL - dcXL + dcPole * dcYL;
 dcXL = filtL; dcYL = dcOutL;
-let dcOutR = filtR - dcXR + 0.995 * dcYR;
+let dcOutR = filtR - dcXR + dcPole * dcYR;
 dcXR = filtR; dcYR = dcOutR;
 
 let m = clamp(mix, 0.0, 1.0);

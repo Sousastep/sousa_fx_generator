@@ -19,11 +19,13 @@
 @param({ min: -0.6, max: 0.6 }) asym_bias = 0.15;
 @param({ min: 0.0, max: 1.0 }) sub_preserve = 0.45;
 
-// ADAA1 state memory (x[n-1] and antiderivative F1(x[n-1]))
+// ADAA1 state memory (x[n-1] and antiderivative F1(x[n-1])); F1(0) = -1/pi, so the
+// first sample is not a spike (starting F1 at 0 made a -0.6 dBFS click on load)
 @state prevXL = 0.0;
-@state prevF1L = 0.0;
+@state prevF1L = -0.3183098862;
 @state prevXR = 0.0;
-@state prevF1R = 0.0;
+@state prevF1R = -0.3183098862;
+@state smoothBias = 0.0;
 
 // Clean low-octave preservation filter & DC blockers
 @state lowLpL = new onepole();
@@ -44,6 +46,15 @@ function folderDirect(x: number): number {
 	return sin(pi * x) + 0.5 * tanh(x);
 }
 
+// Weighted T1..T5 Chebyshev sum used below (input already squashed to [-1, 1])
+function chebSum(c: number): number {
+	let c2 = c * c;
+	let c3 = c2 * c;
+	let c4 = c2 * c2;
+	let c5 = c4 * c;
+	return 0.45 * c + 0.25 * (2.0 * c2 - 1.0) + 0.35 * (4.0 * c3 - 3.0 * c) + 0.18 * (8.0 * c4 - 8.0 * c2 + 1.0) + 0.22 * (16.0 * c5 - 20.0 * c3 + 5.0 * c);
+}
+
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = in2;
@@ -54,7 +65,9 @@ let subR = lowLpR.next(xR, 95.0);
 
 // --- 2. Input Drive (dB to Linear) & Asymmetric Even-Harmonic Bias ---
 let gain = dbtoa(clamp(drive_db, 0.0, 30.0));
-let bias = clamp(asym_bias, -0.6, 0.6);
+// Bias glides (10 ms) so a load or a knob jump never steps the folder's operating point
+smoothBias += (clamp(asym_bias, -0.6, 0.6) - smoothBias) * (1.0 - exp(-1.0 / (0.010 * sr)));
+let bias = smoothBias;
 
 let uL = clamp(xL * gain + bias, -8.0, 8.0);
 let uR = clamp(xR * gain - bias, -8.0, 8.0); // Opposite bias polarity on R for stereo width
@@ -77,22 +90,20 @@ prevF1R = f1R;
 let cInL = tanh(uL * 0.45);
 let cInR = tanh(uR * 0.45);
 
-let l2 = cInL * cInL;
-let l3 = l2 * cInL;
-let l4 = l2 * l2;
-let l5 = l4 * cInL;
 // T2 = 2x^2 - 1, T3 = 4x^3 - 3x, T4 = 8x^4 - 8x^2 + 1, T5 = 16x^5 - 20x^3 + 5x
-let chebL = 0.45 * cInL + 0.25 * (2.0 * l2 - 1.0) + 0.35 * (4.0 * l3 - 3.0 * cInL) + 0.18 * (8.0 * l4 - 8.0 * l2 + 1.0) + 0.22 * (16.0 * l5 - 20.0 * l3 + 5.0 * cInL);
-
-let r2 = cInR * cInR;
-let r3 = r2 * cInR;
-let r4 = r2 * r2;
-let r5 = r4 * cInR;
-let chebR = 0.45 * cInR + 0.25 * (2.0 * r2 - 1.0) + 0.35 * (4.0 * r3 - 3.0 * cInR) + 0.18 * (8.0 * r4 - 8.0 * r2 + 1.0) + 0.22 * (16.0 * r5 - 20.0 * r3 + 5.0 * cInR);
+let chebL = chebSum(cInL);
+let chebR = chebSum(cInR);
 
 // Morph between ADAA Wavefolder (0.0) and Chebyshev Polynomial Harmonics (1.0)
-let distL = linearinterp(clamp(fold_cheby, 0.0, 1.0), foldOutL * 0.7, chebL);
-let distR = linearinterp(clamp(fold_cheby, 0.0, 1.0), foldOutR * 0.7, chebR);
+let fc = clamp(fold_cheby, 0.0, 1.0);
+let distL = linearinterp(fc, foldOutL * 0.7, chebL);
+let distR = linearinterp(fc, foldOutR * 0.7, chebR);
+
+// Remove the output at the bias point (what silence produces) before the DC
+// blocker: otherwise the blocker starts from zero and every load / bias move
+// clicked (up to -2.6 dBFS at the default bias)
+distL -= linearinterp(fc, folderDirect(bias) * 0.7, chebSum(tanh(bias * 0.45)));
+distR -= linearinterp(fc, folderDirect(0.0 - bias) * 0.7, chebSum(tanh((0.0 - bias) * 0.45)));
 
 // --- 5. DC Blocker & Clean Low-End Re-Injection ---
 let dcCoeff = 1.0 - (2.0 * pi * 15.0 / sr);

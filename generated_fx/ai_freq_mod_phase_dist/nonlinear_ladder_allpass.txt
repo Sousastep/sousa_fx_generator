@@ -17,7 +17,9 @@
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
 //   in3: Optional Tracked Pitch f0 in Hz (if > 20 Hz, tunes the waveguide loop delay)
-//   in4: Optional Sidechain Modulator (if patched, drives theta(n) alongside input)
+//   in4: Optional Sidechain Modulator, scaled by sidechain_amt (default 0), drives
+//        theta(n) alongside the input. The test rig sends its 0..1 bar phasor here; at
+//        full level it swept every stage's angle across the bar and clicked at each wrap.
 // Outlets:
 //   out1: Left Nonlinear Allpass Ladder Output
 //   out2: Right Nonlinear Allpass Ladder Output
@@ -28,6 +30,8 @@
 @param({ min: -0.92, max: 0.92 }) loop_feedback = 0.65;
 @param({ min: 0.0, max: 1.0 }) damp_bright = 0.75;
 @param({ min: 0.0, max: 1.0 }) stereo_asym = 0.25;
+// Sidechain amount (in4)
+@param({ min: 0.0, max: 1.0 }) sidechain_amt = 0.0;
 
 // 12 Normalized Ladder Allpass state cells per channel
 @state stateL = new FixedSampleArray(12);
@@ -52,12 +56,20 @@
 @state smoothF0 = 58.27;
 @state smoothG = 1.15;
 @state smoothBase = -0.35;
+@state smoothOrder = 8.0;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
-let sideMod = in4;
+let sideMod = in4 * clamp(sidechain_amt, 0.0, 1.0);
 
 // --- 1. Pitch Conditioning for Waveguide Loop Tuning (Paper Sec 4.4) ---
 let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);
@@ -104,7 +116,10 @@ let uR = xR + fbGain * loopR;
 // --- 3. Passive Normalized Ladder Filter (NLF) Nonlinear Allpass Cascade ---
 // Paper Fig. 2 & 3: Orthogonal rotation [s, c; c, -s] with c = cos(theta), s = sin(theta)
 // Guaranteeing |y|^2 + |state_next|^2 == |u|^2 + |state_prev|^2 (Exact energy conservation!)
-let ordPos = clamp(ladder_order, 1.0, 12.0);
+// The order glides (6 ms) to the nearest whole stage: a held N / N+1 crossfade is a
+// phaser mix that notches the spectrum
+smoothOrder += (floor(clamp(ladder_order, 1.0, 12.0) + 0.5) - smoothOrder) * slew;
+let ordPos = clamp(smoothOrder, 1.0, 12.0);
 let numFull: Int = floor(ordPos);
 let frac = ordPos - numFull;
 
@@ -152,9 +167,10 @@ wgBufR[writeIdx] = tanh(sigR);
 writeIdx = (writeIdx + 1) & 2047;
 
 // DC blocker
-let outL = sigL - dcXL + 0.996 * dcYL;
+let dcPole = 1.0 - (2.0 * pi * 10.0 / sr); // 10 Hz (a fixed 0.995 was 38 Hz at 48 kHz: -1.6 dB at 58 Hz, -4 dB at 29 Hz)
+let outL = sigL - dcXL + dcPole * dcYL;
 dcXL = sigL; dcYL = outL;
-let outR = sigR - dcXR + 0.996 * dcYR;
+let outR = sigR - dcXR + dcPole * dcYR;
 dcXR = sigR; dcYR = outR;
 
 out1 = outL;

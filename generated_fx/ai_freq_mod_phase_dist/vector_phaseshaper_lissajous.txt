@@ -45,6 +45,7 @@
 @state smoothEnv = 0.0;
 @state smoothD = 0.5;
 @state smoothV = 2.2;
+@state in2Hold = 0.0;
 @state dcXL = 0.0; @state dcYL = 0.0;
 @state dcXR = 0.0; @state dcYR = 0.0;
 
@@ -83,7 +84,13 @@ function evalVPS(xIn: number, dIn: number, vIn: number, suppressAmt: number): nu
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
 let barIn = in4;
 
@@ -177,9 +184,10 @@ let rawYL = evalVPS(phBase, dModL, vModL, alias_suppress);
 let rawYR = evalVPS(wrap(phBase + 0.015, 0.0, 1.0), dModR, vModR, alias_suppress);
 
 // DC blocker (DAFx-11 Section 3.2 notes that incomplete-period folding introduces a DC offset)
-let yL = rawYL - dcXL + 0.995 * dcYL;
+let dcPole = 1.0 - (2.0 * pi * 10.0 / sr); // 10 Hz (a fixed 0.995 was 38 Hz at 48 kHz: -1.6 dB at 58 Hz, -4 dB at 29 Hz)
+let yL = rawYL - dcXL + dcPole * dcYL;
 dcXL = rawYL; dcYL = yL;
-let yR = rawYR - dcXR + 0.995 * dcYR;
+let yR = rawYR - dcXR + dcPole * dcYR;
 dcXR = rawYR; dcYR = yR;
 
 // Apply natural tuba envelope or gated unit synthesis level

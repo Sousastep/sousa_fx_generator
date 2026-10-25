@@ -29,16 +29,23 @@
 
 @state freeLfo = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
 
 let xL = in1;
 let xR = in2;
 let unused_in3 = in3; // keep in3 port present when in4 is used
 let barIn = in4;
 
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// in4 counts as a running bar for 100 ms after it last moved (see example27)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * samplerate();
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
 
-let phase = barActive ? wrap(barIn, 0.0, 1.0) : freeLfo.next(clamp(rate_hz, 0.1, 5.0));
+let freePh = freeLfo.next(clamp(rate_hz, 0.1, 5.0));
+let phase = (barHold > 0.0) ? wrap(barIn, 0.0, 1.0) : freePh;
 let mod = 0.5 + 0.5 * sin(2.0 * pi * phase);
 
 let w = clamp(mix, 0.0, 1.0);

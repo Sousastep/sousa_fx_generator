@@ -39,6 +39,16 @@
 @state smoothDelayL = 200.0;
 @state smoothDelayR = 200.0;
 
+// Phase (rad) at w of the loop's onepole damping lowpass (pole b1) plus the 15 Hz
+// DC blocker (pole rDc); the delay is shortened/lengthened by it so the comb
+// resonates exactly on its target (uncompensated: +216 cents at tune_ratio 0.5,
+// +36 at 2, -43 at 16)
+function loopPhase(w, b1, rDc) {
+	let lp = 0.0 - atan2(b1 * sin(w), 1.0 - b1 * cos(w));
+	let hp = atan2(sin(w), 1.0 - cos(w)) - atan2(rDc * sin(w), 1.0 - rDc * cos(w));
+	return lp + hp;
+}
+
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = in2;
@@ -62,8 +72,23 @@ let baseCombHz = clamp(f0 * clamp(tune_ratio, 0.5, 16.0), 18.0, 4000.0);
 let detSemis = pow(clamp(stereo_detune, 0.0, 1.0), 1.8) * 7.0;
 let detFactor = pow(2.0, detSemis / 12.0);
 
-let targetDelL = clamp(sr / (baseCombHz / detFactor), 4.0, 4090.0);
-let targetDelR = clamp(sr / (baseCombHz * detFactor), 4.0, 4090.0);
+// damp_bright (0..1) maps exponentially from 400 Hz (dark tube) to 18 kHz (icy metallic riddim)
+let dampHz = 400.0 * pow(45.0, clamp(damp_bright, 0.0, 1.0));
+let dampB1 = 1.0 - clamp(1.0 - exp(-2.0 * pi * dampHz / sr), 0.00001, 0.99999);
+let dcCoeff = 1.0 - (2.0 * pi * 15.0 / sr);
+
+// Musical taper on feedback so resolution near +/- 0.98 is finer
+let fbSign = (feedback >= 0.0) ? 1.0 : -1.0;
+let fbMag = 1.0 - pow(1.0 - abs(clamp(feedback, -0.98, 0.98)), 1.4);
+let fbGain = fbSign * clamp(fbMag, 0.0, 0.985);
+
+// Lowest resonance: the comb frequency (positive feedback) or half of it (negative,
+// whose loop already supplies pi); solve w * D = cycle + filter phase there
+let cycle = (fbSign > 0.0) ? (2.0 * pi) : pi;
+let wResL = cycle * (baseCombHz / detFactor) / sr;
+let wResR = cycle * (baseCombHz * detFactor) / sr;
+let targetDelL = clamp((cycle + loopPhase(wResL, dampB1, dcCoeff)) / wResL, 4.0, 4090.0);
+let targetDelR = clamp((cycle + loopPhase(wResR, dampB1, dcCoeff)) / wResR, 4.0, 4090.0);
 
 // Smooth delay times to produce musical pitch-glide waveguides without clicks
 let delSlew = 1.0 - exp(-1.0 / (0.012 * sr));
@@ -94,21 +119,13 @@ let delOutR = cubicinterp(fracR,
 );
 
 // --- 3. Feedback Loop Damping & Soft Clipping ---
-// damp_bright (0..1) maps exponentially from 400 Hz (dark tube) to 18 kHz (icy metallic riddim)
-let dampHz = 400.0 * pow(45.0, clamp(damp_bright, 0.0, 1.0));
 let filtFbL = dampL.next(delOutL, dampHz);
 let filtFbR = dampR.next(delOutR, dampHz);
-
-// Musical taper on feedback so resolution near +/- 0.98 is finer
-let fbSign = (feedback >= 0.0) ? 1.0 : -1.0;
-let fbMag = 1.0 - pow(1.0 - abs(clamp(feedback, -0.98, 0.98)), 1.4);
-let fbGain = fbSign * clamp(fbMag, 0.0, 0.985);
 
 // Write back with soft saturation and DC block in loop
 let loopInL = tanh(xL + fbGain * filtFbL);
 let loopInR = tanh(xR + fbGain * filtFbR);
 
-let dcCoeff = 1.0 - (2.0 * pi * 15.0 / sr);
 let cleanLoopL = loopInL - dcXL + dcCoeff * dcYL;
 dcXL = loopInL; dcYL = cleanLoopL;
 

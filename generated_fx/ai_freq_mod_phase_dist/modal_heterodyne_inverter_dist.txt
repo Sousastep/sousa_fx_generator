@@ -10,15 +10,16 @@
 // distortion d_m(.) FREE of intermodulation products (Fig. 12), and re-modulation
 // at a transformed frequency e^(j*nu_m*t):
 //   - Normal / Shifted Harmonics: nu_m = m * w_0 * 2^(shift/12)  (Eq. 13)
-//   - Spectral Inversion (Eq. 14, Fig. 11): nu_m = w_c^2 / w_m -> flips the harmonic
-//     series upside down around pivot 2*f0 so harmonic 1 <-> 4 and harmonic 2 <-> 3!
+//   - Spectral Inversion (after Eq. 14, Fig. 11): the four modes are re-synthesised in
+//     mirrored order m -> 5 - m (harmonic 1 <-> 4, 2 <-> 3, pivot 2.5*f0). The paper's
+//     exact nu_m = w_c^2 / w_m with w_c = 2*w_0 would give {4, 2, 1.33, 1} instead.
 //   - Stereo output takes the Real part on Left and Imaginary part on Right (Sec 2)!
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
 //   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
-//   in4: Optional Gate / Freeze or 1-Bar Phasor [0..1] (modulates inversion morph)
+//   (no in4: this effect has no tempo / gate input)
 // Outlets:
 //   out1: Left Modal Processor Output (Real Part of Complex Modes)
 //   out2: Right Modal Processor Output (Imaginary Part / Quadrature Stereo Modes)
@@ -27,7 +28,7 @@
 @param({ min: 0.0, max: 24.0 }) mode_drive_db = 9.0;
 @param({ min: 0.0, max: 1.0 }) spectral_invert = 0.0;
 @param({ min: -12.0, max: 12.0 }) pitch_shift_semi = 0.0;
-@param({ min: 0.0, max: 1.0 }) odd_even_mode_tilt = 0.0;
+@param({ min: -1.0, max: 1.0 }) odd_even_mode_tilt = 0.0;
 @param({ min: 0.0, max: 1.0 }) mix = 0.85;
 
 // 4 Complex Heterodyne Analysis & Synthesis Phase Accumulators (modes m = 1, 2, 3, 4)
@@ -44,10 +45,17 @@
 @state zcCount = 0.0;
 @state zcHz = 58.27;
 @state smoothF0 = 58.27;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
 
 // --- 1. Pitch Conditioning ---
@@ -100,8 +108,7 @@ for (let m: Int = 0; m < 4; m++) {
 	let envRe = bbRe2[m] * 3.5;
 	let envIm = bbIm2[m] * 3.5;
 
-	// Paper Sec 3.3 Eq. 14: Spectral Inversion about pivot f_c = 2 * f0
-	// Maps harmonic {1, 2, 3, 4} -> {4, 2, 1.333, 1} (or inverted order {4, 3, 2, 1})
+	// Spectral inversion (after Sec 3.3 Eq. 14): mirrored order {1, 2, 3, 4} -> {4, 3, 2, 1}
 	let invHarm = 5.0 - harmNum;
 	let targetHarm = linearinterp(invAmt, harmNum, invHarm);
 	let fSyn = clamp(f0 * targetHarm * shiftRatio, 20.0, sr * 0.45);

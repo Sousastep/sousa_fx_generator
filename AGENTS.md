@@ -63,7 +63,7 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 | `tools/build_corpus.py` | PDFs → searchable corpus (incremental; run for new PDFs) |
 | `tools/fetch_papers.py` | search & download open-access PDFs (SMC, NIME, ISMIR, WASPAA, ICASSP, ICMC, AES, arXiv) with `<100 GB` cap |
 | `tools/setup_env.sh` | installs the corpus toolchain (JDK 21, tesseract, `uv` venv, opendataloader-pdf) |
-| `docs/rnbo_codebox/` | the language reference + `example1`…`example16` (fundamentals) + `example17`…`example25` (**failure modes distilled from real breakage**) |
+| `docs/rnbo_codebox/` | the language reference + `example1`…`example16` (fundamentals) + `example17`…`example27` (**failure modes distilled from real breakage**) |
 | `docs/max_v8codebox/` | v8.codebox (Max's JS) examples + API reference |
 | `docs/max_v8ui/` | `v8ui` examples (e.g. `pattr_sliders.js`) |
 | `main_test_patcher.maxpat` | The human's audition rig. Never modify. The human is an expert maxer. Tell them what to change in main_test_patcher.maxpat and they will change it.  |
@@ -99,7 +99,7 @@ both files**; page-only extras go in the gh-pages copy only.
 ## 3. codebox~ rules that bite
 
 Read `docs/rnbo_codebox/Codebox_Reference.md` for the language and
-`example17`…`example25` for these specific traps. They are ordered by how
+`example17`…`example27` for these specific traps. They are ordered by how
 expensive the mistake was. `tools/verify_codebox.js` enforces the first two
 (reserved constants, contiguous inlets/outlets) before it compiles anything.
 
@@ -183,6 +183,19 @@ not from a raw `atan2` difference; oscillator phase must be a monotonic
 integrated ramp (`pllPhase = wrap(pllPhase + f0/sr, 0.0, 1.0)`), never `atan2` of
 the audio, and any control latched from a signal that can legitimately be `0`
 needs a sample-and-hold.
+
+**The built-in `svf` is not a linear filter** (`example26`). It is Chamberlin's
+SVF: `q` maps to damping `((1-q)*1.2)^2` (q 0.8 = Q 17), the band output peaks at
+`1/damping`, and a cubic limiter in the band state engages from ~0.1 input on low
+notes. Fine as a synth filter; wrong wherever a level, phase or envelope is
+*measured* from it (and it can go NaN on control signals in Hz). Use the linear
+unity-peak TPT bandpass from `example26` there.
+
+**The rig's in3 is pitch in Hz and its in4 is a moving 0..1 bar phasor**
+(`example27`). Don't read in3 as an envelope or in4 as a gate/sidechain/modulator
+unless the code can tell them apart (range test, or an opt-in amount param with
+default 0), and treat a bar as running only for 100 ms after it last *moved* -
+`(moved || 0.001 < in4 < 0.999)` freezes on any held value.
 
 ---
 

@@ -3,21 +3,21 @@
 ================================================================================
 
 OVERVIEW
-A 4-Harmonic Instantaneous Frequency & Amplitude (IFT) Analyzer for the live tuba. Simultaneously locks four dual-stage high-Q SVF bandpass filters onto the first four partials of the tuba (f1 = f0, f2 = 2*f0, f3 = 3*f0, f4 = 4*f0), passes each isolated partial through its own 4-stage quadrature IIR Hilbert transform, and differentiates the unwrapped phase d(theta_k)/dt on every sample.
+A 4-Harmonic Instantaneous Frequency & Amplitude (IFT) Analyzer for the live tuba. Simultaneously locks four dual-stage high-Q state-variable bandpass filters (linear, unity gain at the centre) onto the first four partials of the tuba (f1 = f0, f2 = 2*f0, f3 = 3*f0, f4 = 4*f0), passes each isolated partial through its own 4-stage quadrature IIR Hilbert transform, and differentiates the unwrapped phase d(theta_k)/dt on every sample.
 Captures both the exact per-harmonic amplitude envelope A1..A4 (the tuba's dynamic spectral roll-off / brassiness) and the exact per-harmonic instantaneous frequency f1..f4 (revealing nonlinear bore wave-steepening, ghost-note inharmonicity, and micro-detuning during attacks). Also outputs the real-time Harmonic Spectral Centroid [1.0 to 4.0] on out9 so your embouchure brightness (soft vs. brassy cuivré) can directly drive dubstep filter cutoffs or FM indices!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo (or Mono on in1) Tuba Audio Input
+- in1 / in2: Stereo (or Mono on in1) Tuba Audio Input (in2 counts as patched for 250 ms after its last non-zero sample)
 - in3: Tracked Fundamental Pitch f0 in Hz (from out1 of 00_tuba_freq_tracker or fluid.pitch~; automatically falls back to an internal zero-crossing tracker if <= 0)
-- in4: Optional Freeze Gate [0 or 1] (from out3 of 00b_tuba_transient_valve_detector; freezes all 4 frequencies and the spectral centroid during valve transitions)
+- in4: Optional Freeze Gate [0 or 1] (from out3 of 00b_tuba_transient_valve_detector; freezes all 4 frequencies and the spectral centroid during valve transitions). Freezing needs in4 >= 0.5 AND held constant, so a moving ramp (the rig's phasor~ 0.5 on in4) is ignored and never freezes the analyzer.
 - out1..out4: Instantaneous Frequencies f1, f2, f3, f4 in Hz
-- out5..out8: Instantaneous Amplitudes A1, A2, A3, A4
+- out5..out8: Instantaneous Amplitudes A1, A2, A3, A4 (linear peak amplitude of each partial, same scale as the input: a 0.3-peak partial reads 0.3)
 - out9: Real-Time Brass Spectral Centroid Ratio [1.0 to 4.0] (weighted mean harmonic number: 1.0 = pure fundamental, 2.5+ = bright fortissimo brass)
 
 PARAMETERS (4)
 
 1. filter_selectivity
-   - Range: 0.20 to 1.00 (Default: 0.78, maps to dual-stage SVF Q from 0.66 to 0.95)
+   - Range: 0.20 to 1.00 (Default: 0.78). Maps to a resonance of 0.66..0.95, i.e. a per-stage filter Q of about 6 (0.2) .. 47 (0.78) .. 280 (1.0)
    - Taper: Slightly concave power curve (x^0.8).
    - Function: Controls the bandwidth of the 4 harmonic isolation filters before the Hilbert IFT stages. Higher values provide tighter harmonic separation so adjacent partials cannot intermodulate; lower values allow wider frequency excursion during rapid glissandi.
 

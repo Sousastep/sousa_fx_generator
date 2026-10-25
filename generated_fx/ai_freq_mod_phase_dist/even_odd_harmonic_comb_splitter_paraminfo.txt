@@ -3,15 +3,16 @@ even_odd_harmonic_comb_splitter — Parameter Information
 ================================================================================
 
 OVERVIEW
-Implements the Unity-Gain Normalized Universal Comb Filter (UCF) Even/Odd Harmonic Separator and Intermodulation-Free Distortion Engine from DAFx-21 Paper 2 (Sections 2.3 & 4.1–4.5, Eq. 1–18, Fig. 4–5). By tuning a canonical single-delay-line Universal Comb Filter to twice the tuba's fundamental frequency (delay M = fs / (2 * f0)), the sum tap b0*(xh[n] + xh[n-M]) isolates all EVEN harmonics (2*f0, 4*f0, 6*f0...), while the difference tap b0*(xh[n] - xh[n-M]) shifts the comb peaks by pi/M to isolate all ODD harmonics (f0, 3*f0, 5*f0...). Outputs both a differentially distorted stereo mix on out1/out2 AND the isolated Odd (out3) and Even (out4) harmonic stems so you can patch completely different FM/PD/comb chains onto the tuba's odd and even partials!
+Implements the Unity-Gain Normalized Universal Comb Filter (UCF) Even/Odd Harmonic Separator and Intermodulation-Free Distortion Engine from DAFx-21 Paper 2 (Sections 2.3 & 4.1–4.5, Eq. 1–18, Fig. 4–5). By tuning a canonical single-delay-line Universal Comb Filter to twice the tuba's fundamental frequency (delay M = fs / (2 * f0)), the sum tap b0*(xh[n] + xh[n-M]) isolates all EVEN harmonics (2*f0, 4*f0, 6*f0...), while the difference tap (xh[n] - xh[n-M]) / (1 + beta) - which is exactly the input minus the even comb - isolates all ODD harmonics (f0, 3*f0, 5*f0...). Both stems are unity gain at their harmonics (measured within about 1 dB; earlier versions scaled the odd tap like the even one, which left the odd bus - including the fundamental - 8 / 14 / 26 dB low at Q 4 / 8 / 30). Outputs both a differentially distorted stereo mix on out1/out2 AND the isolated Odd (out3) and Even (out4) harmonic stems so you can patch completely different FM/PD/comb chains onto the tuba's odd and even partials!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
+- in1 / in2: Stereo Audio Input (Tuba; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps odd/even balance when tilt_wobble > 0)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps odd/even balance four times per bar when tilt_wobble > 0; an internal 1 Hz LFO takes over when in4 has not moved for 100 ms)
 - out1 / out2: Stereo Main Output (Differentially Driven Odd/Even Harmonic Mix)
 - out3: Isolated Odd Harmonics Stem (f0, 3*f0, 5*f0... for external Unix chaining)
 - out4: Isolated Even Harmonics Stem (2*f0, 4*f0, 6*f0... for external Unix chaining)
+- Level: on the sousa_mic.aif take (-32 dB RMS in) the defaults give about -29.5 dB RMS on out1/out2 (offline render of the real RNBO code).
 
 PARAMETERS (6)
 

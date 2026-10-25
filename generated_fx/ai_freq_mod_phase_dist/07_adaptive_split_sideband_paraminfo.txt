@@ -6,9 +6,10 @@ OVERVIEW
 Implements Adaptive Split-Sideband Synthesis (ASpSB) from Lazzarini, Timoney, and Lysaght (DAFx-08, Section 3, Eq. 5–20). By passing the carrier tuba, a cosine-mapped modulator cos(I*sin(wm*t)), and a sine-mapped modulator sin(I*sin(wm*t)) through three independent 4-stage quadrature Hilbert networks, the FM sidebands are split into four orthogonal components: Upper-Even (aeu), Upper-Odd (aou), Lower-Even (ael), and Lower-Odd (aol). Allows independent sculptural control over upper vs. lower and odd vs. even sidebands with stereo spatialization across the sideband groups.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba Carrier)
+- in1 / in2: Stereo Audio Input (Tuba Carrier; summed to mono. in2 silent for 250 ms -> in1 alone is used)
 - in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
-- out1 / out2: Stereo Split-Sideband Output
+- out1 / out2: Stereo Split-Sideband Output (the stereo image comes from weighting the four groups differently per side)
+- Level: on the sousa_mic.aif take (-32 dB RMS in) the defaults give about -29 dB RMS (offline render of the real RNBO code). Measured on a 440 Hz sine with fm = 110 Hz: the unwanted side is 30-50 dB down at low_high_tilt +/-1. The carrier (n = 0) term now goes through at its true J0(I) level; earlier versions let the Hilbert pair's DC response add a 90-degree copy (+3 dB) to it in every group.
 
 PARAMETERS (4)
 

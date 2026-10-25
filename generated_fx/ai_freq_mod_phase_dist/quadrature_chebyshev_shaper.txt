@@ -12,11 +12,17 @@
 //   y(t) = sum_k a_k * [ cos(phi_k) * T_k(x_I) + sin(phi_k) * x_Q * U_{k-1}(x_I) ]
 // you gain independent control over BOTH harmonic amplitudes AND harmonic phase
 // angles phi_k (even continuously rotating harmonic phases at audio/LFO rates)!
+// T_k(x_I) = cos(k*w*t) only holds on the unit circle, so the analytic pair is
+// normalised to unit magnitude first and the level is restored afterwards from an
+// envelope follower; drive_db acts on the envelope-normalised magnitude, so the
+// harmonic content no longer depends on how loud the tuba is (before, at real tuba
+// levels the polynomials saw r ~ 0.1 and mostly returned the fundamental).
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (prefer 01_harmonic_isolator or raw tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Mod Envelope [0..1] (dynamically rotates harmonic phase angles phi_k)
+//   in3: Optional Mod Envelope [-2..2] (dynamically rotates harmonic phase angles phi_k;
+//        anything outside that range, such as the rig's pitch in Hz, is ignored)
 //   in4: Optional 1-Bar Phasor [0..1] (drives continuous per-harmonic Shepard/Barberpole
 //        phase rotation when phase_spin > 0)
 // Outlets:
@@ -49,12 +55,23 @@
 @state prevBarIn = 0.0;
 @state barHold = 0.0;
 @state smoothEnvMod = 0.0;
+@state ampEnvL = 0.0;
+@state spinAcc = 0.0;
+@state prevSpinPh = 0.0;
+@state ampEnvR = 0.0;
+@state in2Hold = 0.0;
 @state dcXL = 0.0; @state dcYL = 0.0;
 @state dcXR = 0.0; @state dcYR = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let envMod = (in3 > -2.0 && in3 < 2.0) ? in3 : 0.0;
 let barIn = in4;
 
@@ -100,36 +117,36 @@ t = cI2 * (imR + rImY[2]) - rImX[2]; rImX[2] = imR; rImY[2] = t; imR = t;
 t = cI3 * (imR + rImY[3]) - rImX[3]; rImX[3] = imR; rImY[3] = t; imR = t;
 let rawQR = 0.0 - imR; // negate: this order is the negative Hilbert
 
-// Radial unit-disk saturation: preserves exact quadrature angle (cos(theta), sin(theta))
-// while bounding radius r_sat in [0, 1) so Chebyshev T_k and U_k never blow up or clip!
-let drive = dbtoa(clamp(drive_db, 0.0, 18.0));
+// Unit-circle quadrature (exact cos(theta), sin(theta)) + amplitude envelope
 let magL = sqrt(rawIL * rawIL + rawQL * rawQL + 0.00000001);
-let satMagL = tanh(magL * drive);
-let scaleL = satMagL / magL;
-let xIL = rawIL * scaleL;
-let xQL = rawQL * scaleL;
-
 let magR = sqrt(rawIR * rawIR + rawQR * rawQR + 0.00000001);
-let satMagR = tanh(magR * drive);
-let scaleR = satMagR / magR;
-let xIR = rawIR * scaleR;
-let xQR = rawQR * scaleR;
+let xIL = rawIL / magL;
+let xQL = rawQL / magL;
+let xIR = rawIR / magR;
+let xQR = rawQR / magR;
 
-// Dynamic envelope window (r_sat^2) for even-order T_2, T_4, T_6 so their constant terms
-// (-1, +1, -1) vanish smoothly at zero signal and never cause gate/breath thumps!
-let envWinL = satMagL * satMagL;
-let envWinR = satMagR * satMagR;
+// 2 ms / 80 ms peak follower on the analytic magnitude
+let envAtk = 1.0 - exp(-1.0 / (0.002 * sr));
+let envRel = 1.0 - exp(-1.0 / (0.080 * sr));
+ampEnvL += (magL - ampEnvL) * ((magL > ampEnvL) ? envAtk : envRel);
+ampEnvR += (magR - ampEnvR) * ((magR > ampEnvR) ? envAtk : envRel);
 
-// --- 2. Compute Chebyshev Polynomials of 1st Kind (T_1..T_6) & 2nd Kind (U_0..U_5) ---
-// Recurrences: T_k(x) = 2*x*T_{k-1}(x) - T_{k-2}(x)
-//              U_k(x) = 2*x*U_{k-1}(x) - U_{k-2}(x), where sin(k*w*t) = sin(w*t) * U_{k-1}(cos(w*t))
+// Shaping radius: drive applied to the envelope-normalised magnitude (about 1 on a
+// steady note). Harmonic k is weighted by rS^(k-1), so drive sets the brightness.
+let drive = dbtoa(clamp(drive_db, 0.0, 18.0));
+let rSL = tanh(drive * magL / maximum(ampEnvL, 0.0001));
+let rSR = tanh(drive * magR / maximum(ampEnvR, 0.0001));
+
+// --- 2. Chebyshev Polynomials of 1st Kind (T_1..T_6) & 2nd Kind (U_0..U_5) ---
+// On the unit circle T_k(cos) = cos(k*theta) and sin * U_{k-1}(cos) = sin(k*theta)
+// Recurrences: T_k(x) = 2*x*T_{k-1}(x) - T_{k-2}(x), U_k(x) = 2*x*U_{k-1}(x) - U_{k-2}(x)
 // Left Channel:
 let T1L = xIL;
-let T2L = (2.0 * xIL * T1L - 1.0) * envWinL;
-let T3L = 2.0 * xIL * (2.0 * xIL * T1L - 1.0) - T1L;
-let T4L = (2.0 * xIL * T3L - (2.0 * xIL * T1L - 1.0)) * envWinL;
-let T5L = 2.0 * xIL * (2.0 * xIL * T3L - (2.0 * xIL * T1L - 1.0)) - T3L;
-let T6L = (2.0 * xIL * T5L - (2.0 * xIL * T3L - (2.0 * xIL * T1L - 1.0))) * envWinL;
+let T2L = 2.0 * xIL * T1L - 1.0;
+let T3L = 2.0 * xIL * T2L - T1L;
+let T4L = 2.0 * xIL * T3L - T2L;
+let T5L = 2.0 * xIL * T4L - T3L;
+let T6L = 2.0 * xIL * T5L - T4L;
 
 let U0L = 1.0;
 let U1L = 2.0 * xIL;
@@ -140,11 +157,11 @@ let U5L = 2.0 * xIL * U4L - U3L;
 
 // Right Channel:
 let T1R = xIR;
-let T2R = (2.0 * xIR * T1R - 1.0) * envWinR;
-let T3R = 2.0 * xIR * (2.0 * xIR * T1R - 1.0) - T1R;
-let T4R = (2.0 * xIR * T3R - (2.0 * xIR * T1R - 1.0)) * envWinR;
-let T5R = 2.0 * xIR * (2.0 * xIR * T3R - (2.0 * xIR * T1R - 1.0)) - T3R;
-let T6R = (2.0 * xIR * T5R - (2.0 * xIR * T3R - (2.0 * xIR * T1R - 1.0))) * envWinR;
+let T2R = 2.0 * xIR * T1R - 1.0;
+let T3R = 2.0 * xIR * T2R - T1R;
+let T4R = 2.0 * xIR * T3R - T2R;
+let T5R = 2.0 * xIR * T4R - T3R;
+let T6R = 2.0 * xIR * T5R - T4R;
 
 let U0R = 1.0;
 let U1R = 2.0 * xIR;
@@ -163,7 +180,14 @@ if (abs(barIn - prevBarIn) > 0.0000001) {
 prevBarIn = barIn;
 let fbPh = barFallback.next(0.5);
 let spinPh = (barHold > 0.0) ? wrap(barIn * 2.0, 0.0, 1.0) : fbPh;
-let spinAngle = 2.0 * pi * spinPh * clamp(phase_spin, 0.0, 1.0);
+// Integrated spin: advance by phase_spin x the (wrapped) step of the bar phase, so the
+// rotation stays continuous when the bar wraps. (Scaling the wrapping phase itself
+// made every harmonic's phase jump by a fraction of a turn - a click each half bar.)
+let dSpin = spinPh - prevSpinPh;
+dSpin = dSpin - floor(dSpin + 0.5);
+prevSpinPh = spinPh;
+spinAcc = wrap(spinAcc + clamp(phase_spin, 0.0, 1.0) * dSpin, 0.0, 1.0);
+let spinAngle = 2.0 * pi * spinAcc;
 
 let baseAngle = clamp(quad_phase_angle, -3.14159, 3.14159) + smoothEnvMod * pi;
 let stOffset = clamp(stereo_quad_spread, 0.0, 1.0) * 0.5 * pi;
@@ -186,28 +210,33 @@ let p5L = 5.0 * baseAngle + spinAngle * 4.0; let p5R = 5.0 * (baseAngle + stOffs
 let p6L = 6.0 * baseAngle + spinAngle * 5.0; let p6R = 6.0 * (baseAngle + stOffset) - spinAngle * 5.0;
 
 // Paper Eq. 15: y(t) = sum_k a_k * [ cos(phi_k)*T_k(x_I) + sin(phi_k)*x_Q*U_{k-1}(x_I) ]
+let rL2 = rSL * rSL; let rL3 = rL2 * rSL; let rL4 = rL3 * rSL; let rL5 = rL4 * rSL;
+let rR2 = rSR * rSR; let rR3 = rR2 * rSR; let rR4 = rR3 * rSR; let rR5 = rR4 * rSR;
+
 let sumL = T1L
-	+ a2 * (cos(p2L) * T2L + sin(p2L) * xQL * U1L * envWinL)
-	+ a3 * (cos(p3L) * T3L + sin(p3L) * xQL * U2L)
-	+ a4 * (cos(p4L) * T4L + sin(p4L) * xQL * U3L * envWinL)
-	+ a5 * (cos(p5L) * T5L + sin(p5L) * xQL * U4L)
-	+ a6 * (cos(p6L) * T6L + sin(p6L) * xQL * U5L * envWinL);
+	+ a2 * rSL * (cos(p2L) * T2L + sin(p2L) * xQL * U1L)
+	+ a3 * rL2 * (cos(p3L) * T3L + sin(p3L) * xQL * U2L)
+	+ a4 * rL3 * (cos(p4L) * T4L + sin(p4L) * xQL * U3L)
+	+ a5 * rL4 * (cos(p5L) * T5L + sin(p5L) * xQL * U4L)
+	+ a6 * rL5 * (cos(p6L) * T6L + sin(p6L) * xQL * U5L);
 
 let sumR = T1R
-	+ a2 * (cos(p2R) * T2R + sin(p2R) * xQR * U1R * envWinR)
-	+ a3 * (cos(p3R) * T3R + sin(p3R) * xQR * U2R)
-	+ a4 * (cos(p4R) * T4R + sin(p4R) * xQR * U3R * envWinR)
-	+ a5 * (cos(p5R) * T5R + sin(p5R) * xQR * U4R)
-	+ a6 * (cos(p6R) * T6R + sin(p6R) * xQR * U5R * envWinR);
+	+ a2 * rSR * (cos(p2R) * T2R + sin(p2R) * xQR * U1R)
+	+ a3 * rR2 * (cos(p3R) * T3R + sin(p3R) * xQR * U2R)
+	+ a4 * rR3 * (cos(p4R) * T4R + sin(p4R) * xQR * U3R)
+	+ a5 * rR4 * (cos(p5R) * T5R + sin(p5R) * xQR * U4R)
+	+ a6 * rR5 * (cos(p6R) * T6R + sin(p6R) * xQR * U5R);
 
+// Restore the input's level (the unit-circle sum is scaled by the magnitude itself)
 let norm = 1.0 / (1.0 + 0.50 * (a2 + a3 + a4 + a5 + a6));
-let yL = sumL * norm;
-let yR = sumR * norm;
+let yL = sumL * norm * magL;
+let yR = sumR * norm * magR;
 
 // DC blocker
-let outL = yL - dcXL + 0.995 * dcYL;
+let dcPole = 1.0 - (2.0 * pi * 10.0 / sr); // 10 Hz (a fixed 0.995 was 38 Hz at 48 kHz: -1.6 dB at 58 Hz, -4 dB at 29 Hz)
+let outL = yL - dcXL + dcPole * dcYL;
 dcXL = yL; dcYL = outL;
-let outR = yR - dcXR + 0.995 * dcYR;
+let outR = yR - dcXR + dcPole * dcYR;
 dcXR = yR; dcYR = outR;
 
 out1 = tanh(outL * 1.15);

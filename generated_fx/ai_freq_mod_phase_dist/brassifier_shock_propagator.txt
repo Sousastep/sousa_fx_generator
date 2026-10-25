@@ -16,7 +16,9 @@
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
 //   in3: Optional Tracked Pitch f0 in Hz (scales bore delay excursion proportionally)
-//   in4: Optional External Sidechain Driver (if patched, modulates propagation speed)
+//   in4: Optional External Sidechain Driver, scaled by ext_sidechain (default 0). The
+//        test rig sends its 0..1 bar phasor here, which - added at full level - swept
+//        the bore delay over every bar and snapped it back at the wrap.
 // Outlets:
 //   out1: Left Brassified / Shock-Steepened Output
 //   out2: Right Brassified / Shock-Steepened Output
@@ -27,6 +29,8 @@
 @param({ min: 0.0, max: 1.0 }) bell_eq_comp = 0.7;
 @param({ min: 0.0, max: 1.0 }) bi_waveguide_fb = 0.25;
 @param({ min: 0.0, max: 1.0 }) stereo_bore_diff = 0.2;
+// External sidechain amount (in4)
+@param({ min: 0.0, max: 1.0 }) ext_sidechain = 0.0;
 
 // Circular delay buffers for lumped amplitude-dependent bore propagation (2048 samples)
 @state boreBufL = new FixedSampleArray(2048);
@@ -51,12 +55,19 @@
 @state zcCount = 0.0;
 @state zcHz = 58.27;
 @state smoothF0 = 58.27;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
-let extSc = in4;
+let extSc = in4 * clamp(ext_sidechain, 0.0, 1.0);
 
 // --- 1. Pitch Conditioning ---
 let monoLow = lpTrack.next(0.5 * (xL + xR), 190.0);

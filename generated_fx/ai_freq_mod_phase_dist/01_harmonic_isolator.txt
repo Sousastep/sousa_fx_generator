@@ -24,11 +24,12 @@
 @state bqL = new biquad();
 @state bqR = new biquad();
 
-// Cascaded 2-stage SVF bandpass states for steep harmonic isolation
-@state svfL1 = new svf();
-@state svfR1 = new svf();
-@state svfL2 = new svf();
-@state svfR2 = new svf();
+// Cascaded 2-stage TPT SVF bandpass states for steep harmonic isolation
+// (index 0 = L1, 1 = R1, 2 = L2, 3 = R2). Linear with unity gain at the centre:
+// the built-in svf has peak gain 1/damping plus a cubic limiter in its band
+// state, which pinned out1 near +10 dBFS and added a 3rd harmonic to the "sine".
+@state svfIc1 = new FixedSampleArray(4);
+@state svfIc2 = new FixedSampleArray(4);
 
 // Internal fallback zero-crossing pitch tracker & conditioning state
 @state lpTrack = new onepole();
@@ -42,6 +43,19 @@
 @state envFastR = 0.0;
 @state envSlowL = 0.0;
 @state envSlowR = 0.0;
+
+// Unity-peak TPT state-variable bandpass (Zavalishin / Simper), one stage
+function svfBp(idx: Int, x, g, kd) {
+	let a1 = 1.0 / (1.0 + g * (g + kd));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - svfIc2[idx];
+	let v1 = a1 * svfIc1[idx] + a2 * v3;
+	let v2 = svfIc2[idx] + a2 * svfIc1[idx] + a3 * v3;
+	svfIc1[idx] = 2.0 * v1 - svfIc1[idx];
+	svfIc2[idx] = 2.0 * v2 - svfIc2[idx];
+	return kd * v1;
+}
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
@@ -60,13 +74,13 @@ if (prevTrackSig <= 0.0 && monoLow > 0.0) {
 prevTrackSig = monoLow;
 
 let rawF0 = (extPitch > 20.0 && extPitch < 1000.0) ? extPitch : zcFreq;
-// Slew-limit pitch in log/Hz domain to suppress tracker glitches
+// Slew-limit pitch (8 ms one-pole, in Hz) to suppress tracker glitches
 let pitchSlew = 1.0 - exp(-1.0 / (0.008 * sr));
 smoothF0 += (rawF0 - smoothF0) * pitchSlew;
 let targetHz = clamp(smoothF0 * harmonic, 24.0, sr * 0.42);
 
 // --- 2. Musical Tapers ---
-// focus (0..1) maps exponentially to Q from 1.0 (gentle) to 28.0 (surgical harmonic lock)
+// focus (0..1) maps exponentially to qVal 1.0 .. 28.0; the peaking filter uses Q = qVal / 2 (0.5 .. 14)
 let qVal = 1.0 * pow(28.0, pow(clamp(focus, 0.0, 1.0), 1.4));
 // boost_db (0..48 dB) maps to RBJ peaking filter linear gain A = 10^(dB/40)
 let A = pow(10.0, clamp(boost_db, 0.0, 48.0) / 40.0);
@@ -94,16 +108,17 @@ let peakedL = bqL.next(xL, c_b0, c_b1, c_b2, a1, a2) * compGain;
 let peakedR = bqR.next(xR, c_b0, c_b1, c_b2, a1, a2) * compGain;
 
 // --- 4. Cascaded SVF Bandpass Isolation ---
-// svf.next(x, freq, Q) returns [lp, hp, bp, notch]
+// Resonance 0.5 .. 0.95 -> per-stage damping kd = ((1 - q) * 1.2)^2 (the svf
+// object's mapping): stage Q about 2.8 (focus 0) .. 16 (0.65) .. 280 (1)
 let svfQ = clamp(0.5 + focus * 0.45, 0.5, 0.96);
-let bpL1 = svfL1.next(peakedL, targetHz, svfQ)[2];
-let bpR1 = svfR1.next(peakedR, targetHz, svfQ)[2];
-let bpL2 = svfL2.next(bpL1, targetHz, svfQ)[2];
-let bpR2 = svfR2.next(bpR1, targetHz, svfQ)[2];
+let kdSvf = clamp(((1.0 - svfQ) * 1.2) * ((1.0 - svfQ) * 1.2), 0.001, 2.0);
+let gSvf = tan(pi * targetHz / sr);
+let bpL2 = svfBp(2, svfBp(0, peakedL, gSvf, kdSvf), gSvf, kdSvf);
+let bpR2 = svfBp(3, svfBp(1, peakedR, gSvf, kdSvf), gSvf, kdSvf);
 
 // Crossfade between bell-boosted tuba and pure isolated harmonic bandpass with focus
-let isoL = linearinterp(focus, peakedL, bpL2 * 2.2);
-let isoR = linearinterp(focus, peakedR, bpR2 * 2.2);
+let isoL = linearinterp(focus, peakedL, bpL2);
+let isoR = linearinterp(focus, peakedR, bpR2);
 
 // --- 5. Instantaneous Envelope & Dynamic Decoupling ---
 let absL = abs(isoL);

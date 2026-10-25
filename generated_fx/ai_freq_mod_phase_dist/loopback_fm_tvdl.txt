@@ -15,7 +15,8 @@
 //   in1: Left Audio Input (Tuba Carrier)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
 //   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
-//   in4: Optional 1-Bar Phasor [0..1] (modulates loopback coefficient B when b_glide_mod > 0)
+//   in4: Optional 1-Bar Phasor [0..1] (modulates loopback coefficient B when b_glide_mod > 0;
+//        an in4 that has not moved for 100 ms falls back to an internal 0.75 Hz LFO)
 // Outlets:
 //   out1: Left Loopback FM TVDL Output
 //   out2: Right Loopback FM TVDL Output
@@ -47,12 +48,22 @@
 @state zcHz = 58.27;
 @state smoothF0 = 58.27;
 @state smoothB = 0.65;
+@state glideBL = 0.65;
+@state glideBR = 0.65;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
 
 // Cubic-interpolated circular buffer reader (8192-sample wrap)
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
 let barIn = in4;
 
@@ -77,9 +88,15 @@ delayBufL[writeIdx] = xL;
 delayBufR[writeIdx] = xR;
 
 // --- 2. Bar Phasor & Loopback Coefficient B Calculation ---
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// in4 counts as a running bar for 100 ms after it last moved (a held value is not a bar)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let barPh = barActive ? wrap(barIn * 4.0, 0.0, 1.0) : barFallback.next(0.75);
+let fallbackPh = barFallback.next(0.75);
+let barPh = (barHold > 0.0) ? wrap(barIn * 4.0, 0.0, 1.0) : fallbackPh;
 // Exponential decay envelope per beat for classic LBFM gong/bass pitch-timbre glide
 let beatEnv = exp(-3.5 * barPh);
 
@@ -87,8 +104,13 @@ smoothB += (clamp(loopback_b, -0.92, 0.92) - smoothB) * slew;
 let glideOffset = clamp(b_glide_mod, 0.0, 1.0) * 0.45 * (beatEnv - 0.3);
 let spreadB = clamp(stereo_b_spread, 0.0, 1.0) * 0.14;
 
-let BL = clamp(smoothB + glideOffset - spreadB, -0.94, 0.94);
-let BR = clamp(smoothB + glideOffset + spreadB, -0.94, 0.94);
+// The beat envelope restarts at 1 on every beat; a 2 ms glide on B keeps that
+// restart from stepping the delay line (a click per beat at high b_glide_mod)
+let bGlide = 1.0 - exp(-1.0 / (0.002 * sr));
+glideBL += (clamp(smoothB + glideOffset - spreadB, -0.94, 0.94) - glideBL) * bGlide;
+glideBR += (clamp(smoothB + glideOffset + spreadB, -0.94, 0.94) - glideBR) * bGlide;
+let BL = glideBL;
+let BR = glideBR;
 
 // Avoid B == 0 division singularity in Eq. 26: b0 = (sqrt(1 - B^2) - 1) / B
 if (abs(BL) < 0.0005) { BL = 0.0005; }

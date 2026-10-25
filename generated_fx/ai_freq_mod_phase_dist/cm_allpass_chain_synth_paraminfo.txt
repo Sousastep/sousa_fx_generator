@@ -6,16 +6,17 @@ OVERVIEW
 Implements Coefficient Modulation (CM) Synthesis using a Cascaded First-Order Allpass Filter Chain from Kleimola, Pekonen, Penttinen, Välimäki, and Abel (DAFx-09 Paper 66, Sections 2.1, 2.2, 2.5 & 4.3, Eq. 3, 11–17). Routes the stereo tuba through up to 48 cascaded first-order allpass stages per channel whose coefficients are modulated at audio rate using the transient-free difference equation y(n) = x(n-1) - m(n)*x(n) + m(n)*y(n-1). Stage 1 scatters each tuba partial into a Feedback-AM sideband cluster, while cascading N stages acts as a dispersive variable-length delay line that applies non-sinusoidal Complex FM (Eq. 17) with a prominent upper-spectrum resonance peak (Fig. 3a).
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba Carrier)
+- in1 / in2: Stereo Audio Input (Tuba Carrier; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
-- in4: Optional External Audio-Rate Modulator [-1..1] (e.g., patch out3 of 01_harmonic_isolator here for self-modulated CM; if unpatched, uses internal pitch-tracked cosine modulator)
+- in4: Optional External Audio-Rate Modulator [-1..1] (e.g., patch out3 of 01_harmonic_isolator here for self-modulated CM), blended in by ext_mod. Earlier versions switched to in4 whenever it was non-zero, so in the test rig (bar phasor on in4) the coefficient just followed a slow ramp and the effect added almost nothing: the 2nd harmonic of a 58 Hz sine came out at -61 dB instead of -24 dB.
 - out1 / out2: Stereo CM Allpass Chain Output
+- Level: unity-ish (allpass chain); on the sousa_mic.aif take (-32 dB RMS in) about -32 dB RMS at the defaults (offline render of the real RNBO code).
 
-PARAMETERS (6)
+PARAMETERS (7)
 
 1. chain_stages
    - Range: 1.0 to 48.0 Allpass Stages per Channel (Default: 24.0)
-   - Taper: Continuous fractional stage interpolation.
+   - Taper: Rounded to whole stages; the count glides there (6 ms) with an N / N+1 crossfade so moving it does not click. A held fractional count would be a phaser mix with notches, so it is not allowed to rest between stages.
    - Function: Controls the cascade length N (DAFx-09 Eq. 14 & Fig. 4). N = 1 produces pure Feedback AM; increasing N widens the FM frequency deviation and spectral bandwidth while acting as a natural anti-aliasing bandwidth ceiling.
 
 2. mod_index_m
@@ -42,3 +43,8 @@ PARAMETERS (6)
    - Range: 0.0 to 1.0 (0% Dry to 100% Wet CM Allpass Chain)
    - Taper: Linear crossfade.
    - Function: Blends the dry tuba with the coefficient-modulated allpass cascade.
+
+7. ext_mod
+   - Range: 0.0 to 1.0 (Default: 0.0)
+   - Taper: Linear crossfade from the internal pitch-tracked cosine modulator (0.0) to the audio-rate signal on in4 (1.0).
+   - Function: Use an external modulator such as 01_harmonic_isolator's sine on in4. Leave at 0 when in4 carries the bar phasor.

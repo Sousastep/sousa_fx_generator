@@ -15,8 +15,11 @@
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Mod Envelope [0..1] (e.g. out2 of 00b_tuba_transient_valve_detector)
-//   in4: Optional 1-Bar Phasor [0..1] (modulates allpass coefficient a1 when mod_depth > 0)
+//   in3: Optional Mod Envelope [-1..1] (e.g. out2 of 00b_tuba_transient_valve_detector).
+//        Values beyond +/-1.5 are taken to be the rig's pitch in Hz and ignored (clamping
+//        the pitch used to add a constant +mod_depth * 0.35 to a1).
+//   in4: Optional 1-Bar Phasor [0..1] (modulates allpass coefficient a1 when mod_depth > 0;
+//        an in4 that has not moved for 100 ms falls back to an internal 0.5 Hz LFO)
 // Outlets:
 //   out1: Left Stretched Spectral Delay Chirp Output
 //   out2: Right Stretched Spectral Delay Chirp Output
@@ -49,17 +52,32 @@
 @state prevBarIn = 0.0;
 @state smoothA1 = 0.6;
 @state smoothFb = 0.55;
+@state smoothStages = 20.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
-let envIn = clamp(in3, -1.0, 1.0);
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
+let envIn = (abs(in3) <= 1.5) ? clamp(in3, -1.0, 1.0) : 0.0;
 let barIn = in4;
 
 // --- 1. Time-Varying Coefficient Modulation (Paper Sec 4) ---
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// in4 counts as a running bar for 100 ms after it last moved (a held value is not a bar)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let barPh = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : barFallback.next(0.5);
+let fallbackPh = barFallback.next(0.5);
+let barPh = (barHold > 0.0) ? wrap(barIn * 2.0, 0.0, 1.0) : fallbackPh;
 let lfoMod = sin(2.0 * pi * barPh);
 
 let slew = 1.0 - exp(-1.0 / (0.006 * sr));
@@ -89,7 +107,10 @@ let wR = tanh(xR + smoothFb * bLpR);
 
 // --- 3. Cascade of M Stretched First-Order Allpass Stages (Paper Eq. 2 & Sec 2.4) ---
 // y(n) = a1 * x(n) + x(n - K) - a1 * y(n - K)
-let stgPos = clamp(allpass_stages, 4.0, 24.0);
+// The stage count glides (6 ms) to the nearest integer: a held N / N+1 crossfade is
+// a phaser mix that notches the spectrum
+smoothStages += (floor(clamp(allpass_stages, 4.0, 24.0) + 0.5) - smoothStages) * slew;
+let stgPos = clamp(smoothStages, 4.0, 24.0);
 let numFull: Int = floor(stgPos);
 let frac = stgPos - numFull;
 

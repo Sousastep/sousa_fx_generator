@@ -6,10 +6,11 @@ OVERVIEW
 Implements the Antialiased Virtual Analog Buchla 259 Parallel Wavefolder from Fabián Esqueda, Henri Pöntynen, Vesa Välimäki, and Julian D. Parker (DAFx-17 Paper 82, Sections 2 & 3, Eq. 9–18, Table 1, Fig. 1–4, 9). Unlike series sine/Lockhart wavefolders (`12_adaa_chebyshev_wavefolder`), Don Buchla's 1970 Complex Waveform Generator uses five parallel CA3160 CMOS op-amp folding cells V_1..V_5 with staggered voltage deadbands (+/-0.600 V, +/-1.800 V, +/-2.994 V, +/-4.080 V, +/-5.460 V) and alternating summing amplifier weights (Eq. 13–18), followed by the active 1st-order lowpass filter in the upper summing op-amp (C = 100 pF, RF2 = 1.2 MOhm). Uses exact First-Order Antiderivative Antialiasing (ADAA1) on all five piecewise deadband branches to round every folding corner without 8x oversampling!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba or 01_harmonic_isolator)
-- in3: Optional Modulation Envelope [0..1] (patch out2 of 00b_tuba_transient_valve_detector to whip Buchla folding voltage on attacks)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps DC symmetry offset when sym_wobble > 0)
+- in1 / in2: Stereo Audio Input (Tuba or 01_harmonic_isolator; in2 silent for 250 ms -> in1 is used for both sides)
+- in3: Optional Modulation Envelope [0..1.5] (patch out2 of 00b_tuba_transient_valve_detector to whip Buchla folding voltage on attacks). Values above 1.5 are taken to be the rig's tracked pitch in Hz; the envelope is then followed from the input itself (2 ms attack / 150 ms release, about 0.6 at the loud parts of the sousa_mic.aif take). Earlier versions clamped the pitch to 1.5, which simply added a constant +2.6 V of drive at the defaults - set timbre_drive_v to about 6.8 to recreate that sound.
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps DC symmetry offset, two sweeps per bar, when sym_wobble > 0; an internal 0.5 Hz bar takes over when in4 has not moved for 100 ms)
 - out1 / out2: Stereo Buchla 259 Wavefolded Output
+- Level: the fold is scaled so +/-5 V maps to about +/-1, so peaks reach 0 dBFS; on the sousa_mic.aif take (-32 dB RMS in) the defaults give about -19 dB RMS in the rig configuration (offline render of the real RNBO code). Silence stays silent: the output at the symmetry operating point is removed before the DC blocker.
 
 PARAMETERS (6)
 

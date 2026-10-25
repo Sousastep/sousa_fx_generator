@@ -3,13 +3,14 @@
 ================================================================================
 
 OVERVIEW
-Isolates the fundamental or a chosen overtone of the live tuba using a pitch-tracked RBJ peaking filter (+0 to +48 dB) cascaded into a dual-stage state-variable bandpass filter. Decouples breath dynamics via fast envelope normalization so the tuba approximates a pure, phase-locked sine wave ready to act as a carrier or modulator in downstream FM, phase distortion, or waveshaping effects.
+Isolates the fundamental or a chosen overtone of the live tuba using a pitch-tracked RBJ peaking filter (+0 to +48 dB) cascaded into a dual-stage state-variable bandpass filter (linear, unity gain at the centre). Decouples breath dynamics via fast envelope normalization so the tuba approximates a pure, phase-locked sine wave ready to act as a carrier or modulator in downstream FM, phase distortion, or waveshaping effects.
 
 INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input (Left / Right)
 - in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; automatically falls back to internal zero-crossing tracker if <= 0)
 - out1 / out2: Stereo Filtered & Boosted Output
-- out3 / out4: Pure Normalized Unit-Sine Output (for patching into downstream modulation inlets)
+- out3 / out4: Pure Normalized Unit-Sine Output (for patching into downstream modulation inlets; peaks about -1 dBFS, tanh-rounded so it carries a 3rd harmonic about 25 dB down)
+- Level: on the sousa_mic.aif take (-32 dB RMS in) the defaults give out1 about -10 dB RMS / -4 dBFS peak (offline render of the real RNBO code). With norm_amount at 0 the output follows the tuba's own dynamics instead.
 
 PARAMETERS (4)
 
@@ -24,8 +25,8 @@ PARAMETERS (4)
    - Function: Boosts the target harmonic using a resonant bell filter before bandpass isolation, elevating the chosen partial far above the surrounding brass spectrum.
 
 3. focus
-   - Range: 0.0 to 1.0 (maps to Q from 1.0 to 28.0)
-   - Taper: Exponential (x^1.4 power curve into base-28 exponential Q) so low-to-mid values offer smooth musical formant tightening while the top 30% locks onto a single harmonic with surgical precision.
+   - Range: 0.0 to 1.0 (peaking-filter Q 0.5 .. 14; bandpass stage Q about 2.8 at 0, 16 at the 0.65 default, 280 at 1.0)
+   - Taper: Exponential (x^1.4 power curve into a base-28 exponential) so low-to-mid values offer smooth musical formant tightening while the top 30% locks onto a single harmonic with surgical precision. Near 1.0 the bandpass is a fraction of a Hz wide on low notes: it rings for about a second and a note change takes that long to come through.
    - Function: Simultaneously increases the Q of the peaking filter and crossfades into the cascaded 2-stage SVF bandpass filter.
 
 4. norm_amount

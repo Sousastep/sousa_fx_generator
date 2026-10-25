@@ -6,10 +6,12 @@ OVERVIEW
 A complete live tuba-to-dubstep/riddim synthesizer instrument designed for thumb-joystick performance. Internally isolates the tuba's fundamental via a pitch-tracked peaking/SVF front end, normalizes it into a phase-locked modulator, drives an Adaptive FM + Sub-Octave oscillator core through an ADAA1 wavefolder and an 8-stage Allpass Phase Disperser, and sculpts the result through a 1-bar-phasor-synced dual state-variable wobble filter.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Tuba Audio Input (Left / Right)
+- in1 / in2: Stereo Tuba Audio Input (Left / Right; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; falls back to internal zero-crossing tracker if <= 0)
-- in4: 1-Bar Audio-Rate Phasor [0..1] (syncs the wobble rhythm; falls back to internal 0.5 Hz LFO if unpatched)
+- in4: 1-Bar Audio-Rate Phasor [0..1] (syncs the wobble rhythm; falls back to an internal 0.5 Hz bar when in4 has not moved for 100 ms - a held value no longer freezes the wobble)
 - out1 / out2: Stereo Riddim Wobble Instrument Output
+- Level & dynamics: the synth level and the dynamic part of the FM index follow how hard you play (the fundamental isolator is now linear; it used to saturate, so the output sat at a +/-1 square wave whatever the dynamics). A final tanh soft-limits, trimmed by the filter resonance. On the sousa_mic.aif take (-32 dB RMS in) the defaults give about -10.5 dB RMS with about 5% of samples in the soft limiter; 20 dB softer playing gives about -29 dB RMS (offline render of the real RNBO code).
+- The sub-octave is pitch-locked (a free phasor at f0 / 2), not phase-locked to the tuba.
 
 PARAMETERS (8)
 
@@ -20,7 +22,7 @@ PARAMETERS (8)
 
 2. joy_y_fm_scream (Joystick Y-Axis)
    - Range: -1.0 to +1.0 (Center-zero bipolar joystick axis)
-   - Taper: Power curve (x^1.3) on FM index (1.2 to 6.7), ADAA wavefolder drive, bandpass formant emphasis, and upper harmonic carrier ratio steps (jumping to 2x and 3x harmonics above +0.25).
+   - Taper: Power curve (x^1.3) on FM index (1.2 to 6.7), ADAA wavefolder drive, bandpass formant emphasis, and upper harmonic carrier ratio steps (carrier jumps to 2x f0 at +0.5, 3x at +0.75 and 4x at +1.0).
    - Function: Pushing the joystick forward transforms a deep chesty sub-wobble into a screaming tearout/riddim harmonic screech ("yoink").
 
 3. wobble_rate
@@ -39,7 +41,7 @@ PARAMETERS (8)
 5. sine_boost_db
    - Range: 0.0 to 36.0 dB
    - Taper: Logarithmic dB scale (10^(dB/40)) with automatic gain compensation.
-   - Function: Sets the peaking EQ boost at f0 before the modulator normalizer. Higher values yield cleaner, more synthetic FM sidebands; lower values let raw brass overtones grit up the FM carrier.
+   - Function: Sets the peaking EQ boost at f0 before the modulator normalizer (after the automatic compensation the net gain at f0 is 0.375 * boost_db, i.e. 9 dB at the 24 dB default). Higher values yield cleaner, more synthetic FM sidebands; lower values let raw brass overtones grit up the FM carrier.
 
 6. sub_oct_level
    - Range: 0.0 to 1.0 (0% to 100% Sub-Octave Foundation)
@@ -52,6 +54,6 @@ PARAMETERS (8)
    - Function: Routes the pre-filter distorted bass through an 8-stage allpass cascade tuned to 2.5 * f0, smearing each wobble transient into a liquid laser punch.
 
 8. filter_res
-   - Range: 0.0 to 1.0 (maps to SVF resonance Q from 0.55 to 0.95)
+   - Range: 0.0 to 1.0 (maps to the svf resonance setting 0.55 .. 0.95, i.e. a filter Q of about 3.4 .. 280; 21 at the 0.72 default)
    - Taper: Power curve (x^1.2).
    - Function: Controls the vocal resonance peak of the dual-stage morphing wobble filter.

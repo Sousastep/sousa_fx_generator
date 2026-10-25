@@ -6,9 +6,9 @@ OVERVIEW
 Implements General-Purpose Heterodyne Phase Distortion (PD) from Lazzarini, Timoney, Pekonen, and Välimäki (DAFx-09 Paper 12, Section 3.2 & 4.2, Eq. 5–6, 17, Fig. 9, 17–20). Places the arbitrary stereo tuba signal in quadrature (s_re, s_im) via a 4-stage IIR Hilbert network and ring-modulates it with the cosine and sine of a pitch-tracked Casio CZ-style piecewise phase-distortion function g(phi). Unlike lookup-table PD, this applies true phase distortion across every partial of the live acoustic tuba while allowing the modulation index to exceed the classical pi limit to boost secondary vocal/brass formant regions.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Full Tuba or 01_harmonic_isolator)
+- in1 / in2: Stereo Audio Input (Full Tuba or 01_harmonic_isolator; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (modulates the inflection point d when mod_depth > 0; internal 0.5 Hz fallback if unpatched)
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (modulates the inflection point d when mod_depth > 0; an internal 0.5 Hz LFO takes over when in4 has not moved for 100 ms - a held value no longer freezes the sweep)
 - out1 / out2: Stereo Heterodyne Phase-Distorted Output
 
 PARAMETERS (6)

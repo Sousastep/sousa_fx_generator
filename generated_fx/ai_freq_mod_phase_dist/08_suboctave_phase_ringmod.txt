@@ -3,14 +3,19 @@
 // Unix-Style Effect 8: Phase-Divided Sub-Octave Ring Modulator & Feedback AM
 // Implements Approach 3b & 5 from "Novel Distortion Approaches for Live Tuba"
 // and Kleimola et al. (2011) Feedback Amplitude Modulation (y[n] = x[n]*(1 + k*y[n-1])).
-// Extracts instantaneous phase theta(t), tracks phase wraps to construct a
+// Isolates the fundamental (2-stage bandpass at f0), takes its analytic phase and
+// locks a monotonic PLL phasor to it; counting the PLL's wraps (mod 6) builds a
 // zero-drift phase-divided sub-octave modulator cos(theta_unwrapped / 2) and
-// sub-fifth cos(theta_unwrapped / 3) that never beats against the tuba.
+// sub-twelfth cos(theta_unwrapped / 3) that never beats against the tuba. (The raw
+// atan2 phase of the lowpassed audio wrapped twice per period whenever the 2nd
+// harmonic was the stronger one, which is normal for tuba, and the "sub-octave"
+// then sat on f0.)
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input
 //   in2: Right Audio Input
-//   in3: Optional Tracked Pitch in Hz (used to tune lowpass pre-conditioner if > 20 Hz)
+//   in3: Tracked Pitch in Hz (tunes the fundamental bandpass and the PLL; outside
+//        20..1000 Hz an internal zero-crossing tracker is used)
 // Outlets:
 //   out1: Left Sub-Octave Ring-Mod / Feedback AM Output
 //   out2: Right Sub-Octave Ring-Mod / Feedback AM Output
@@ -25,27 +30,69 @@
 @state hImX = new FixedSampleArray(4); @state hImY = new FixedSampleArray(4);
 @state hDelRe = 0.0;
 
-// Phase wrap counter for exact phase division (theta / 2 and theta / 3)
-@state prevTheta = 0.0;
+// PLL phasor + wrap counter for exact phase division (theta / 2 and theta / 3)
+@state pllPhase = 0.0;
 @state wrapCount: Int = 0;
 
 // Feedback AM state (Kleimola et al. 2011)
 @state prevYL = 0.0;
 @state prevYR = 0.0;
 
-// Pre-filter for clean fundamental phase tracking + DC blockers
+// Pre-filter for clean fundamental phase tracking, fallback tracker + DC blockers
 @state lpTrack = new onepole();
+@state bpIc1 = new FixedSampleArray(2);
+@state bpIc2 = new FixedSampleArray(2);
+@state prevSig = 0.0;
+@state zcCount = 0.0;
+@state zcHz = 55.0;
+@state smoothF0 = 55.0;
+@state in2Hold = 0.0;
 @state dcX1L = 0.0; @state dcY1L = 0.0;
 @state dcX1R = 0.0; @state dcY1R = 0.0;
 
+// Unity-peak TPT state-variable bandpass (Zavalishin / Simper), one stage
+function svfBp(idx: Int, x, g, kd) {
+	let a1 = 1.0 / (1.0 + g * (g + kd));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - bpIc2[idx];
+	let v1 = a1 * bpIc1[idx] + a2 * v3;
+	let v2 = bpIc2[idx] + a2 * bpIc1[idx] + a3 * v3;
+	bpIc1[idx] = 2.0 * v1 - bpIc1[idx];
+	bpIc2[idx] = 2.0 * v2 - bpIc2[idx];
+	return kd * v1;
+}
+
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = in2;
 let pitchIn = in3;
 
-// --- 1. Pre-Filter Tuba Fundamental for Clean Analytic Phase ---
-let trackCutoff = (pitchIn > 20.0 && pitchIn < 1000.0) ? (pitchIn * 1.35) : 140.0;
-let monoFund = lpTrack.next(0.5 * (xL + xR), clamp(trackCutoff, 35.0, 800.0));
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
+let mono = 0.5 * (xL + xR);
+
+// --- 1. Pitch (in3, else zero-crossing fallback) and Fundamental Isolation ---
+let monoLow = lpTrack.next(mono, 200.0);
+zcCount += 1.0;
+if (prevSig <= 0.0 && monoLow > 0.0) {
+	if (zcCount > sr / 500.0 && zcCount < sr / 22.0) {
+		zcHz = sr / zcCount;
+	}
+	zcCount = 0.0;
+}
+prevSig = monoLow;
+let rawF0 = (pitchIn > 20.0 && pitchIn < 1000.0) ? pitchIn : zcHz;
+smoothF0 += (rawF0 - smoothF0) * (1.0 - exp(-1.0 / (0.005 * sr)));
+let f0 = clamp(smoothF0, 24.0, 1000.0);
+
+// 2-stage bandpass (Q 2 per stage): the 2nd harmonic ends up about 20 dB down
+let gBp = tan(pi * f0 / sr);
+let monoFund = svfBp(1, svfBp(0, mono, gBp, 0.5), gBp, 0.5);
 
 // --- 2. Analytic Phase Extraction ---
 let cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;
@@ -67,17 +114,20 @@ let outIm = 0.0 - yIm3; // negate: this cR/cI order is the negative Hilbert (+f 
 
 let pol = cartopol(outRe, outIm);
 let instAmp = pol[0];
-let theta = pol[1]; // [-pi, pi]
+let fundPh = wrap((pol[1] + pi) / (2.0 * pi), 0.0, 1.0);
 
-// --- 3. Phase Unwrapping Counter (Modulo 6 Cycles for LCM of /2 and /3) ---
-let dTheta = theta - prevTheta;
-if (dTheta < -pi) {
+// --- 3. PLL (~8 Hz loop, strictly monotonic) + Wrap Counter (Modulo 6 = LCM of 2, 3) ---
+let dtF0 = f0 / sr;
+let phErr = wrap(fundPh - pllPhase + 0.5, 0.0, 1.0) - 0.5;
+let pllGain = (instAmp > 0.0003) ? (2.0 * pi * 8.0 / sr) : 0.0;
+let pllNext = pllPhase + maximum(dtF0 + pllGain * phErr, 0.25 * dtF0);
+if (pllNext >= 1.0) {
+	pllNext -= 1.0;
 	wrapCount = (wrapCount + 1) % 6;
-} else if (dTheta > pi) {
-	wrapCount = (wrapCount + 5) % 6;
 }
-prevTheta = theta;
+pllPhase = pllNext;
 
+let theta = 2.0 * pi * pllPhase;
 let unwrappedTheta = theta + 2.0 * pi * wrapCount;
 
 // Locked Sub-Octave (theta / 2), Sub-Twelfth (theta / 3), and Octave-Up (2 * theta)

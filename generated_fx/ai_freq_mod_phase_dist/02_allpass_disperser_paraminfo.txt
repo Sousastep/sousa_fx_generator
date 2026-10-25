@@ -7,14 +7,15 @@ A pure feed-forward cascade of up to 32 second-order biquad allpass filters per 
 
 INLETS & OUTLETS
 - in1 / in2: Stereo Audio Input (Left / Right)
-- in3: Optional Tracked Pitch in Hz (if connected > 20 Hz, scales the dispersion corner frequency relative to 110 Hz so the smear tracks the tuba's register)
+- in3: Optional Tracked Pitch in Hz (when 20..1000 Hz, the corner becomes freq_hz * pitch / 110, so the smear tracks the tuba's register; with the rig's tracker always patched, a 58 Hz Bb1 puts the default 180 Hz corner at about 95 Hz)
+- no in4 (no tempo input)
 - out1 / out2: Stereo Phase-Dispersed Audio Output
 
 PARAMETERS (4)
 
 1. stages
    - Range: 1.0 to 32.0 stages per channel
-   - Taper: Continuous linear with fractional stage interpolation between stage N and N+1 to prevent clicks while sweeping dispersion depth.
+   - Taper: Rounded to whole stages; the count glides there over about 30 ms with an N / N+1 crossfade so moving it never clicks. (A held fractional count would be a 50% phaser mix that notches freq_hz by 15-19 dB, so it is not allowed to rest between stages.)
    - Function: Controls the total accumulated group delay (tau_total = N * tau_single). Low counts tighten sub punch; 16–32 stages create dramatic laser-like transient chirps.
 
 2. freq_hz

@@ -6,10 +6,11 @@ OVERVIEW
 Implements 2D Vector Phaseshaping (VPS) Synthesis with Lissajous Vector Modulation and Incomplete-Period Alias Suppression from Kleimola, Lazzarini, Timoney, and Välimäki (DAFx-11 Paper 55_e, Sections 3, 3.1, 3.2, 4.3 & 5.2, Eq. 5–12, 20). Extracts the analytic phase phi(t) in [0, 1) from the tuba and maps it through a 2D inflection vector p = (d, v). While d controls horizontal pulse-width and brightness, v controls the vertical phase-wrap count, synthesizing sharp vocal formant peaks at f_formant = (2v - 1) * f0. Includes a 2D Lissajous modulator that traces circular, figure-eight, or multi-ring paths in (d, v) space at either tempo-synced LFO rates or pitch-locked audio rates.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (prefer sine-ified tuba from 01_harmonic_isolator or raw tuba)
+- in1 / in2: Stereo Audio Input (prefer sine-ified tuba from 01_harmonic_isolator or raw tuba; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
 - in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs Lissajous LFO motion; internal fallback if unpatched)
 - out1 / out2: Stereo Vector-Phaseshaped Formant Output
+- Level: on the sousa_mic.aif take (-32 dB RMS in) about -21 dB RMS / -10.5 dBFS peak at the defaults (offline render of the real RNBO code). The DC blocker sits at 10 Hz so pedal-note fundamentals pass.
 
 PARAMETERS (7)
 

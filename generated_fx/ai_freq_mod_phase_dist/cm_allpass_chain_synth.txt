@@ -15,8 +15,11 @@
 //   in1: Left Audio Input (Tuba Carrier)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
 //   in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; fallback ZC if <=0)
-//   in4: Optional External Audio-Rate Modulator [-1..1] (e.g. out3 of 01_harmonic_isolator;
-//        if unpatched, uses internal pitch-tracked oscillator at fm = f0 / cm_ratio)
+//   in4: Optional External Audio-Rate Modulator [-1..1] (e.g. out3 of 01_harmonic_isolator),
+//        crossfaded in by ext_mod (default 0 = internal pitch-tracked cosine at
+//        fm = f0 / cm_ratio). Earlier versions switched to in4 whenever it was non-zero,
+//        so the rig's bar phasor replaced the audio-rate modulator and the effect
+//        added almost nothing (2nd harmonic of a sine at -61 dB instead of -24 dB).
 // Outlets:
 //   out1: Left CM Allpass Chain Output
 //   out2: Right CM Allpass Chain Output
@@ -27,6 +30,8 @@
 @param({ min: -15.0, max: 15.0 }) detune_hz = 0.0;
 @param({ min: 0.0, max: 1.0 }) mod_phase_spread = 0.2;
 @param({ min: 0.0, max: 1.0 }) mix = 1.0;
+// External modulator amount (in4)
+@param({ min: 0.0, max: 1.0 }) ext_mod = 0.0;
 
 // 48 first-order CM allpass stages per channel (x[n-1] and y[n-1] state arrays)
 @state x1L = new FixedSampleArray(48);
@@ -46,10 +51,17 @@
 @state smoothF0 = 58.27;
 @state smoothM = 0.82;
 @state smoothStages = 24.0;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let pitchIn = in3;
 let extMod = in4;
 
@@ -72,7 +84,9 @@ let f0 = clamp(smoothF0, 24.0, 1000.0);
 // --- 2. Compute Audio-Rate Coefficient Modulator m(n) in [-M, +M] ---
 let mTarget = pow(clamp(mod_index_m / 0.98, 0.0, 1.0), 0.85) * 0.98;
 smoothM += (mTarget - smoothM) * slew;
-smoothStages += (clamp(chain_stages, 1.0, 48.0) - smoothStages) * slew;
+// The stage count glides to the nearest integer: a held N / N+1 crossfade is a
+// phaser mix that notches the spectrum
+smoothStages += (floor(clamp(chain_stages, 1.0, 48.0) + 0.5) - smoothStages) * slew;
 
 let baseFm = f0 / clamp(cm_ratio, 0.25, 4.0);
 let det = clamp(detune_hz, -15.0, 15.0);
@@ -82,10 +96,10 @@ let fmR = clamp(baseFm + 0.5 * det, 4.0, sr * 0.24);
 let phL = modPhL.next(fmL);
 let phR = wrap(modPhR.next(fmR) + clamp(mod_phase_spread, 0.0, 1.0) * 0.5, 0.0, 1.0);
 
-// Use external audio-rate modulator on in4 if present, else internal cosine oscillator
-let hasExtMod = (abs(extMod) > 0.0001) ? 1.0 : 0.0;
-let modWaveL = hasExtMod ? clamp(extMod, -1.0, 1.0) : cos(2.0 * pi * phL);
-let modWaveR = hasExtMod ? clamp(extMod * cos(pi * mod_phase_spread), -1.0, 1.0) : cos(2.0 * pi * phR);
+// Internal cosine oscillator, crossfaded with the external audio-rate modulator on in4
+let extAmt = clamp(ext_mod, 0.0, 1.0);
+let modWaveL = linearinterp(extAmt, cos(2.0 * pi * phL), clamp(extMod, -1.0, 1.0));
+let modWaveR = linearinterp(extAmt, cos(2.0 * pi * phR), clamp(extMod * cos(pi * mod_phase_spread), -1.0, 1.0));
 
 let mL = clamp(smoothM * modWaveL, -0.98, 0.98);
 let mR = clamp(smoothM * modWaveR, -0.98, 0.98);
@@ -114,6 +128,12 @@ for (let i: Int = 0; i < 48; i++) {
 		x1R[i] = sigR;
 		y1R[i] = ynR;
 		sigR = ynR;
+	} else {
+		// dormant stage: clear it so it re-enters from silence, not stale state
+		x1L[i] = 0.0;
+		y1L[i] = 0.0;
+		x1R[i] = 0.0;
+		y1R[i] = 0.0;
 	}
 }
 

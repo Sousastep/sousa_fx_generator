@@ -6,10 +6,11 @@ OVERVIEW
 Implements Bandlimited Pulse, Sawtooth, and Formant Generation via Modified FM (ModFM) Synthesis from Timoney, Lazzarini, and Lysaght (DAFx-08 Paper 05, Sections 2 & 3, Eq. 1–4, Fig. 1–7). Generates the phase-synchronous ModFM waveform y_pulse(t) = exp(k * (cos(w0*t) - 1)) * cos(wc*t), whose harmonics follow scaled Modified Bessel functions exp(-k) * In(k) (Eq. 2). Unlike classic Chowning FM (whose Bessel Jn sidebands oscillate and cancel), Modified Bessel partials decay monotonically with harmonic number and open/close smoothly like an analog lowpass filter as k varies (Fig. 3–4). Passing the zero-mean ModFM pulse train through the DAFx-08 Figure 5 leaky integrator + DC blocker transforms it into a fat, alias-controlled ModFM Sawtooth wave!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
+- in1 / in2: Stereo Audio Input (Tuba; in2 silent for 250 ms -> in1 is used for both sides)
 - in3: Tracked Fundamental Pitch f0 in Hz (from 00_tuba_freq_tracker; falls back to internal zero-crossing tracker if <= 0)
 - in4: Optional 1-Bar Audio-Rate Phasor [0..1] (sweeps ModFM bandwidth index k when k_wobble > 0)
 - out1 / out2: Stereo ModFM Pulse / Sawtooth / Formant Output
+- Level: on the sousa_mic.aif take (-32 dB RMS in) about -37 dB RMS / -14 dBFS peak at the defaults (offline render of the real RNBO code). A final 15 Hz DC blocker removes the pulse train's DC, which used to follow the breath envelope as a low thump.
 
 PARAMETERS (6)
 

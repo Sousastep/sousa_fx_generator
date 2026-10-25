@@ -6,10 +6,11 @@ OVERVIEW
 Implements the Stretched Spectral Delay Filter (SDF) with Feedback, Time-Varying Coefficients, and Chirp Envelope Equalization from Pekonen, Välimäki, Abel, and Smith (DAFx-09 Paper 36, Sections 2.1–2.4, 3 & 4, Eq. 2, 5, 14–25, Fig. 2–8). Unlike standard 2nd-order phaser allpasses (`02_allpass_disperser`), this effect cascades M first-order allpass sections whose unit delays z^-1 are replaced by z^-K (Stretched SDF, Section 2.4). Setting K > 1 stretches the impulse-response chirp duration by K and folds multiple opposing-direction "image chirps" down into the audible midrange (0–7 kHz, Fig. 6b), while a damped global feedback loop B(z) (Section 3) regenerates rhythmic laser chirp trains on every tuba attack!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba)
-- in3: Optional Modulation Envelope [0..1] (patch out2 of 00b_tuba_transient_valve_detector here to whip the chirp coefficient on every tongue attack)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (modulates the allpass coefficient a1 when mod_depth > 0)
+- in1 / in2: Stereo Audio Input (Tuba; in2 silent for 250 ms -> in1 is used for both sides)
+- in3: Optional Modulation Envelope [0..1] (patch out2 of 00b_tuba_transient_valve_detector here to whip the chirp coefficient on every tongue attack) Values beyond +/-1.5 (such as the rig's pitch in Hz on in3) are ignored; earlier versions clamped the pitch to 1, which added a constant offset of mod_depth * 0.35 to a1.
+- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (modulates the allpass coefficient a1 when mod_depth > 0) An internal 0.5 Hz LFO takes over when in4 has not moved for 100 ms (a held value no longer freezes it).
 - out1 / out2: Stereo Stretched Spectral Delay Chirp Output
+- Level: on the sousa_mic.aif take (-32 dB RMS in) about -24 dB RMS / -6 dBFS peak at the defaults (the global feedback adds gain) (offline render of the real RNBO code).
 
 PARAMETERS (7)
 
@@ -27,7 +28,7 @@ PARAMETERS (7)
 
 3. allpass_stages
    - Range: 4.0 to 24.0 Cascaded Stretched Stages (Default: 20.0)
-   - Taper: Continuous fractional stage interpolation.
+   - Taper: Rounded to whole stages; the count glides there over about 6 ms (a held fractional count would be a phaser mix with notches).
    - Function: Multiplies the total group delay M * tau_g(w) (effective chirp duration up to M * K * 6 samples).
 
 4. sdf_feedback

@@ -15,7 +15,8 @@
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (Tuba)
 //   in3: Tracked Fundamental Pitch in Hz (from fluid.pitch~; fallback ZC if <=0)
-//   in4: 1-Bar Audio-Rate Phasor [0..1] (syncs rhythmic phase-sync sweep)
+//   in4: 1-Bar Audio-Rate Phasor [0..1] (syncs rhythmic phase-sync sweep; an in4 that
+//        has not moved for 100 ms falls back to an internal 0.5 Hz bar)
 // Outlets:
 //   out1: Left Phaseshaper Matrix Output
 //   out2: Right Phaseshaper Matrix Output
@@ -44,6 +45,11 @@
 // Fallback pitch & bar phasor
 @state fallbackBar = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
+@state ampEnv = 0.0;
+@state dcXL = 0.0; @state dcYL = 0.0;
+@state dcXR = 0.0; @state dcYR = 0.0;
 @state lpTrack = new onepole();
 @state prevSig = 0.0;
 @state zcCount = 0.0;
@@ -72,8 +78,15 @@ function modm(x: number, m: number): number {
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = in2;
 let pitchIn = in3;
+
+// Mono fallback: in2 counts as patched for 250 ms after its last non-zero sample
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let barIn = in4;
 
 // --- 1. Pitch & Joystick Conditioning ---
@@ -132,9 +145,15 @@ prevTheta = theta;
 let subOctWave = cos(0.5 * (theta + 2.0 * pi * wrapBit));
 
 // --- 3. 1-Bar Rhythmic Phasor & Sync Ratio Calculation (a1) ---
-let barActive = (abs(barIn - prevBarIn) > 0.0000001 || (barIn > 0.0001 && barIn < 0.9999));
+// in4 counts as a running bar for 100 ms after it last moved (a held value is not a bar)
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let barPh = barActive ? wrap(barIn, 0.0, 1.0) : fallbackBar.next(0.5);
+let fallbackPh = fallbackBar.next(0.5);
+let barPh = (barHold > 0.0) ? wrap(barIn, 0.0, 1.0) : fallbackPh;
 
 let rSub = floor(clamp(rhythm_subdiv, 1.0, 16.0));
 let cycPh = wrap(barPh * rSub, 0.0, 1.0);
@@ -170,8 +189,10 @@ let hSyncR = (2.0 * syncPhR - 1.0) - polyblep(syncPhR, Ts);
 let aTM = clamp(0.72 + 0.28 * (0.5 * (smoothJoyX + 1.0)), 0.7, 1.0);
 let xTL = aTM * wrap(2.0 * abs(2.0 * phiL - 1.0), 0.0, 1.0) - 1.0;
 let xTR = aTM * wrap(2.0 * abs(2.0 * phiR - 1.0), 0.0, 1.0) - 1.0;
-let triModL = 2.0 * (xTL - ceil(xTL) - 0.5);
-let triModR = 2.0 * (xTR - ceil(xTR) - 0.5);
+// (+2 centres it: 2 * (xT - ceil(xT) - 0.5) alone spans (-3, -1], a -0.9 DC term
+// in Voice 2 that thumped with every note)
+let triModL = 2.0 * (xTL - ceil(xTL) - 0.5) + 2.0;
+let triModR = 2.0 * (xTR - ceil(xTR) - 0.5) + 2.0;
 
 let v2L = 0.55 * hSyncL + 0.45 * triModL;
 let v2R = 0.55 * hSyncR + 0.45 * triModR;
@@ -191,10 +212,21 @@ let leadL = (jy < 0.0) ? linearinterp(jy + 1.0, v1L, v2L) : linearinterp(jy, v2L
 let leadR = (jy < 0.0) ? linearinterp(jy + 1.0, v1R, v2R) : linearinterp(jy, v2R, v3R);
 
 // --- 6. Combine with Phase-Locked Sub-Octave & Restore Tuba Breath Dynamics ---
-let gate = clamp((instAmp - 0.0008) * 250.0, 0.0, 1.0);
+// Breath dynamics from a 15 ms follower on the tuba itself (|monoLow|, sine peak
+// scale). instAmp is the isolated signal's level, which carries the bandpass gain
+// (about 45x at pre_sine_iso 0.7): using it made the level jump 18 dB with
+// pre_sine_iso and pinned the output at the final tanh.
+ampEnv += (abs(monoLow) * 1.5708 - ampEnv) * (1.0 - exp(-1.0 / (0.015 * sr)));
+let gate = clamp((ampEnv - 0.0008) * 250.0, 0.0, 1.0);
 let sMix = clamp(sub_lock_mix, 0.0, 1.0);
-let finalL = ((1.0 - 0.4 * sMix) * leadL + sMix * subOctWave) * instAmp * 1.8 * gate;
-let finalR = ((1.0 - 0.4 * sMix) * leadR + sMix * subOctWave) * instAmp * 1.8 * gate;
+let finalL = ((1.0 - 0.4 * sMix) * leadL + sMix * subOctWave) * ampEnv * 8.0 * gate;
+let finalR = ((1.0 - 0.4 * sMix) * leadR + sMix * subOctWave) * ampEnv * 8.0 * gate;
 
-out1 = tanh(finalL);
-out2 = tanh(finalR);
+// 15 Hz DC blocker: the asymmetric phaseshaper shapes carry a little DC that would
+// otherwise follow the breath envelope as a low thump
+let dcCoeff = 1.0 - (2.0 * pi * 15.0 / sr);
+let cleanL = finalL - dcXL + dcCoeff * dcYL; dcXL = finalL; dcYL = cleanL;
+let cleanR = finalR - dcXR + dcCoeff * dcYR; dcXR = finalR; dcYR = cleanR;
+
+out1 = tanh(cleanL);
+out2 = tanh(cleanR);
