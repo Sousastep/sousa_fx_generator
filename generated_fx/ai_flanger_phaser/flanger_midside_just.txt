@@ -15,14 +15,19 @@
 // every point of the sweep: the side comb is always r times the mid comb,
 // including at the deepest point of the LFO. That is the "just" part - an
 // equal-tempered ratio would drift as the delays move.
+//
+// The side line is fed with the input's own side signal plus a high-passed copy
+// of the mid (one-pole HP at 150 Hz), so a dual-mono tuba still gets a side comb
+// - width - while everything below ~150 Hz, the sub, stays in the mid.
 // ============================================================================
 // Inlets:
 //   in1 / in2: stereo audio
 //   in3: f0 in Hz. 0 (or out of range) = unknown: hold the last valid value.
 //        Cold start is 55 Hz (A1). The mid comb spacing snaps to a whole number
 //        of the note's harmonics, so mid_ms selects *which* multiple it lands on.
-//   in4: 0..1 one-bar phasor - locks the sweep to the bar when moving,
-//        free-running LFO at rate_hz when held at 0
+//   in4: 0..1 one-bar phasor (exception to the Hz contract) - while it moves
+//        the sweep runs one full cycle per bar and rate_hz is ignored; held
+//        constant (or unconnected) the sweep free-runs at rate_hz
 // Outlets:
 //   out1 / out2: stereo, wet only
 // No dry/wet control, no limiter, no metering.
@@ -36,12 +41,13 @@
 @param({ min: 0, max: 2 }) side_width = 1;                 // side width
 @param({ min: -24, max: 12 }) out_gain_db = 0;             // output gain
 
-@state bufM = new FixedSampleArray(2048);
-@state bufS = new FixedSampleArray(2048);
+@state bufM = new FixedSampleArray(8192);
+@state bufS = new FixedSampleArray(8192);
 @state wi: Int = 0;
 
 @state dampM = 0.0;
 @state dampS = 0.0;
+@state midLp = 0.0;
 @state dSm = 64.0;
 
 @state f0Last = 55.0;
@@ -78,22 +84,22 @@ prevBarIn = barIn;
 let ph = wrap(phF + phOff, 0.0, 1.0);
 
 // --- Mid comb spacing: snap to a whole number of the note's harmonics -------
-let want = clamp(mstosamps(clamp(mid_ms, 0.5, 12.0)), 8.0, 1900.0);
+let want = clamp(mstosamps(clamp(mid_ms, 0.5, 12.0)), 8.0, 2400.0);
 let mult = clamp(round(period / want), 1.0, 64.0);
 let target = period / mult;
 dSm = dSm + (target - dSm) * f0Slew;
 
 // --- Sweep: both combs scale together, so the ratio stays exact ------------
 let oct = clamp(depth, 0.0, 1.0) * 0.5 * sin(2.0 * pi * ph);
-let dM = clamp(dSm * exp2(oct), 8.0, 1900.0);
+let dM = clamp(dSm * exp2(oct), 8.0, 8000.0);
 
 let ratio = 1.0;
-if (side_ratio == 1) { ratio = 1.2; }
-else if (side_ratio == 2) { ratio = 1.25; }
-else if (side_ratio == 3) { ratio = 1.3333333; }
-else if (side_ratio == 4) { ratio = 1.5; }
+if (side_ratio == 1) { ratio = 6.0 / 5.0; }
+else if (side_ratio == 2) { ratio = 5.0 / 4.0; }
+else if (side_ratio == 3) { ratio = 4.0 / 3.0; }
+else if (side_ratio == 4) { ratio = 3.0 / 2.0; }
 else if (side_ratio == 5) { ratio = 2.0; }
-let dS = clamp(dM / ratio, 8.0, 1900.0);
+let dS = clamp(dM / ratio, 8.0, 8000.0);
 
 let fbAmt = clamp(feedback, -0.85, 0.85);
 let dampC = 1.0 - exp(0.0 - 2.0 * pi * 6000.0 / sr);
@@ -103,34 +109,40 @@ let wid = clamp(side_width, 0.0, 2.0);
 let mid = 0.5 * (xL + xR);
 let side = 0.5 * (xL - xR);
 
+// high-passed mid feeds the side line too, so a mono input still gets width
+let hpC = 1.0 - exp(0.0 - 2.0 * pi * 150.0 / sr);
+midLp = midLp + hpC * (mid - midLp);
+let midHp = mid - midLp;
+
+// feedback recirculates the delayed taps only (the dry is not fed back)
 bufM[wi] = mid + fbAmt * dampM;
-bufS[wi] = side + fbAmt * dampS;
+bufS[wi] = side + midHp + fbAmt * dampS;
 
 let rM = wi - dM;
-while (rM < 0.0) { rM += 2048.0; }
+while (rM < 0.0) { rM += 8192.0; }
 let qM: Int = floor(rM);
 let tapM = cubicinterp(rM - qM,
-	bufM[(qM - 1 + 2048) & 2047],
-	bufM[qM & 2047],
-	bufM[(qM + 1) & 2047],
-	bufM[(qM + 2) & 2047]);
+	bufM[(qM - 1 + 8192) & 8191],
+	bufM[qM & 8191],
+	bufM[(qM + 1) & 8191],
+	bufM[(qM + 2) & 8191]);
 
 let rS = wi - dS;
-while (rS < 0.0) { rS += 2048.0; }
+while (rS < 0.0) { rS += 8192.0; }
 let qS: Int = floor(rS);
 let tapS = cubicinterp(rS - qS,
-	bufS[(qS - 1 + 2048) & 2047],
-	bufS[qS & 2047],
-	bufS[(qS + 1) & 2047],
-	bufS[(qS + 2) & 2047]);
+	bufS[(qS - 1 + 8192) & 8191],
+	bufS[qS & 8191],
+	bufS[(qS + 1) & 8191],
+	bufS[(qS + 2) & 8191]);
 
 let midOut = 0.5 * (mid + tapM);
 let sideOut = 0.5 * (side + tapS);
 
-dampM = dampM + dampC * (midOut - dampM);
-dampS = dampS + dampC * (sideOut - dampS);
+dampM = dampM + dampC * (tapM - dampM);
+dampS = dampS + dampC * (tapS - dampS);
 
-wi = (wi + 1) & 2047;
+wi = (wi + 1) & 8191;
 
 let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
 out1 = (midOut + wid * sideOut) * gain;

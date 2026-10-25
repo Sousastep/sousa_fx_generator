@@ -11,7 +11,8 @@
 //       Intonation Systems", NIME-25, 2025_nime2025_52 §3.2 (the tuning
 //       lattice - the enharmonic pairs are lattice steps, not cent offsets);
 //       flanger structure after Esqueda, Välimäki & Parker, DAFx-15 §3 Fig. 6,
-//       fractional delay after Nam, DAFx-09 paper 72 §2.
+//       fractional delay after Nam & Välimäki, DAFx-09 paper 72 §2.1 (integer
+//       delay line + interpolating fractional delay).
 //
 // A comb whose taps fill one delay period has nulls at multiples of
 // harmonic*f0. Here the tap spacing is multiplied by r, one of the enharmonic
@@ -28,8 +29,9 @@
 //   in1 / in2: stereo audio
 //   in3: f0 in Hz. 0 (or out of range) = unknown: hold the last valid value.
 //        Cold start is 55 Hz (A1), so the comb is tuned even with nothing patched.
-//   in4: 0..1 one-bar phasor - drives the glide when moving, free-running LFO
-//        at sweep_rate_hz when held at 0
+//   in4: 0..1 one-bar phasor (exception to the Hz contract) - while it moves
+//        the glide runs one full cycle per bar and sweep_rate_hz is ignored;
+//        held constant (or unconnected) the glide free-runs at sweep_rate_hz
 // Outlets:
 //   out1 / out2: stereo, wet only
 // No dry/wet control, no limiter, no metering.
@@ -85,10 +87,10 @@ let ph = wrap(phF + phOff, 0.0, 1.0);
 
 // --- 5-limit enharmonic stretch per rung (a ratio, never a cent value) ------
 let r = 1.0;
-if (interval == 1) { r = 1.0125; }        // 81/80  syntonic comma
-else if (interval == 2) { r = 1.024; }     // 128/125 lesser diesis
-else if (interval == 3) { r = 1.0416667; } // 25/24  chromatic semitone
-else if (interval == 4) { r = 1.0546875; } // 135/128 major chroma
+if (interval == 1) { r = 81.0 / 80.0; }         // syntonic comma
+else if (interval == 2) { r = 128.0 / 125.0; }  // lesser diesis
+else if (interval == 3) { r = 25.0 / 24.0; }    // chromatic semitone
+else if (interval == 4) { r = 135.0 / 128.0; }  // major chroma
 
 // --- Comb geometry ---------------------------------------------------------
 // One comb period is period/harmonic; the taps fill it, each rung stretched.
@@ -96,7 +98,10 @@ let nTaps: Int = clamp(floor(taps + 0.5), 3, 8);
 let h = clamp(floor(harmonic + 0.5), 1.0, 8.0);
 let period = sr / f0;
 let glide = exp2(clamp(detune_sweep, 0.0, 1.0) * sin(2.0 * pi * ph));
-let step = period / (h * nTaps) * glide;
+// Limit step so the longest tap, step*(1 + (nTaps-1)*r), fits the buffer:
+// clamping each tap instead would stack several taps on one sample.
+let stepMax = 16000.0 / (1.0 + (nTaps - 1) * r);
+let step = minimum(period / (h * nTaps) * glide, stepMax);
 
 let fbAmt = clamp(feedback, -0.8, 0.8);
 let dampC = 1.0 - exp(0.0 - 2.0 * pi * clamp(tone_hz, 600.0, sr * 0.45) / sr);

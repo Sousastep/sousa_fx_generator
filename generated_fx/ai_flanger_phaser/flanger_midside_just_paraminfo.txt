@@ -10,20 +10,27 @@ one ratio, that interval is exact at every point of the sweep — the width pump
 and breathes while the mono core stays locked, which is what keeps a sub-heavy
 deep-dubstep bass from wandering when you flange it.
 
+The side comb is fed by the input's own L−R signal plus a copy of the mid
+high-passed at 150 Hz, so a mono (dual-mono) tuba still gets a side comb and
+real width; everything below ~150 Hz stays in the centre. On a mono input the
+output can peak about +3.5 dB above the input at full side_width = 1.
+
 Source: Das, DAFx-24 paper 92 §3 (width from the difference channel);
 Esqueda/Välimäki/Parker, DAFx-15 §3 Fig. 6; 5-limit ratios per Tong & Tojo,
 SMC-19 §2.
 
 100% wet. No dry/wet control, no limiter.
 
-PARAMETERS (6 + output gain)
+PARAMETERS (7)
 
 1. mid_ms — 0.5…12 ms, default 3 ms
-   Mid comb spacing. It snaps to a whole number of the note's harmonics (the
-   nearest one), so this knob selects *which* harmonic multiple the comb lands
-   on rather than an arbitrary delay: the notches sit on the tuba's own grid.
-   0.5 ms ≈ every 36th harmonic of a low A, 12 ms ≈ every 2nd — short is dense
-   and metallic, long is broad and phasey.
+   Mid comb spacing. The delay snaps to the note's period divided by a whole
+   number N (the nearest to the knob), so the comb's peaks land on every N-th
+   harmonic of the tuba and its notches sit halfway between them — the comb is
+   on the tuba's own grid instead of an arbitrary delay. On a low A (55 Hz):
+   0.5 ms ≈ peaks every 36th harmonic (~2 kHz apart: few broad notches, jet-
+   like), 12 ms ≈ every 2nd harmonic (dense, metallic comb). The sweep (depth)
+   moves it off the grid and back.
 
 2. side_ratio — 1/1, 6/5, 5/4, 4/3, 3/2, 2/1; default 3/2
    Interval of the side comb above the mid comb. 1/1 = mono-width (no widening,
@@ -39,23 +46,26 @@ PARAMETERS (6 + output gain)
    together, so the mid/side interval never drifts off the just ratio.
 
 5. feedback — -0.85…+0.85, default +0.35
-   Recirculation on both combs. Positive makes the notches ring; negative hol-
-   lows them out. Applied to mid and side equally, so the width relationship is
-   untouched.
+   Recirculation of the delayed taps on both combs (the dry is not fed back).
+   Positive makes the comb peaks ring; negative shifts the ringing between them
+   for a hollower sound. Applied to mid and side equally, so the width
+   relationship is untouched. Near ±0.85 the peaks are up to ~+12 dB.
 
 6. side_width — 0…2, default 1.0
    1.0 = unity side gain (normal width), 0 = mono (mid only), 2 = doubled side
    (very wide, check mono compatibility).
 
 7. out_gain_db — -24…+12 dB, default 0 dB
-   Final trim. Does not count toward the 8-parameter limit.
+   Final trim.
 
 INLETS / OUTLETS
 - in1 / in2: stereo audio.
 - in3: f0 in Hz. 0 or out of range = unknown: the last valid value is held.
   Cold start 55 Hz (A1), so the comb is tuned with nothing patched.
-- in4: one-bar phasor. While it moves the sweep follows the bar; held at 0 the
-  effect free-runs at rate_hz.
+- in4: 0..1 one-bar phasor (not Hz). While it moves the sweep runs exactly one
+  full cycle per bar and rate_hz is ignored; held constant or unconnected the
+  effect free-runs at rate_hz. A stepped (non-phasor) signal here will jump
+  the sweep phase.
 - out1 / out2: stereo, wet only.
 
 NOTES

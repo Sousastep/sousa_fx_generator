@@ -7,23 +7,30 @@
 //       §4 (delay-time warping / loop behaviour); structure after the flanger
 //       block of Esqueda, Välimäki & Parker, "Barberpole Phasing and Flanging
 //       Illusions", DAFx-15, 2015_DAFx-15_submission_67, Fig. 6;
-//       fractional-delay choice after Nam, DAFx-09 paper 72, §2
-//       (cubic Lagrange: flat magnitude, no Thiran allpass dispersion).
+//       fractional-delay choice after Nam & Välimäki, DAFx-09 paper 72, §2.1
+//       (cubicinterp is 3rd-order Lagrange: FIR, no Thiran allpass
+//       dispersion; slight HF droop at half-sample positions).
 //
-// Two taps sit at c +/- s around a centre delay c, with the half-spread s
-// sweeping 0 .. c. The *relative* delay between the taps is 1c +/- 2s, so it
-// passes through zero once per cycle: the comb notches race to Nyquist and
-// back, which is the through-zero "jet" - a notch sweep that no ordinary
-// single-tap flanger can produce. Neither tap is ever instantaneous (a 0.15 ms
-// floor keeps the output off the dry path), so this file is 100 % wet with no
-// dry term at all.
+// Two taps sit at c -/+ s around a centre delay c = 0.15 ms + base, so their
+// relative delay is 2s. In a true through-zero flanger the moving tap passes
+// the reference, so the relative delay crosses zero with full slope and |2s|
+// makes a sharp V-shaped bounce there - the notches slam up to Nyquist and
+// straight back, the "jet". Because the two taps are summed equally, swapping
+// them is inaudible, so s = base * sin(pi * p) (>= 0, continuous across the
+// phase wrap, a V-kink at p = 0) is exactly that crossing, once per cycle.
+// (A raised sine 0.5 + 0.5 sin only *touches* zero with zero slope - an
+// ordinary flanger reaching 0 ms, not through-zero.) Neither tap is ever
+// instantaneous (the 0.15 ms floor keeps the output off the dry path), so this
+// file is 100 % wet with no dry term at all.
 // ============================================================================
 // Inlets:
 //   in1 / in2: stereo audio
 //   in3: bound only - this sweep is time-based, not pitch-locked
 //        (use flanger_enharmonic_diesis / phaser_harmonic_track for f0 lock)
-//   in4: 0..1 one-bar phasor - locks the sweep to the bar when moving,
-//        free-running LFO at sweep_rate_hz when held at 0
+//   in4: 0..1 one-bar phasor (exception to the Hz contract) - while it moves
+//        the sweep runs one full cycle per bar (zero crossing on the downbeat)
+//        and sweep_rate_hz is ignored; held constant (or unconnected) the
+//        sweep free-runs at sweep_rate_hz
 // Outlets:
 //   out1 / out2: stereo, wet only
 // No dry/wet control, no limiter, no metering.
@@ -68,16 +75,16 @@ let pL = wrap(phF + phOff, 0.0, 1.0);
 let pR = wrap(pL + offR, 0.0, 1.0);
 
 // --- Delay geometry --------------------------------------------------------
-// centre c = dmin + base, half-spread s = base * (0.5 + 0.5 sin) in 0 .. base
+// centre c = dmin + base, half-spread s = base * sin(pi * p) in 0 .. base
 let base = clamp(mstosamps(clamp(sweep_ms, 0.05, 12.0)), 2.0, 1600.0);
 let dminS = maximum(mstosamps(0.15), 1.0);
 let centre = dminS + base;
 
-let spreadL = base * (0.5 + 0.5 * sin(2.0 * pi * pL));
+let spreadL = base * sin(pi * pL);
 let dAL = centre - spreadL;
 let dBL = centre + spreadL;
 
-let spreadR = base * (0.5 + 0.5 * sin(2.0 * pi * pR));
+let spreadR = base * sin(pi * pR);
 let dAR = centre - spreadR;
 let dBR = centre + spreadR;
 

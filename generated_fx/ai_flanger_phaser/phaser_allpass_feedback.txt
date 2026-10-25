@@ -19,8 +19,9 @@
 // Inlets:
 //   in1 / in2: stereo audio
 //   in3: bound only - this phaser sweeps its own centre, not the played note
-//   in4: 0..1 one-bar phasor - locks the sweep to the bar when moving,
-//        free-running LFO at rate_hz when held at 0
+//   in4: 0..1 one-bar phasor (exception to the Hz contract) - while it moves
+//        the sweep runs one full cycle per bar and rate_hz is ignored; held
+//        constant (or unconnected) the sweep free-runs at rate_hz
 // Outlets:
 //   out1 / out2: stereo, wet only
 // No dry/wet control, no limiter, no metering.
@@ -31,7 +32,7 @@
 @param({ min: 0, max: 4 }) sweep_octaves = 2;        // sweep depth
 @param({ min: 0.02, max: 3 }) rate_hz = 0.22;        // sweep rate
 @param({ min: 0, max: 0.9 }) feedback = 0.35;        // feedback
-@param({ min: 0, max: 1 }) stereo_phase = 0.25;      // stereo phase
+@param({ min: 0, max: 1 }) stereo_phase = 0.5;       // stereo phase
 @param({ min: -24, max: 12 }) out_gain_db = 0;       // output gain
 
 @state apXL = new FixedSampleArray(16);
@@ -62,7 +63,8 @@ if (abs(barIn - prevBarIn) > 0.0000001) {
 }
 prevBarIn = barIn;
 
-let sp = clamp(stereo_phase, 0.0, 1.0);
+// 1 = half a cycle (opposite sweeps); a full cycle would be mono again
+let sp = clamp(stereo_phase, 0.0, 1.0) * 0.5;
 let phL = wrap(phF + phOff, 0.0, 1.0);
 let phR = wrap(phL + sp, 0.0, 1.0);
 
@@ -101,7 +103,8 @@ for (let m: Int = 0; m < nAp; m++) {
 }
 prevChainR = sigR;
 
-// Deepest notches at equal gains (W = G = 0.5), as in the paper's Fig. 1
+// Deepest notches at equal gains (W = G = 0.5), as in the paper's Fig. 1.
+// The loop gain is fb at DC (A(1) = 1), so DC gain is 0.5 * (1 + 1/(1 - fb)).
 let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
 out1 = 0.5 * (xL + sigL) * gain;
 out2 = 0.5 * (xR + sigR) * gain;

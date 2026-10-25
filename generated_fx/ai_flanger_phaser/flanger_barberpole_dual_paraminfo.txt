@@ -9,12 +9,14 @@ crossfade hands over from one to the other at the exact moment its ramp resets,
 so the reset is inaudible. On a sustained bass note the movement simply never
 resolves — no "the LFO came round again" moment.
 
-Source: Esqueda, Välimäki & Parker, DAFx-15 §3, Fig. 6–8, Eq. 9.
+Source: Esqueda, Välimäki & Parker, DAFx-15 §3, Fig. 6–8, Eq. 9. The paper
+cascades the two combs; this version reads both as parallel taps off one delay
+line, which hides the reset the same way.
 
 100% wet (no dry/wet control). The output is the flanger sum x + g1·D1 + g2·D2;
 there is no dry blend knob and no limiter.
 
-PARAMETERS (7 + output gain)
+PARAMETERS (8)
 
 1. sweep_rate_hz — 0.02…1.5 Hz, default 0.09 Hz
    How fast the notches travel. The illusion needs slow: above ~0.5 Hz the ear
@@ -38,21 +40,26 @@ PARAMETERS (7 + output gain)
    the notches are as deep as the crossfade allows.
 
 6. feedback — -0.9…+0.9, default +0.4
-   Recirculation around the delay line. Positive sharpens the peaks and makes it
-   resonant; negative gives the hollow out-of-phase flange. High values whistle.
+   Recirculation of the crossfaded delay taps (the dry input is not fed back).
+   Positive sharpens the peaks and makes it resonant; negative gives the hollow
+   out-of-phase flange. High values whistle — at ±0.9 the resonant peaks are
+   up to ~+20 dB, so trim with out_gain_db.
 
 7. stereo_spread — 0…1, default 0.3
-   Phase offset between the two channels' cycles (0.5 = half a cycle apart, fully
-   decorrelated). At 0 both channels move together and the effect is mono.
+   Phase offset between the two channels' cycles. 1 = a quarter cycle apart, the
+   most decorrelated setting (a half-cycle offset would just swap the two lines
+   and sound identical). At 0 both channels move together and the effect is mono.
 
 8. out_gain_db — -24…+12 dB, default 0 dB
-   Final trim. Does not count toward the 8-parameter limit.
+   Final trim.
 
 INLETS / OUTLETS
 - in1 / in2: stereo audio.
 - in3: connected but unused — the sweep is time-based, not pitch-locked.
-- in4: one-bar phasor. While it moves it advances the sweep cycle; held at 0 the
-  effect free-runs at sweep_rate_hz. Quiet-safe either way.
+- in4: 0..1 one-bar phasor (not Hz). While it moves the sweep runs exactly one
+  full cycle per bar and sweep_rate_hz is ignored; held constant or unconnected
+  the effect free-runs at sweep_rate_hz. A stepped (non-phasor) signal here
+  will jump the sweep phase.
 - out1 / out2: stereo, wet only.
 
 NOTES

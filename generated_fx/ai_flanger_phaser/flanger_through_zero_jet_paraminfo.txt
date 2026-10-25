@@ -4,19 +4,19 @@ flanger_through_zero_jet — Parameter Information
 
 WHAT IT IS
 The old through-zero tape-flange trick: two taps either side of a reference
-delay, swept so their spacing passes through zero. The comb notches run all the
-way up and back instead of just sliding between two delay times, which is the
-sweeping "jet" sound — far more violent than an ordinary flanger, and the reason
+delay, swept so their spacing passes through zero once per cycle. At the
+crossing the comb notches slam up to Nyquist and straight back down (a sharp
+bounce, not a gentle turn-around), which is the sweeping "jet" sound — far more violent than an ordinary flanger, and the reason
 this one is the go-to for liquid bass glides and long trip-hop drones.
 
 Source: Huovilainen, DAFx-05 (2005_P_155) §1.1 and §4; flanger block after
 Esqueda/Välimäki/Parker, DAFx-15 §3 Fig. 6; cubic Lagrange fractional delay
-after Nam, DAFx-09 paper 72 §2.
+after Nam & Välimäki, DAFx-09 paper 72 §2.1.
 
 100% wet: both taps are delayed, so no dry copy of the tuba reaches the output.
 No dry/wet control, no limiter.
 
-PARAMETERS (5 + output gain)
+PARAMETERS (6)
 
 1. sweep_ms — 0.05…12 ms, default 2.2 ms
    Half-spread of the two taps. Small = tight metallic sheen on the midrange;
@@ -24,7 +24,7 @@ PARAMETERS (5 + output gain)
    "size of the jet".
 
 2. sweep_rate_hz — 0.02…2 Hz, default 0.14 Hz
-   Speed of the sweep. Below 0.1 Hz it becomes a texture you hear as movement
+   Speed of the sweep: one through-zero "slam" per cycle. Below 0.1 Hz it becomes a texture you hear as movement
    rather than as an LFO — good under long dubstep notes.
 
 3. feedback — -0.95…+0.95, default -0.55
@@ -33,24 +33,31 @@ PARAMETERS (5 + output gain)
    ±0.9 whistle — that is the flanger on the edge, use it deliberately.
 
 4. stereo_offset — 0…1, default 0.25
-   Phase offset between the left and right sweep (0.25 = quarter cycle).
-   At 0 the two channels are identical and the effect sits in the middle.
+   Phase offset between the left and right sweep (1 = half a cycle, 0.25 =
+   an eighth). At 0 the two channels are identical and the effect sits in the
+   middle; higher values make the two sides hit their zero crossings at
+   different moments.
 
 5. tone_hz — 800…14000 Hz, default 7000 Hz
    One-pole damping inside the feedback loop. Lower keeps the resonance dark
    and dubby; higher lets the metal ring.
 
 6. out_gain_db — -24…+12 dB, default 0 dB
-   Final trim. Does not count toward the 8-parameter limit.
+   Final trim.
 
 INLETS / OUTLETS
 - in1 / in2: stereo audio.
 - in3: connected but unused — this sweep is time-based, not locked to the note.
-- in4: one-bar phasor. While it moves, the sweep follows the bar; held at 0 the
-  effect free-runs at sweep_rate_hz. Either way it is quiet-safe.
+- in4: 0..1 one-bar phasor (not Hz). While it moves the sweep runs exactly one
+  cycle per bar, with the left channel's zero crossing on the downbeat, and
+  sweep_rate_hz is ignored; held constant or unconnected the effect free-runs
+  at sweep_rate_hz. A stepped (non-phasor) signal here will jump the sweep.
 - out1 / out2: stereo, wet only.
 
 NOTES
 - The two taps are centred on a 0.15 ms floor, so the relative delay crosses
   zero (through-zero) while neither tap ever reads the input directly.
-- Loop damping and the ±0.95 feedback clamp keep the IIR comb bounded.
+- Loop damping and the ±0.95 feedback clamp keep the IIR comb bounded; near
+  ±0.95 the resonant peaks are up to ~+26 dB, so trim with out_gain_db.
+- The half-spread is capped at 1600 samples (12 ms up to 133 kHz; ~8.3 ms at
+  192 kHz).

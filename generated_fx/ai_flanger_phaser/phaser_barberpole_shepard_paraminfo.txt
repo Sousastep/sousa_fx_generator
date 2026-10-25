@@ -18,45 +18,55 @@ Source: Esqueda, Välimäki & Parker, DAFx-15 §2, Eq. 1–8, Fig. 2–5.
 100% wet: the output is the cascade of notch filters itself (no dry blend, no
 mix knob, no limiter).
 
-PARAMETERS (6 + output gain)
+PARAMETERS (7)
 
 1. notch_rate_hz — 0.01…0.3 Hz, default 0.06 Hz
-   Ladder speed. The illusion needs very slow — the paper found it breaks down
-   above ~0.3 Hz.
+   Ladder speed, in octaves per second (one cycle = every notch moves up one
+   octave). The illusion needs very slow rates; faster than ~0.3 Hz it starts
+   to read as a repeating sweep.
 
 2. ladder_base_hz — 20…400 Hz, default 63 Hz
-   Bottom notch of the ladder. Low values stack the notches across the bass and
-   take the movement below the fundamental; higher values pull the action into
-   the tuba's formant region.
+   Bottom of the ladder, where notches appear (at 0 dB depth). The deepest
+   notches sit in the middle of the ladder, stages/2 octaves above this. Low
+   values put the action across the bass and below the fundamental; higher
+   values pull it into the tuba's formant region. Notches fade out in the
+   octave below 0.45 × sample rate.
 
 3. stages — 4…10, default 8
-   Number of notches in the ladder. More = denser comb of notches and a
-   smoother illusion; fewer = a more obvious, hollow, "vowelly" sweep.
+   Number of notches in the ladder. They are always an octave apart, so the
+   ladder spans this many octaves: more = a wider span and a smoother, slower-
+   evolving illusion (each notch takes stages / notch_rate_hz seconds to cross
+   it); fewer = a narrower, more obvious, hollow, "vowelly" sweep.
 
 4. notch_q — 2…40, default 12
    Notch width. Low Q is a broad, gentle dip; high Q is a narrow whistle that
    only bites the harmonics, which is what makes it audible on a pure bass note.
 
 5. notch_depth_db — 3…36 dB, default 18 dB
-   Deepest notch, applied at the middle of the ladder. The ends are always
-   shallower (3 dB), which is what lets notches enter and leave unnoticed.
+   Deepest notch, applied at the middle of the ladder. The depth follows a
+   raised cosine down to 0 dB at both ends, which is what lets notches enter
+   and leave unnoticed.
 
 6. direction — falling / rising, default rising
    Rising climbs; falling sinks. Both are endless.
 
 7. out_gain_db — -24…+12 dB, default 0 dB
-   Final trim. Does not count toward the 8-parameter limit.
+   Final trim.
 
 INLETS / OUTLETS
 - in1 / in2: stereo audio.
 - in3: connected but unused — the ladder is anchored by ladder_base_hz.
-- in4: one-bar phasor. While it moves it advances the ladder; held at 0 the
-  effect free-runs at notch_rate_hz.
+- in4: 0..1 one-bar phasor (not Hz). While it moves the ladder climbs exactly
+  one octave per bar and notch_rate_hz is ignored; held constant or unconnected
+  the effect free-runs at notch_rate_hz. A stepped (non-phasor) signal here
+  will jump the ladder.
 - out1 / out2: stereo, wet only.
 
 NOTES
 - The right channel runs the same ladder offset by a quarter of a stage, so the
   two sides sit a quarter-octave apart and the image is wide.
-- The ladder is periodic in phase, so the cycle wraps with no reset click and no
-  state carry-over (which the table-based implementation in the paper needs).
+- Each notch travels the whole ladder and wraps from top to bottom only at the
+  ends, where its depth is 0 dB and it is an exact pass-through; its filter
+  state is cleared there. So there is no reset click and no state carry-over
+  (which the table-based implementation in the paper needs).
 - Each notch is y = x − (1 − G)·bp/Q, giving exactly G at fc for any Q.

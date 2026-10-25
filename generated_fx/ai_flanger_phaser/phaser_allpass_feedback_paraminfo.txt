@@ -6,16 +6,17 @@ WHAT IT IS
 The straight-ahead phaser, done properly: a chain of identical first-order
 allpass sections mixed against the input, with a feedback loop around the chain
 for the resonance peaks. That is the pedal topology (MXR / Small Stone / Uni-Vibe
-family) rather than a flanger with a phase-shifted face — the notches are
-harmonically spaced (0.2·fb, 0.67·fb, 1.5·fb, 4.4·fb for 8 stages), so the sweep
-widens as it climbs, which is the sound you hear as "liquid".
+family) rather than a flanger with a phase-shifted face — the notches are not
+harmonically spaced but spread roughly evenly in log-frequency around the break
+frequency fb (0.20·fb, 0.67·fb, 1.5·fb, 5.0·fb for 8 stages), so they move as
+a group across octaves, which is the sound you hear as "liquid".
 
 Source: Kiiski, Esqueda & Välimäki, DAFx-16 paper 42 §2, Eq. 1–2, Fig. 1;
 Huovilainen, DAFx-05 §2–3; Eichas et al., DAFx-14 (MXR Phase 90).
 
 100% wet. No dry/wet control, no limiter.
 
-PARAMETERS (6 + output gain)
+PARAMETERS (7)
 
 1. notches — 2…8, default 4
    Number of notches (two allpass stages each). 2 = broad, vocal, one moving
@@ -37,25 +38,31 @@ PARAMETERS (6 + output gain)
 
 5. feedback — 0…0.9, default 0.35
    Loop gain around the allpass chain. This is what turns the notches into
-   resonant peaks; above ~0.7 the peaks whistle and start to dominate.
+   resonant peaks; above ~0.7 the peaks whistle and start to dominate. The loop
+   also resonates at DC, so it lifts the sub: about +2 dB at 0.35, +5 dB at
+   0.6 and +15 dB at 0.9 on the lowest frequencies. Trim with out_gain_db.
 
 6. stereo_phase — 0…1, default 0.25
-   Phase offset between the two channels' sweeps (0.25 = quarter cycle). At 0
-   the phaser is mono.
+   Phase offset between the two channels' sweeps. 1 = half a cycle (the two
+   sides sweep in opposite directions, widest), 0.5 = quarter cycle (default).
+   At 0 the phaser is mono.
 
 7. out_gain_db — -24…+12 dB, default 0 dB
-   Final trim. Does not count toward the 8-parameter limit.
+   Final trim.
 
 INLETS / OUTLETS
 - in1 / in2: stereo audio.
 - in3: connected but unused — this phaser sweeps its own centre, not the note.
-- in4: one-bar phasor. While it moves the sweep follows the bar; held at 0 the
-  effect free-runs at rate_hz.
+- in4: 0..1 one-bar phasor (not Hz). While it moves the sweep runs exactly one
+  full cycle per bar and rate_hz is ignored; held constant or unconnected the
+  effect free-runs at rate_hz. A stepped (non-phasor) signal here will jump
+  the sweep phase.
 - out1 / out2: stereo, wet only.
 
 NOTES
 - The stages are identical, as in the pedal, so one tan() per channel per sample
   sets the whole cascade.
-- Output is 0.5·(input + chain): the deepest possible notches, unity at DC.
+- Output is 0.5·(input + chain): the deepest possible notches. Unity at DC only
+  with feedback at 0 (see feedback above).
 - Feedback is capped at 0.9 and the coefficients stay inside the unit circle for
   any break frequency, so the loop cannot run away.

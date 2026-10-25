@@ -6,6 +6,8 @@
 //         §3, Fig. 6 (basic flanger y = x + g*z^-D x), Eq. 9 (sawtooth delay
 //         ramp), Fig. 7 (synchronized dual flanger: two lines, two delay LFOs,
 //         two crossfade gains) and Fig. 8 (the LFO pairs).
+//       The paper cascades the two combs; this runs them as parallel taps off
+//       one line (x + g1*D1 + g2*D2), which hides the reset the same way.
 //
 // Two delay lines are swept by sawtooth ramps one half-cycle apart. Each line's
 // triangular crossfade gain is exactly zero at the instant its own ramp resets,
@@ -19,8 +21,9 @@
 // Inlets:
 //   in1 / in2: stereo audio
 //   in3: bound only - the sweep is time-based, not pitch-locked
-//   in4: 0..1 one-bar phasor - advances the sweep cycle when moving,
-//        free-running LFO at sweep_rate_hz when held at 0
+//   in4: 0..1 one-bar phasor (exception to the Hz contract) - while it moves
+//        the sweep runs one full cycle per bar and sweep_rate_hz is ignored;
+//        held constant (or unconnected) the sweep free-runs at sweep_rate_hz
 // Outlets:
 //   out1 / out2: stereo, wet only
 // No dry/wet control, no limiter, no metering.
@@ -39,6 +42,7 @@
 @state bufR = new FixedSampleArray(2048);
 @state wi: Int = 0;
 
+// feedback state: one-pole-damped wet tap sum (dry is not recirculated)
 @state dampL = 0.0;
 @state dampR = 0.0;
 
@@ -62,7 +66,9 @@ if (abs(barIn - prevBarIn) > 0.0000001) {
 }
 prevBarIn = barIn;
 
-let spr = clamp(stereo_spread, 0.0, 1.0) * 0.5;
+// The dual-line sum repeats every half cycle (line A at +1/2 is line B), so the
+// most decorrelated R offset is a quarter cycle: spread 1 -> 0.25.
+let spr = clamp(stereo_spread, 0.0, 1.0) * 0.25;
 let pL = wrap(phF + phOff, 0.0, 1.0);
 let pR = wrap(pL + spr, 0.0, 1.0);
 
@@ -121,8 +127,9 @@ let tB = cubicinterp(rB - qB,
 	bufL[(qB + 1) & 2047],
 	bufL[(qB + 2) & 2047]);
 
-let yL = xL + depth * (gA * tA + gB * tB);
-dampL = dampL + dampC * (yL - dampL);
+let wetL = gA * tA + gB * tB;
+let yL = xL + depth * wetL;
+dampL = dampL + dampC * (wetL - dampL);
 
 // --- Right channel ---------------------------------------------------------
 bufR[wi] = xR + fbAmt * dampR;
@@ -145,8 +152,9 @@ let tBr = cubicinterp(rBr - qBr,
 	bufR[(qBr + 1) & 2047],
 	bufR[(qBr + 2) & 2047]);
 
-let yR = xR + depth * (gAr * tAr + gBr * tBr);
-dampR = dampR + dampC * (yR - dampR);
+let wetR = gAr * tAr + gBr * tBr;
+let yR = xR + depth * wetR;
+dampR = dampR + dampC * (wetR - dampR);
 
 wi = (wi + 1) & 2047;
 

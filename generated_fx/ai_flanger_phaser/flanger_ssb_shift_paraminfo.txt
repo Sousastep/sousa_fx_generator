@@ -4,8 +4,8 @@ flanger_ssb_shift — Parameter Information
 
 WHAT IT IS
 The Bode flanger: instead of sweeping a delay, it shifts the whole spectrum by a
-fixed number of Hz (single-sideband / frequency shifting) and adds that to a
-delayed copy. The result is a set of notches spaced evenly in Hz -- not on a
+fixed number of Hz (single-sideband / frequency shifting), delays it, and adds
+it back to the unshifted input. The result is a set of notches spaced evenly in Hz -- not on a
 harmonic grid -- marching steadily in one direction. It is a barberpole flanger
 that needs no LFO at all.
 
@@ -18,10 +18,13 @@ aggressive and detuned.
 Source: Esqueda, Välimäki & Parker, DAFx-15 §4, Eq. 10–13, Fig. 10 (M = D/2
 notches from a delay of D samples).
 
-100% wet: the shifted branch is delayed too, so no direct copy of the input
-reaches the output. No dry/wet control, no limiter.
+The output is the paper's 50/50 sum of the input and the delayed, shifted copy
+(only the shifted branch is delayed — that relative delay is what makes the
+notches). The input passes through the same allpass chain as the shifter's
+real branch, so its phase is rotated but its level is not. No separate dry/wet
+control, no limiter.
 
-PARAMETERS (6 + output gain)
+PARAMETERS (7)
 
 1. shift_hz — 0.1…80 Hz, default 6 Hz
    How far the spectrum is shifted, and therefore how fast the notches march.
@@ -33,14 +36,18 @@ PARAMETERS (6 + output gain)
    Which way the notches travel. Mirror image of the same effect.
 
 3. delay_ms — 1…40 ms, default 8 ms
-   Delay of the reference branch. It sets the notch count (about delay/2 notches
-   across the band): short = few, wide, slow-moving notches; long = many narrow
-   ones and a dense, ringing flutter.
+   Delay of the shifted branch against the input. Notches are spaced 1/delay
+   apart in Hz (8 ms → every 125 Hz, 1 ms → every 1 kHz, 40 ms → every 25 Hz).
+   At any point of the spectrum the pattern repeats shift_hz times a second,
+   so short delays = few, wide notches sweeping fast across the band; long
+   delays = many narrow ones crawling, a dense flutter.
 
 4. feedback — 0…0.85, default 0.3
-   Recirculation. Each pass through the loop shifts again, so feedback stacks the
-   spectrum further and further away from the original pitch — the "bass falling
-   apart" sound. High values are a texture, not a tuning.
+   Recirculation of the shifted branch. Each pass through the loop is delayed
+   and shifted again, so feedback stacks copies further and further away from
+   the original pitch — the "bass falling apart" sound. High values are a
+   texture, not a tuning; at 0.85 the output can reach ~+12 dB, so trim with
+   out_gain_db.
 
 5. tone_hz — 600…12000 Hz, default 4500 Hz
    One-pole damping inside the feedback loop, so the repeated shifts do not turn
@@ -52,7 +59,7 @@ PARAMETERS (6 + output gain)
    otherwise shows up as a whine. Leave at 1.0 unless you hear one.
 
 7. out_gain_db — -24…+12 dB, default 0 dB
-   Final trim. Does not count toward the 8-parameter limit.
+   Final trim.
 
 INLETS / OUTLETS
 - in1 / in2: stereo audio.
@@ -61,7 +68,8 @@ INLETS / OUTLETS
 - out1 / out2: stereo, wet only.
 
 NOTES
-- Shift is applied after the delay, so both branches are delayed.
+- Only the shifted branch is delayed (the shift is applied after the delay;
+  swapping the order would only change a constant phase).
 - The quadrature coefficients are the 4-section one-pole allpass pair from
   example22, designed for 44.1–48 kHz; at much higher rates the 90° relationship
   degrades gracefully (the image sits further out, the notches get shallower).

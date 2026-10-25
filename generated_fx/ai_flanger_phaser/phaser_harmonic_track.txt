@@ -1,49 +1,64 @@
 // ============================================================================
 // phaser_harmonic_track.txt
-// Just-intonation phaser: the allpass break frequencies are placed on the 5-limit
-// ladder measured from the *played note*, so the notches sit on the tuba's own
-// partials and glide with it instead of sweeping a fixed band.
+// Pitch-tracking phaser whose notches land exactly on chosen partials of the
+// played note: partial lowest_partial, then every partial_step-th partial
+// above it, one notch each, gliding with the tuba.
 // From: Roope Kiiski, Fabián Esqueda & Vesa Välimäki, "Time-Variant Gray-Box
 //       Modeling of a Phaser Pedal", DAFx-16, 2016_05-DAFx-16_paper_42 §2,
-//       Eq. 1-2 (break frequency -> a1, N/2 notches, feedback via unit delay);
-//       Tong & Tojo, "Music Temperaments Evaluation Based on Triads", SMC-19 §2
-//       (5-limit ladder: every break frequency is f0 times a ratio of 2, 3 and 5
-//       - 1/1, 5/4, 3/2, 15/8, then the same triad an octave up);
-//       Eichas et al., DAFx-14 (identical-stage behaviour of the analog pedal);
+//       Eq. 1-2 and Fig. 1 (output = W*x + G*A(z)x with W = G = 0.5, so the
+//       notches are exactly where the allpass phase reaches -pi);
+//       Antti Huovilainen, "Enhanced Digital Models for Analog Modulation
+//       Effects", DAFx-05, 2005_P_155 §2-3 (allpass cascade phaser);
 //       Carson et al., DAFx-23 paper 38 §2 (time-varying allpass cascade).
 //
-// An equal-tempered version of this would put the break frequencies at
-// f0 * 2^(n/12); here each one is an exact 5-limit ratio, so a note's 3rd
-// partial is the 3/2 of its fundamental rather than 1.9 cents away from it.
+// Why not one chain of first-order stages: in a first-order cascade the notches
+// sit where the *summed* phase reaches -pi, -3pi, ..., so they cannot be placed
+// independently, and the phase turns too slowly to put notches on neighbouring
+// harmonics at all (harmonics 2 and 3 need a 2*pi turn across a 3:2 span; four
+// first-order stages manage about 1.6 rad there). So each notch is its own
+// two-stage phaser cell, 0.5 * (x + AP2(x)), where AP2 is a second-order
+// allpass centred on the partial: its phase is exactly -pi at the centre, so
+// the cell has an exact zero there whatever the other cells do. With a TPT
+// state-variable filter, AP2 = x - 2k*bp, so the cell is x - k*bp (the SVF
+// notch), prewarped with tan() so the zero is exact at h*f0.
+//
+// There is deliberately no feedback loop. A loop around the cascade would keep
+// the zeros exact (H = N / (1 - g z^-1 N)), but away from the notches N is ~1
+// with almost no phase rotation, so the loop only scales the overall level
+// (measured: +6..+8 dB at g = 0.6, -4 dB at g = -0.6) instead of forming the
+// resonant peaks a pedal phaser's feedback gives. notch_width is the
+// character control instead. Notch bandwidth is a fixed fraction of f0 (k = width / h), so every
+// notch is equally selective relative to the harmonic spacing. Notches fade out
+// between 0.40*sr and 0.45*sr instead of piling up at the top.
 // ============================================================================
 // Inlets:
 //   in1 / in2: stereo audio
 //   in3: f0 in Hz. 0 (or out of range) = unknown: hold the last valid value.
-//        Cold start is 55 Hz (A1), so the ladder is placed even with nothing
-//        patched.
-//   in4: 0..1 one-bar phasor - locks the wobble to the bar when moving,
-//        free-running LFO at rate_hz when held at 0
+//        Cold start is 55 Hz (A1), so the notches are placed even with nothing
+//        patched. Glides over glide_ms, so the notches are exact once the
+//        smoothed pitch has settled.
+//   in4: 0..1 one-bar phasor (exception to the Hz contract) - while it moves
+//        the wobble runs one full cycle per bar and rate_hz is ignored; held
+//        constant (or unconnected) the wobble free-runs at rate_hz
 // Outlets:
-//   out1 / out2: stereo, wet only
+//   out1 / out2: stereo, wet only (the notch cascade is the whole signal)
 // No dry/wet control, no limiter, no metering.
 // ============================================================================
 
-@param({ min: -2, max: 2 }) track_octave = 0;        // ladder octave
-@param({ min: 1, max: 4 }) ladder_span = 3;          // ladder span
-@param({ min: 2, max: 8 }) stage_count = 6;          // stages
-@param({ min: 5, max: 500 }) glide_ms = 60;          // note glide
-@param({ min: 0, max: 2 }) sweep_octaves = 0.5;      // wobble depth
+@param({ min: 1, max: 16 }) lowest_partial = 2;      // first notched partial
+@param({ min: 1, max: 8 }) partial_step = 1;         // partial spacing
+@param({ min: 1, max: 6 }) notches = 3;              // notch count
+@param({ min: 0.05, max: 1 }) notch_width = 0.5;     // width (x f0)
+@param({ min: 5, max: 500 }) glide_ms = 40;          // note glide
+@param({ min: 0, max: 1 }) sweep_octaves = 0.1;      // wobble depth
 @param({ min: 0.02, max: 2 }) rate_hz = 0.15;        // wobble rate
-@param({ min: 0, max: 0.9 }) feedback = 0.3;         // feedback
 @param({ min: -24, max: 12 }) out_gain_db = 0;       // output gain
 
-@state apXL = new FixedSampleArray(8);
-@state apYL = new FixedSampleArray(8);
-@state apXR = new FixedSampleArray(8);
-@state apYR = new FixedSampleArray(8);
-
-@state prevChainL = 0.0;
-@state prevChainR = 0.0;
+// TPT SVF state per notch cell
+@state ic1L = new FixedSampleArray(6);
+@state ic2L = new FixedSampleArray(6);
+@state ic1R = new FixedSampleArray(6);
+@state ic2R = new FixedSampleArray(6);
 
 @state f0Last = 55.0;
 @state f0Sm = 55.0;
@@ -58,17 +73,6 @@ let xR = in2;
 let f0In = in3;
 let barIn = in4;
 
-// 5-limit ladder: 1/1, 5/4, 3/2, 15/8, then the same triad an octave higher
-function justRatio(k: Int): number {
-	let o = floor(k / 4.0);
-	let i = k - 4.0 * o;
-	let r = 1.0;
-	if (i > 0.5 && i < 1.5) { r = 1.25; }
-	else if (i > 1.5 && i < 2.5) { r = 1.5; }
-	else if (i > 2.5) { r = 1.875; }
-	return exp2(o) * r;
-}
-
 // --- in3: 0 = unknown, hold the last valid f0 (cold start 55 Hz) ------------
 if (f0In > 20.0 && f0In < 1200.0) {
 	f0Last = f0In;
@@ -77,7 +81,7 @@ let glideC = 1.0 - exp(0.0 - 1.0 / (clamp(glide_ms, 5.0, 500.0) * 0.001 * sr));
 f0Sm = f0Sm + (f0Last - f0Sm) * glideC;
 let f0 = clamp(f0Sm, 20.0, 1200.0);
 
-// --- Sweep phase -----------------------------------------------------------
+// --- Wobble phase ----------------------------------------------------------
 // The bar phase is carried as an offset against a free-running phase, so a
 // moving phasor takes over exactly and a stopped one hands back with no jump.
 let rate = clamp(rate_hz, 0.02, 2.0);
@@ -89,44 +93,57 @@ prevBarIn = barIn;
 let phL = wrap(phF + phOff, 0.0, 1.0);
 let phR = wrap(phL + 0.25, 0.0, 1.0);
 
-let tOct = clamp(track_octave, -2.0, 2.0);
-let spanO = clamp(ladder_span, 1.0, 4.0);
-let nSt: Int = clamp(floor(stage_count + 0.5), 2, 8);
-let wob = clamp(sweep_octaves, 0.0, 2.0) * 0.5;
+let wob = clamp(sweep_octaves, 0.0, 1.0) * 0.5;
 let wL = exp2(wob * sin(2.0 * pi * phL));
 let wR = exp2(wob * sin(2.0 * pi * phR));
-let root = clamp(f0 * exp2(tOct), 20.0, 2000.0);
-let fbAmt = clamp(feedback, 0.0, 0.9);
 
-let sigL = xL + fbAmt * prevChainL;
-let sigR = xR + fbAmt * prevChainR;
+let h0 = clamp(floor(lowest_partial + 0.5), 1.0, 16.0);
+let hStep = clamp(floor(partial_step + 0.5), 1.0, 8.0);
+let nN: Int = clamp(floor(notches + 0.5), 1, 6);
+let width = clamp(notch_width, 0.05, 1.0);
+let fTop = sr * 0.45;
+let fFade = sr * 0.05;
 
-for (let m: Int = 0; m < nSt; m++) {
-	let k: Int = floor(m * spanO * 4.0 / nSt);
-	let jr = justRatio(k);
+let sigL = xL;
+let sigR = xR;
 
-	let bL = clamp(root * jr * wL, 20.0, sr * 0.45);
-	let bR = clamp(root * jr * wR, 20.0, sr * 0.45);
-	let tL = tan(pi * bL / sr);
-	let aL = (tL - 1.0) / (tL + 1.0);
-	let tR = tan(pi * bR / sr);
-	let aR = (tR - 1.0) / (tR + 1.0);
+// --- Cascade of notch cells, one per chosen partial ------------------------
+for (let m: Int = 0; m < nN; m++) {
+	let h = h0 + m * hStep;
+	let kq = maximum(width / h, 0.005);
 
-	// y = a1*x + x[n-1] - a1*y[n-1]  (Kiiski Eq. 1-2, unity magnitude)
-	let yL = aL * sigL + apXL[m] - aL * apYL[m];
-	apXL[m] = sigL;
-	apYL[m] = yL;
-	sigL = yL;
+	let fRawL = h * f0 * wL;
+	let fRawR = h * f0 * wR;
+	let depL = clamp((fTop - fRawL) / fFade, 0.0, 1.0);
+	let depR = clamp((fTop - fRawR) / fFade, 0.0, 1.0);
+	let fcL = clamp(fRawL, 10.0, fTop);
+	let fcR = clamp(fRawR, 10.0, fTop);
 
-	let yR = aR * sigR + apXR[m] - aR * apYR[m];
-	apXR[m] = sigR;
-	apYR[m] = yR;
-	sigR = yR;
+	// --- Left: TPT SVF, cell = 0.5 * (x + AP2) = x - k*bp ---
+	let tL = tan(pi * fcL / sr);
+	let a1L = 1.0 / (1.0 + tL * (tL + kq));
+	let a2L = tL * a1L;
+	let a3L = tL * a2L;
+	let v3L = sigL - ic2L[m];
+	let v1L = a1L * ic1L[m] + a2L * v3L;
+	let v2L = ic2L[m] + a2L * ic1L[m] + a3L * v3L;
+	ic1L[m] = 2.0 * v1L - ic1L[m];
+	ic2L[m] = 2.0 * v2L - ic2L[m];
+	sigL = sigL - depL * kq * v1L;
+
+	// --- Right ---
+	let tR = tan(pi * fcR / sr);
+	let a1R = 1.0 / (1.0 + tR * (tR + kq));
+	let a2R = tR * a1R;
+	let a3R = tR * a2R;
+	let v3R = sigR - ic2R[m];
+	let v1R = a1R * ic1R[m] + a2R * v3R;
+	let v2R = ic2R[m] + a2R * ic1R[m] + a3R * v3R;
+	ic1R[m] = 2.0 * v1R - ic1R[m];
+	ic2R[m] = 2.0 * v2R - ic2R[m];
+	sigR = sigR - depR * kq * v1R;
 }
 
-prevChainL = sigL;
-prevChainR = sigR;
-
 let gain = dbtoa(clamp(out_gain_db, -24.0, 12.0));
-out1 = 0.5 * (xL + sigL) * gain;
-out2 = 0.5 * (xR + sigR) * gain;
+out1 = sigL * gain;
+out2 = sigR * gain;

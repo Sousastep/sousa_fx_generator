@@ -11,12 +11,14 @@
 //         Eq. 5-8 (constant-Q parametric notch, G2B = (1+G^2)/2),
 //         Fig. 2-5.
 //
-// The paper steps a table of centre frequencies and has to carry the biquad
-// state across each cycle reset to avoid clicks. Because the stages are exactly
-// one octave apart, the ladder is periodic in phase: advancing every stage by
-// one octave reproduces the *same* set of (frequency, depth) pairs on a
-// relabelled set of stages. So the phase can just wrap continuously - no table,
-// no reset, no transient.
+// The paper steps a table of centre frequencies and resets every filter one
+// octave down at the end of each cycle, carrying the biquad state across the
+// jump. Here each stage instead climbs the *whole* ladder on its own (position
+// (m + u) / stages, with u counting cycles), so a stage only wraps when it
+// reaches the edge of the ladder - where the raised-cosine depth is 0 dB and
+// the stage is an exact identity. Its state is cleared at that moment, so the
+// wrap is inaudible: no table, no global reset, no transient. Notches are also
+// faded out over the octave below 0.45*sr so stages above Nyquist never stack.
 //
 // Each notch is a TPT state-variable bandpass subtracted from the input,
 // y = x - (1 - G) * bp / Q, which gives exactly G at fc for any Q.
@@ -24,8 +26,9 @@
 // Inlets:
 //   in1 / in2: stereo audio
 //   in3: bound only - the ladder is anchored to ladder_base_hz, not to f0
-//   in4: 0..1 one-bar phasor - advances the ladder when moving,
-//        free-running LFO at notch_rate_hz when held at 0
+//   in4: 0..1 one-bar phasor (exception to the Hz contract) - while it moves
+//        the ladder climbs one octave per bar and notch_rate_hz is ignored;
+//        held constant (or unconnected) it free-runs at notch_rate_hz
 // Outlets:
 //   out1 / out2: stereo, wet only
 // No dry/wet control, no limiter, no metering.
@@ -43,10 +46,14 @@
 @state ic2L = new FixedSampleArray(10);
 @state ic1R = new FixedSampleArray(10);
 @state ic2R = new FixedSampleArray(10);
+@state posPrevL = new FixedSampleArray(10);
+@state posPrevR = new FixedSampleArray(10);
 
 @state phF = 0.0;
 @state phOff = 0.0;
 @state prevBarIn = 0.0;
+@state prevBase = 0.0;
+@state cycles: Int = 0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
@@ -65,36 +72,53 @@ if (abs(barIn - prevBarIn) > 0.0000001) {
 prevBarIn = barIn;
 let base = wrap(phF + phOff, 0.0, 1.0);
 
+// Count whole cycles (one octave each) so every stage can travel the full
+// ladder. 2520 = lcm(4..10), so the count wraps seamlessly for any stage count.
+if (base < prevBase - 0.5) { cycles = (cycles + 1) % 2520; }
+else if (base > prevBase + 0.5) { cycles = (cycles + 2519) % 2520; }
+prevBase = base;
+let u = cycles + base;
+
 let rising = direction > 0.5;
-let phL = rising ? base : wrap(1.0 - base, 0.0, 1.0);
-// Half a stage of offset puts the notches a quarter-octave apart L/R
-let phR = wrap(phL + 0.25, 0.0, 1.0);
+let uL = rising ? u : 2520.0 - u;
+// A quarter-stage offset puts the right ladder a quarter-octave above the left
+let uR = uL + 0.25;
 
 let nStages: Int = clamp(floor(stages + 0.5), 4, 10);
 let qv = clamp(notch_q, 2.0, 40.0);
 let kq = 1.0 / qv;
 let fBase = clamp(ladder_base_hz, 20.0, 400.0);
 
-// Lmin = -3 dB at the ends of the ladder, Lmax = -notch_depth_db in the middle
-let lmin = -3.0;
+// Lmin = 0 dB at the ends of the ladder (a stage there is an identity, so it
+// can wrap), Lmax = -notch_depth_db in the middle
 let lmax = 0.0 - clamp(notch_depth_db, 3.0, 36.0);
+let fTop = sr * 0.45;
 
 let sigL = xL;
 let sigR = xR;
 
 for (let m: Int = 0; m < nStages; m++) {
-	let posL = (m + phL) / nStages;
-	let posR = (m + phR) / nStages;
+	let posL = wrap((m + uL) / nStages, 0.0, 1.0);
+	let posR = wrap((m + uR) / nStages, 0.0, 1.0);
 
-	// Eq. 3-4: raised-cosine depth envelope across the ladder
-	let envL = 0.5 - 0.5 * cos(2.0 * pi * posL);
-	let envR = 0.5 - 0.5 * cos(2.0 * pi * posR);
-	let gL = dbtoa(lmin + (lmax - lmin) * envL);
-	let gR = dbtoa(lmin + (lmax - lmin) * envR);
+	// a stage that just wrapped is at the 0 dB edge: clear its state there
+	if (abs(posL - posPrevL[m]) > 0.5) { ic1L[m] = 0.0; ic2L[m] = 0.0; }
+	if (abs(posR - posPrevR[m]) > 0.5) { ic1R[m] = 0.0; ic2R[m] = 0.0; }
+	posPrevL[m] = posL;
+	posPrevR[m] = posR;
 
 	// Eq. 2: centre frequencies one octave apart
-	let fcL = clamp(fBase * exp2(m + phL), 20.0, sr * 0.45);
-	let fcR = clamp(fBase * exp2(m + phR), 20.0, sr * 0.45);
+	let fRawL = fBase * exp2(posL * nStages);
+	let fRawR = fBase * exp2(posR * nStages);
+	let fcL = clamp(fRawL, 20.0, fTop);
+	let fcR = clamp(fRawR, 20.0, fTop);
+
+	// Eq. 3-4: raised-cosine depth envelope across the ladder, faded out over
+	// the octave below 0.45*sr so stages above it never stack at the clamp
+	let envL = (0.5 - 0.5 * cos(2.0 * pi * posL)) * clamp(log2(fTop / fRawL), 0.0, 1.0);
+	let envR = (0.5 - 0.5 * cos(2.0 * pi * posR)) * clamp(log2(fTop / fRawR), 0.0, 1.0);
+	let gL = dbtoa(lmax * envL);
+	let gR = dbtoa(lmax * envR);
 
 	// --- Left: TPT state-variable bandpass + notch ---
 	let tL = tan(pi * fcL / sr);

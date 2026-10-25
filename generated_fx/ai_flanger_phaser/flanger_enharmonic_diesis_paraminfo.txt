@@ -16,12 +16,19 @@ notched and phase-rotated — which is the enharmonic equivalent of a reese's
 mistuned unison: one pitch, two spellings, beating. Glide it and the whole
 lattice slides against the note.
 
+It is a tap-sum (boxcar) comb, not a notch on top of the dry signal: the output
+is the average of the taps, which passes at unity only at DC and at
+taps·harmonic·f0/r, with lobes in between. Partials between nulls are cut too
+(at the defaults on a 55 Hz note: fundamental ≈ −2 dB, 2nd harmonic ≈ −8 dB),
+so expect a darker, hollower tone, not just thin notches.
+
 Source: Tong & Tojo, SMC-19 (5-limit ratios); Christou, NIME-25 §3.2 (tuning
-lattice); flanger structure Esqueda/Välimäki/Parker, DAFx-15 §3 Fig. 6.
+lattice); flanger structure Esqueda/Välimäki/Parker, DAFx-15 §3 Fig. 6;
+fractional delay after Nam & Välimäki, DAFx-09 §2.1.
 
 100% wet, no dry/wet control, no limiter.
 
-PARAMETERS (7 + output gain)
+PARAMETERS (8)
 
 1. interval — 1/1, 81/80, 128/125, 25/24, 135/128; default 25/24
    The enharmonic pair that spaces the comb.
@@ -35,8 +42,10 @@ PARAMETERS (7 + output gain)
    1 on every harmonic (very dense), 8 on every eighth (broad, granular).
 
 3. taps — 3…8, default 6
-   Number of comb rungs. More = sharper, deeper nulls and a more defined comb;
-   fewer = a broad, phasey colour with shallow nulls.
+   Number of comb rungs. The nulls are full-depth at any count; more taps put
+   more nulls (and narrower lobes) between the passbands at DC and at
+   taps·harmonic·f0/r, so more = more defined comb and a darker overall tone,
+   fewer = broader, brighter colour.
 
 4. detune_sweep — 0…1, default 0.15
    Depth of the glide, in octaves of the lattice (±1 octave at 1). The whole
@@ -48,25 +57,35 @@ PARAMETERS (7 + output gain)
    an LFO.
 
 6. feedback — -0.8…+0.8, default +0.25
-   Recirculation around the comb. Positive makes the rungs ring; negative makes
-   the partials just above each null hollow out. This is the control that turns
-   the effect from a colour into a resonance.
+   Recirculation of the (damped) comb output. Positive makes the passbands ring
+   and also lifts the low end — the comb passes DC, so +0.8 is up to ~+14 dB on
+   the lowest partials; trim with out_gain_db. Negative pulls the low end down
+   and rings the odd lobes instead. This is the control that turns the effect
+   from a colour into a resonance.
 
 7. tone_hz — 600…14000 Hz, default 5000 Hz
    Damping inside the feedback loop. Low keeps it dark and dubby.
 
 8. out_gain_db — -24…+12 dB, default 0 dB
-   Final trim. Does not count toward the 8-parameter limit.
+   Final trim.
 
 INLETS / OUTLETS
 - in1 / in2: stereo audio.
 - in3: f0 in Hz. 0 or out of range = unknown: the last valid value is held.
   Cold start is 55 Hz (A1), so the comb is tuned with nothing patched.
-- in4: one-bar phasor. While it moves it drives the glide; held at 0 the effect
-  free-runs at sweep_rate_hz.
+- in4: 0..1 one-bar phasor (not Hz). While it moves the glide runs exactly one
+  full cycle per bar and sweep_rate_hz is ignored; held constant or unconnected
+  the effect free-runs at sweep_rate_hz. A stepped (non-phasor) signal here
+  will jump the glide phase.
 - out1 / out2: stereo, wet only.
 
 NOTES
 - No detune is ever expressed in cents: every rung spacing is a ratio of small
   integers (81/80, 128/125, 25/24, 135/128).
-- Taps are 1/nTaps-normalised, so the comb peaks at unity and only the nulls cut.
+- Taps are 1/nTaps-normalised, so the passbands sit at unity (see WHAT IT IS
+  for what happens between them).
+- The tracked f0 is slewed over ~20 ms, so a note change bends every tap at
+  once — a short chirp/doppler on the attack is expected.
+- At very high sample rates with low notes, harmonic 1 and full glide, the
+  comb spacing is capped so the longest tap fits the 16384-sample buffer; the
+  lattice then stops following the note downward.

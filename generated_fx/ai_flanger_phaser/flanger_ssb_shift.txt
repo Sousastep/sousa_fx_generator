@@ -14,18 +14,24 @@
 //       quadrature coefficients from docs/rnbo_codebox/example22 (4-section
 //       one-pole allpass pair, designed for 44.1-48 kHz).
 //
-// Because the branch that is shifted is also delayed, the output never carries
-// a direct copy of the input. The shift makes the bass partials inharmonic:
-// every partial moves by the same number of Hz, so the intervals between them
-// stop being simple ratios - the metallic, "wrong instrument" space-bass sound.
+// Fig. 10: y = 1/2 * (x + shift(z^-D x)). Eq. 13 needs the delay *between* the
+// unshifted and the shifted signal, so only the shifted branch is delayed. The
+// unshifted reference runs through the same real-branch allpass chain as the
+// shifter, so the allpass dispersion cancels and the relative delay is exactly
+// D: notches every fs/D Hz, each moving at shift_hz * fs/D Hz per second
+// (the pattern repeats shift_hz times a second). Feedback recirculates the
+// shifted branch only, so every pass shifts again. The shift makes the bass
+// partials inharmonic: every partial moves by the same number of Hz, so the
+// intervals between them stop being simple ratios - the metallic, "wrong
+// instrument" space-bass sound.
 // ============================================================================
 // Inlets:
 //   in1 / in2: stereo audio
 //   in3: bound only - the shift is set in Hz by shift_hz, not by f0
 //   in4: bound only - the march rate is a constant Hz offset, not bar-locked
 // Outlets:
-//   out1 / out2: stereo, wet only
-// No dry/wet control, no limiter, no metering.
+//   out1 / out2: stereo, the Fig. 10 50/50 sum of input and shifted delay
+// No separate dry/wet control, no limiter, no metering.
 // ============================================================================
 
 @param({ min: 0.1, max: 80 }) shift_hz = 6;          // shift
@@ -40,10 +46,11 @@
 @state bufR = new FixedSampleArray(8192);
 @state wi: Int = 0;
 
-// One-pole allpass state, laid out as [branch * 8 + channel * 4 + stage]
-// branch 0 = real (0..7), branch 1 = imaginary (8..15)
-@state apX = new FixedSampleArray(16);
-@state apY = new FixedSampleArray(16);
+// One-pole allpass state, laid out as [channel * 8 + branch * 4 + stage]
+// for the shifter (L real 0..3, L imag 4..7, R real 8..11, R imag 12..15),
+// then the unshifted reference real branch (L 16..19, R 20..23)
+@state apX = new FixedSampleArray(24);
+@state apY = new FixedSampleArray(24);
 
 @state theta = 0.0;
 @state dampL = 0.0;
@@ -86,6 +93,7 @@ let dampC = 1.0 - exp(0.0 - 2.0 * pi * clamp(tone_hz, 600.0, sr * 0.45) / sr);
 let trim = clamp(quadrature_trim, 0.9, 1.1);
 
 // --- Left channel ----------------------------------------------------------
+// feedback recirculates the shifted branch only
 bufL[wi] = xL + fbAmt * dampL;
 
 let rL = wi - tau;
@@ -108,8 +116,14 @@ imL = apS(imL, cI3, 7);
 imL = 0.0 - imL;
 let shL = reL * ct - imL * trim * st;
 
-let yL = 0.5 * (tapL + shL);
-dampL = dampL + dampC * (yL - dampL);
+// unshifted, undelayed reference with the same real-branch dispersion
+let refL = apS(xL, cR0, 16);
+refL = apS(refL, cR1, 17);
+refL = apS(refL, cR2, 18);
+refL = apS(refL, cR3, 19);
+
+let yL = 0.5 * (refL + shL);
+dampL = dampL + dampC * (shL - dampL);
 
 // --- Right channel ---------------------------------------------------------
 bufR[wi] = xR + fbAmt * dampR;
@@ -134,8 +148,13 @@ imR = apS(imR, cI3, 15);
 imR = 0.0 - imR;
 let shR = reR * ct - imR * trim * st;
 
-let yR = 0.5 * (tapR + shR);
-dampR = dampR + dampC * (yR - dampR);
+let refR = apS(xR, cR0, 20);
+refR = apS(refR, cR1, 21);
+refR = apS(refR, cR2, 22);
+refR = apS(refR, cR3, 23);
+
+let yR = 0.5 * (refR + shR);
+dampR = dampR + dampC * (shR - dampR);
 
 wi = (wi + 1) & 8191;
 
