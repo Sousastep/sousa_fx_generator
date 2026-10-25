@@ -1,0 +1,56 @@
+================================================================================
+cab_speaker_excursion — Parameter Information
+================================================================================
+
+WHAT IT IS
+A guitar speaker cabinet with a speaker you can overdrive. The cone is
+simulated as a moving mass on a spring: push it hard and its motor weakens
+and its suspension stiffens, so low, loud notes flap, compress and grow
+harmonics while higher notes stay clean. Around that: the box (sealed or
+open back), the cone's breakup peak and rolloff, and a mic that darkens as
+it moves off-axis. Put it after any amp or fuzz in this folder.
+
+Source: Karjalainen, DAFx-08 "Nonlinear Modeling of a Guitar Loudspeaker
+Cabinet" §2.1–2.2, §5.1 (driver mechanics, excursion-dependent Bl and
+stiffness, cabinet response); Macak & Schimmel, DAFx-10 P12 §8 (cab at the
+end of the amp chain).
+
+PARAMETERS (6 + output gain)
+
+1. resonance_hz — 50…150 Hz, default 80 Hz
+   Free-air speaker resonance (a sealed box raises it, up to ×1.4). Below
+   it the output falls at 12 dB/oct, like a real cab: the tuba's lowest
+   fundamentals get thinner and the harmonics take over.
+
+2. excursion_db — 0…30 dB, default 12 dB
+   How hard the cone is driven (level-neutral while linear). 0 = clean
+   cab sim; 20+ = a speaker being wrecked. On a 0.3 sine at the default:
+   THD -6 dB at 110 Hz but +9 dB at 55 Hz (low notes distort most).
+
+3. breakup_hz — 1000…5000 Hz, default 2500 Hz
+   Cone breakup: +6 dB presence peak here, steep rolloff above 1.6×.
+   Lower = a darker, honkier speaker.
+
+4. closed_pct — 0…100 %, default 70 %
+   0 = open back (dipole bass cancellation below ~150 Hz, airy, thinner);
+   100 = sealed (higher, sharper resonance bump, punchier lows).
+
+5. mic_hz — 2000…10000 Hz, default 5000 Hz
+   Off-axis mic lowpass. Lower = mic further toward the cone's edge.
+
+6. mix — 0…1, default 1
+   Dry/wet.
+
+7. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- Roughly level-neutral: about -31 dB RMS out with the -32 dB RMS tuba.
+- The cone is a semi-implicit-Euler oscillator; the normalized excursion is
+  clamped at ±50 to keep it stable at any setting.
+- Breakup peak (Q 1.5) and lowpasses are linear filters.
+- No safety limiter.

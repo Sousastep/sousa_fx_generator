@@ -1,0 +1,50 @@
+================================================================================
+pushpull_crossover — Parameter Information
+================================================================================
+
+WHAT IT IS
+A push-pull pentode power stage. Each tube handles one half of the wave; with
+little idle current neither is really on as the wave crosses zero, so every
+crossing gets a small notch: crossover distortion. It is worst on quiet
+signals, so loud notes sound like a cranked amp while decays and soft notes
+turn spitty and gated. Mismatched tubes add even harmonics; global negative
+feedback smooths the notch and tightens the clipping.
+
+Source: Macak & Schimmel, DAFx-11 (2011_05_e) §2.1, §3 (pentode model,
+push-pull circuit); Cohen & Hélie, DAFx-10 P45 §3.2 (Koren tube model).
+
+PARAMETERS (5 + output gain)
+
+1. drive_db — 0…40 dB, default 18 dB
+   Level into the power tubes. Low = clean-ish with crossover grit; high =
+   full plate clipping.
+
+2. bias_pct — 0…100 %, default 15 %
+   Idle current. 0 = past class B (a small dead band: maximum spit); ~17 =
+   class B; 100 = warm class AB (no notch). Measured on a quiet 55 Hz sine:
+   THD -21 dB at the default, -47 dB at 100 %.
+
+3. mismatch_pct — 0…50 %, default 10 %
+   One tube weaker and biased differently from the other: adds 2nd harmonic
+   and an uneven, lopsided crossover.
+
+4. negfb_pct — 0…100 %, default 30 %
+   Global negative feedback around the stage. More = less notch, tighter and
+   a little quieter; 0 = loose and raw.
+
+5. mix — 0…1, default 1
+   Dry/wet.
+
+6. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- The plate limit is -6 dBFS; about -26 dB RMS out with the -32 dB RMS tuba
+  recording at the defaults (drive_db 30 brings it near -15 dB RMS).
+- No output transformer here: chain transformer_flux_sat after it for that.
+- 10 Hz DC block after the pair. Not antialiased (soft curves).
+- No safety limiter.

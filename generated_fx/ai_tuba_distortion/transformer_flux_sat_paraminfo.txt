@@ -1,0 +1,53 @@
+================================================================================
+transformer_flux_sat — Parameter Information
+================================================================================
+
+WHAT IT IS
+An output transformer pushed into core saturation. The iron's flux is the
+integral of the voltage, so a low note hits the core twice as hard as the
+note an octave up: the lowest, loudest notes sag and break up into a farty,
+hollow growl while higher notes stay clean. No crossover filter is
+involved; the frequency dependence is the physics. A hysteresis loop adds
+grit and a little drag at mid levels.
+
+Source: Macak & Schimmel, DAFx-11 (2011_05_e) §2.2, §3.2 (nonlinear output
+transformer in a push-pull amp); Chowdhury, DAFx-19 paper 3 §2.2, §3
+(hysteresis, implicit discretization of the stiff magnetic ODE).
+
+PARAMETERS (5 + output gain)
+
+1. drive_db — 0…36 dB, default 12 dB
+   How hard the core is hit (level-neutral while unsaturated). 0 = clean;
+   24+ = heavily saturated: thin, buzzy and quieter (the collapsing core
+   eats the low end; about -45 dB RMS at 36 dB vs -32 dB at 0).
+
+2. core_size — 0.1…2, default 1
+   Saturation flux. Small = a tiny, cheap transformer that saturates early;
+   2 = big iron, mostly clean.
+
+3. hysteresis_pct — 0…100 %, default 40 %
+   Width of the core's hysteresis loop: adds odd harmonics on mid-level
+   notes and a slight lag. 0 = ideal (anhysteretic) iron.
+
+4. primary_hz — 5…200 Hz, default 30 Hz
+   Low-frequency corner set by the primary inductance (a gentle high-pass
+   below saturation). Higher = thinner, like a small transformer.
+
+5. mix — 0…1, default 1
+   Dry/wet.
+
+6. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- Measured on 0.3 sines at the defaults: THD -2 dB at 55 Hz vs -7 dB at
+  110 Hz (the low note saturates first).
+- A fixed 8 kHz lowpass (leakage inductance) rounds the steps as the core
+  comes out of saturation.
+- Implicit solver (4 Newton steps per sample): stable at any setting.
+- Pairs naturally after pushpull_crossover or triode_bias_shift.
+- No safety limiter.

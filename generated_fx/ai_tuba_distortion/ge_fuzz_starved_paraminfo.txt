@@ -1,0 +1,51 @@
+================================================================================
+ge_fuzz_starved — Parameter Information
+================================================================================
+
+WHAT IT IS
+A germanium Fuzz Face. Two transistor stages clip asymmetrically (strong
+2nd harmonic, woolly and round), and the input cap charges through the
+transistor's base on hard notes, so the fuzz chokes and sputters as notes
+decay. Turn the battery down for the "dying battery" sound: the bias slides
+toward cutoff, so only the peaks get through, gated and spitting. Leakage
+pushes the other way, toward a mushy, compressed fuzz. Antialiased.
+
+Source: Holmes, Holters & van Walstijn, DAFx-17 paper 28 §2.1, §4
+(Ebers–Moll germanium BJT, Fuzz-Face case study); Holmes & van Walstijn,
+DAFx-16 paper 28 §3.2 (bias parameters dominate the sound).
+
+PARAMETERS (5 + output gain)
+
+1. fuzz_pct — 0…100 %, default 70 %
+   Gain of the second transistor (the Fuzz knob). 0 = a dirty boost, much
+   quieter; 100 = full square-wave fuzz.
+
+2. battery_v — 3…9.6 V, default 9 V
+   Supply voltage. Below ~7 V the bias starves: gated, sputtery, thinner and
+   quieter (at 3 V about 20 dB quieter than at 9 V; only the loudest notes
+   pass).
+
+3. leakage_pct — 0…100 %, default 20 %
+   Germanium leakage current (a warm transistor). More = bias pushed toward
+   saturation, darker and more compressed.
+
+4. input_trim_db — -24…+12 dB, default 0 dB
+   Level into the pedal. Like rolling back a guitar's volume knob, turning it
+   down cleans the fuzz up.
+
+5. mix — 0…1, default 1
+   Dry/wet.
+
+6. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- Silence in = silence out at any bias (each stage is referenced to its
+  idle point, so changing the battery/leakage at rest makes no thump).
+- Input cap: 2 ms charge, 150 ms release. Output cap: 30 Hz.
+- About -14 dB RMS out with the -32 dB RMS tuba recording at the defaults.
+- No safety limiter.

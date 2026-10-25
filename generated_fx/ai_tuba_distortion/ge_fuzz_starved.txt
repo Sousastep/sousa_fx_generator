@@ -1,0 +1,138 @@
+// ============================================================================
+// ge_fuzz_starved.txt — Fuzz Face: two direct-coupled germanium transistor
+//                       stages (Ebers–Moll exponential collector current),
+//                       an input cap that charges through the base junction,
+//                       and a battery that can be starved into a gated,
+//                       sputtering "dying battery" fuzz
+//
+// From: B. Holmes, M. Holters, M. van Walstijn, "Comparison of Germanium
+//       Bipolar Junction Transistor Models for Real-time Circuit
+//       Simulation", DAFx-17 paper 28: §2.1 (Ebers–Moll: the collector
+//       current grows as exp(Vbe / Vt) between cutoff and saturation, so a
+//       common-emitter stage is a logistic curve between Vcc and ~0 V),
+//       §4 (the Fuzz-Face case study: two GBJT stages, Q1 collector
+//       direct-coupled to Q2's base, the bias point set by the supply and
+//       the germanium leakage);
+//       B. Holmes, M. van Walstijn, "Physical model parameter optimisation
+//       for calibrated emulation of the Dallas Rangemaster Treble Booster",
+//       DAFx-16 paper 28, §3.2 (the output is most sensitive to the bias
+//       parameters: supply and leakage move the operating point).
+//
+// Model, per channel (volts; 1.0 digital = 1 V):
+//   stage(v, g) = Vcc/2 * (tanh(b/2) - tanh((g v + b)/2))   (0 at idle)
+//   b  = bias: 0.3 at 9 V, falls toward cutoff as the battery starves,
+//        rises toward saturation with leakage
+//   input cap: charges through the base junction when the base is driven
+//   past its threshold, discharges in 150 ms (blocking -> sputter)
+//   s1 = stage(x - vcap, 20); s2 = stage(s1, g2(fuzz_pct)); out = s2 * 0.1
+// Each tanh is first-order antiderivative antialiased (F = log cosh).
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Fuzz (Q2 gain)
+@param({ min: 0, max: 100 }) fuzz_pct = 70;
+// Battery voltage (V)
+@param({ min: 3, max: 9.6 }) battery_v = 9;
+// Germanium leakage
+@param({ min: 0, max: 100 }) leakage_pct = 20;
+// Input trim (dB)
+@param({ min: -24, max: 12 }) input_trim_db = 0;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+// ADAA memory: 0/1 stage 1 L/R, 2/3 stage 2 L/R
+@state prevU = new FixedSampleArray(4);
+// input coupling cap voltage L/R
+@state vcap = new FixedSampleArray(2);
+// TPT one-pole states: 0/1 output coupling cap
+@state zs = new FixedSampleArray(2);
+@state primed = 0;
+
+// TPT one-pole lowpass on state slot idx; gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - zs[idx]) * gg;
+	let y = v + zs[idx];
+	zs[idx] = y + v;
+	return y;
+}
+
+// log cosh u, overflow-safe
+function logCosh(u: number): number {
+	let a = abs(u);
+	return a + log(1.0 + exp(0.0 - 2.0 * a)) - 0.6931471805599453;
+}
+
+// First-order ADAA tanh on slot k
+function tanhAdaa(k: Int, u: number): number {
+	let u1 = prevU[k];
+	prevU[k] = u;
+	let du = u - u1;
+	let y = 0.0;
+	if (abs(du) < 0.00001) {
+		y = tanh(0.5 * (u + u1));
+	} else {
+		y = (logCosh(u) - logCosh(u1)) / du;
+	}
+	return y;
+}
+
+// Input coupling cap on channel ch: returns the base drive
+function inputCap(ch: Int, x: number, vth: number, cRate: number, dRate: number): number {
+	let vb = x - vcap[ch];
+	vcap[ch] = vcap[ch] + cRate * maximum(vb - vth, 0.0) - dRate * vcap[ch];
+	return vb;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let trim = dbtoa(clamp(input_trim_db, -24.0, 12.0));
+let xL = in1;
+let xR = in2;
+
+let vcc = clamp(battery_v, 3.0, 9.6);
+let starve = (9.0 - vcc) / 6.0;
+let leak = clamp(leakage_pct, 0.0, 100.0) * 0.01;
+let b = 0.3 - 2.5 * starve + 1.5 * leak;
+let idle = tanh(0.5 * b);
+let half = 0.5 * vcc;
+let g1 = 20.0;
+let g2 = 0.3 * exp(clamp(fuzz_pct, 0.0, 100.0) * 0.01 * 3.6888794541);
+// the base junction conducts sooner as the supply sags
+let vth = 0.05 * vcc / 9.0;
+let cRate = 1.0 - exp(-1.0 / (0.002 * sr));
+let dRate = 1.0 - exp(-1.0 / (0.150 * sr));
+let gDc = tan(pi * 30.0 / sr);
+let ggDc = gDc / (1.0 + gDc);
+
+// seed the ADAA memory at the idle point, or the first sample clicks
+if (primed == 0) {
+	for (let k: Int = 0; k < 4; k++) {
+		prevU[k] = 0.5 * b;
+	}
+	primed = 1;
+}
+
+// --- Q1: input cap + first stage -------------------------------------------
+let vbL = inputCap(0, xL * trim, vth, cRate, dRate);
+let vbR = inputCap(1, xR * trim, vth, cRate, dRate);
+let s1L = half * (idle - tanhAdaa(0, 0.5 * (g1 * vbL + b)));
+let s1R = half * (idle - tanhAdaa(1, 0.5 * (g1 * vbR + b)));
+
+// --- Q2: direct-coupled second stage (fuzz) --------------------------------
+let s2L = half * (idle - tanhAdaa(2, 0.5 * (g2 * s1L + b)));
+let s2R = half * (idle - tanhAdaa(3, 0.5 * (g2 * s1R + b)));
+
+// --- Output cap into the volume pot (30 Hz) --------------------------------
+let wetL = 0.1 * (s2L - lp1(0, s2L, ggDc));
+let wetR = 0.1 * (s2R - lp1(1, s2R, ggDc));
+
+let w = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(w, xL, wetL) * outGain;
+out2 = linearinterp(w, xR, wetR) * outGain;

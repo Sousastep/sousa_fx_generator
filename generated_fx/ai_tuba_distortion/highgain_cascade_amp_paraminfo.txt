@@ -1,0 +1,54 @@
+================================================================================
+highgain_cascade_amp — Parameter Information
+================================================================================
+
+WHAT IT IS
+A modern high-gain amp preamp, 6505/5150 style, for riddim walls of
+distortion. A tight high-pass keeps the low end from flubbing, three
+cascaded asymmetric gain stages stack up saturation (each filtered and
+coupled like real triode stages), and a bass/mid/treble tone stack carves
+the scoop. There is no cab: put cab_speaker_excursion after it for the
+speaker. Antialiased clipping.
+
+Source: Eichas & Zölzer, DAFx-16 paper 16 §3–5 (block-oriented
+filter–nonlinearity–filter cascades); Cassidy & De Sena, DAFx-23 paper 40 §2
+(Peavey 6505 target); Sinjanakhom et al., DAFx-24 paper 58 §2 (tone stacks);
+Parker, Zavalishin & Le Bivic, DAFx-16 paper 41 §5.1 (ADAA tanh).
+
+PARAMETERS (6 + output gain)
+
+1. gain_db — 0…60 dB, default 40 dB
+   Preamp gain into the first stage. Even 0 dB crunches (the later stages
+   have fixed gain); 60 = saturated wall.
+
+2. tight_hz — 20…400 Hz, default 90 Hz
+   12 dB/oct high-pass before the gain stages (the "boost in front"). Higher
+   = tighter, chuggier, less sub mush; the bass removed here is not passed
+   through clean.
+
+3. bass_db — -12…+12 dB, default 0 dB
+   Low shelf at 100 Hz, after the distortion.
+
+4. mid_db — -12…+12 dB, default -4 dB
+   Peak at 650 Hz (Q 0.7). Negative = scooped.
+
+5. treble_db — -12…+12 dB, default +2 dB
+   High shelf at 3 kHz.
+
+6. mix — 0…1, default 1
+   Dry/wet.
+
+7. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- Loud: about -12 dB RMS out with the -32 dB RMS tuba at the defaults. Big
+  bass/mid boosts can push peaks above 0 dBFS (+4.5 dB measured with
+  mid_db +12): use output_db.
+- Stage bias +0.25 / -0.15 / +0.1 gives the asymmetric, even-harmonic edge.
+- Interstage lowpasses 8 / 6 / 5 kHz and 25 Hz coupling high-passes.
+- No safety limiter.

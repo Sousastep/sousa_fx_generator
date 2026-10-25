@@ -1,0 +1,137 @@
+// ============================================================================
+// bitcrush_pitch_hold.txt — bit-depth reduction plus a sample-and-hold whose
+//                           clock locks to a multiple of the tuba's pitch, so
+//                           the aliasing folds onto harmonics instead of
+//                           landing between them; optional bar-synced crush
+//
+// From: K. J. Werner, "Bit Bending: An Introduction", DAFx-13 (2013 sub. 35):
+//       §2.2 (character of bit-bent digital audio: bit-depth and clock
+//       manipulation as sound design), §3.4.3 (bit depth bend: every value
+//       requantized to a reduced word length), §3.4.4 (clock signal bend:
+//       the sample clock divided down, so the signal is held between ticks
+//       and aliases);
+//       J. D. Parker, V. Zavalishin, E. Le Bivic, "Reducing the aliasing of
+//       nonlinear waveshaping using continuous-time convolution", DAFx-16
+//       paper 41, §1-2 (a discontinuity placed between samples is
+//       represented by integrating a continuous-time approximation: here the
+//       two-sample polyBLEP residual of a linear-interpolation kernel).
+//   Locking the hold clock to N x f0 is this effect's own design: sampling a
+//   period-T signal N times per period makes the output periodic in T, so
+//   every alias is a harmonic of f0.
+//
+// Signal, per channel:
+//   rate  = in3 > 0 ? pitch_ratio * f0 : hold_hz   (clamped 20 Hz .. sr)
+//   on each clock tick (fractional time inside the sample): latch the input
+//   linearly interpolated at the tick, quantize to 2^(bits - 1) levels per
+//   unit (mid-tread: silence stays exactly 0), hold it.
+//   Each held step of height h at distance d (samples) before sample n gets
+//   the polyBLEP residual h d^2/2 on sample n-1 and -h (1-d)^2/2 on n
+//   (one sample of latency).
+//   bar_sweep: bits drop by up to 8 * bar_sweep with a raised-cosine shape
+//   over the bar (deepest mid-bar, no jump at the wrap), only while in4 moves.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = locks the hold clock to pitch_ratio * f0;
+//        0 = disconnected -> fixed hold_hz. No zero-crossing fallback.
+//   in4: 0..1 one-bar phasor. Counts as running for 100 ms after it last
+//        moved; held (e.g. 0) -> no sweep, and bar_sweep does nothing.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Bit depth
+@param({ min: 1, max: 16 }) bits = 6;
+// Hold rate when in3 = 0 (Hz)
+@param({ min: 200, max: 48000, exponent: 3 }) hold_hz = 4000;
+// Hold clock = pitch x this (when in3 > 0)
+@param({ min: 1, max: 64, exponent: 2 }) pitch_ratio = 16;
+// Bar-synced crush sweep (needs in4)
+@param({ min: 0, max: 1 }) bar_sweep = 0;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+@state clk = 0.0;
+@state xPrev = new FixedSampleArray(2);
+@state held = new FixedSampleArray(2);
+@state pend = new FixedSampleArray(2);
+@state prevBarIn = 0.0;
+@state barHold = 0.0;
+
+// Hold + quantize + polyBLEP on channel ch; returns the output delayed by one
+// sample. tick = 1 when the clock wrapped inside this sample, d = distance of
+// the tick before this sample (0..1), q = quantizer levels per unit.
+function crush(ch: Int, x: number, tick: number, d: number, q: number, thru: number): number {
+	let xp = xPrev[ch];
+	xPrev[ch] = x;
+	let cur = 0.0;
+	let outv = 0.0;
+	if (thru > 0.5) {
+		cur = floor(x * q + 0.5) / q;
+		outv = pend[ch];
+		pend[ch] = cur;
+		held[ch] = cur;
+	} else {
+		cur = held[ch];
+		if (tick > 0.5) {
+			let xs = xp + (1.0 - d) * (x - xp);
+			let nv = floor(xs * q + 0.5) / q;
+			let h = nv - cur;
+			cur = nv;
+			held[ch] = nv;
+			pend[ch] = pend[ch] + h * 0.5 * d * d;
+			outv = pend[ch];
+			pend[ch] = cur - h * 0.5 * (1.0 - d) * (1.0 - d);
+		} else {
+			outv = pend[ch];
+			pend[ch] = cur;
+		}
+	}
+	return outv;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+let barIn = in4;
+
+// --- Bar: running for 100 ms after in4 last moved ---------------------------
+if (abs(barIn - prevBarIn) > 0.0000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
+prevBarIn = barIn;
+let barShape = (barHold > 0.0) ? 0.5 - 0.5 * cos(2.0 * pi * wrap(barIn, 0.0, 1.0)) : 0.0;
+
+// --- Word length --------------------------------------------------------------
+let bEff = clamp(bits - 8.0 * clamp(bar_sweep, 0.0, 1.0) * barShape, 1.0, 16.0);
+let q = exp2(bEff - 1.0);
+
+// --- Hold clock: pitch-locked when in3 > 0, else hold_hz ---------------------
+let rate = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 2000.0) * clamp(pitch_ratio, 1.0, 64.0) : clamp(hold_hz, 200.0, 48000.0);
+let inc = clamp(rate, 20.0, sr) / sr;
+let thru = (inc >= 1.0) ? 1.0 : 0.0;
+let tick = 0.0;
+let d = 0.0;
+clk += inc;
+if (clk >= 1.0) {
+	clk -= 1.0;
+	tick = 1.0;
+	d = clamp(clk / inc, 0.0, 1.0);
+}
+
+// the wet path is one sample late: delay the dry by one sample too
+let dryL = xPrev[0];
+let dryR = xPrev[1];
+let wetL = crush(0, xL, tick, d, q, thru);
+let wetR = crush(1, xR, tick, d, q, thru);
+
+let w = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(w, dryL, wetL) * outGain;
+out2 = linearinterp(w, dryR, wetR) * outGain;

@@ -1,0 +1,47 @@
+================================================================================
+rectifier_sag — Parameter Information
+================================================================================
+
+WHAT IT IS
+Power-supply sag from a tube rectifier. The harder you play, the more
+current the power stage pulls and the further the B+ rail droops: the
+attack of a note hits at full voltage, then the sustain compresses, clips
+harder and plays quieter, and the amp blooms back once you let go. Both
+channels share one supply, as in a real amp. Antialiased clipping.
+
+Source: Macak & Schimmel, DAFx-11 (2011_05_e) §3 eq. 13–14 (supply node:
+reservoir cap charged through the supply resistance, drained by the tube
+currents); Macak & Schimmel, DAFx-10 P12 §2 (power supply in the amp's block
+diagram).
+
+PARAMETERS (4 + output gain)
+
+1. drive_db — 0…40 dB, default 18 dB
+   Level into the power stage. Sag only bites once the stage is working
+   hard, so it scales with this.
+
+2. sag_pct — 0…100 %, default 60 %
+   Rectifier/supply resistance. 0 = stiff solid-state supply (no sag).
+   Measured on a sustained loud 110 Hz note: about 4.4 dB of droop at 60 %,
+   6.6 dB at 100 %, with harder clipping as it sags.
+
+3. recovery_ms — 20…1000 ms, default 150 ms
+   Reservoir-cap time constant: how fast the rail droops and recovers.
+   Short = tight, pumping chug; long = slow, spongy swell.
+
+4. mix — 0…1, default 1
+   Dry/wet.
+
+5. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- Headroom follows the rail and gain follows its square root, so a sagging
+  rail clips harder rather than just turning down.
+- About -22 dB RMS out with the -32 dB RMS tuba recording at the defaults.
+- 10 Hz DC block after the stage.
+- No safety limiter.

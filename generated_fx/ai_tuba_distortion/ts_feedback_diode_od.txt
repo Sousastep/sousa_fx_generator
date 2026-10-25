@@ -1,0 +1,110 @@
+// ============================================================================
+// ts_feedback_diode_od.txt — Tube-Screamer-style overdrive: a non-inverting
+//                            op-amp with antiparallel diodes in its feedback
+//                            loop, so the clean signal always passes and only
+//                            the high-passed gain branch is clipped
+//
+// From: D. T. Yeh, J. S. Abel, J. O. Smith, "Simplified, Physically-Informed
+//       Models of Distortion and Overdrive Guitar Effects Pedals", DAFx-07
+//       p189: §4.1 (input high-pass), §4.2 (non-inverting op amp with diode
+//       limiter: Vout = Vin + limited(gain branch); the 4.7k/0.047u leg puts
+//       the gain branch above ~720 Hz, the feedback cap lowpasses it),
+//       §4.3 (tone stage: a lowpass after the clipper);
+//       J. D. Parker, V. Zavalishin, E. Le Bivic, "Reducing the aliasing of
+//       nonlinear waveshaping using continuous-time convolution", DAFx-16
+//       paper 41, §2 and §5.1 (first-order antiderivative antialiasing of
+//       tanh, F(u) = log cosh u, midpoint fallback for tiny steps).
+//
+// Signal: branch = lp6k( G * hp(x, bass_cut_hz) )
+//         wet    = lp( x + vd * tanh_adaa(branch / vd), tone_hz )
+// G = dbtoa(drive_db) - 1 (the op amp never goes below unity gain).
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Drive (dB of op-amp gain)
+@param({ min: 0, max: 40 }) drive_db = 24;
+// Gain-branch high-pass (Hz)
+@param({ min: 40, max: 800, exponent: 2 }) bass_cut_hz = 250;
+// Tone lowpass (Hz)
+@param({ min: 500, max: 8000, exponent: 2 }) tone_hz = 2000;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+// TPT one-pole states: 0/1 hp, 2/3 branch lp, 4/5 tone lp, 6/7 output coupling cap
+@state zs = new FixedSampleArray(8);
+@state prevU = new FixedSampleArray(2);
+
+// TPT one-pole lowpass on state slot idx; gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - zs[idx]) * gg;
+	let y = v + zs[idx];
+	zs[idx] = y + v;
+	return y;
+}
+
+// log cosh u, overflow-safe
+function logCosh(u: number): number {
+	let a = abs(u);
+	return a + log(1.0 + exp(0.0 - 2.0 * a)) - 0.6931471805599453;
+}
+
+// First-order ADAA tanh on channel ch
+function tanhAdaa(ch: Int, u: number): number {
+	let u1 = prevU[ch];
+	prevU[ch] = u;
+	let du = u - u1;
+	let y = 0.0;
+	if (abs(du) < 0.00001) {
+		y = tanh(0.5 * (u + u1));
+	} else {
+		y = (logCosh(u) - logCosh(u1)) / du;
+	}
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+
+let gHp = tan(pi * clamp(bass_cut_hz, 40.0, 800.0) / sr);
+let ggHp = gHp / (1.0 + gHp);
+let gBr = tan(pi * minimum(6000.0, sr * 0.45) / sr);
+let ggBr = gBr / (1.0 + gBr);
+let gTone = tan(pi * minimum(clamp(tone_hz, 500.0, 8000.0), sr * 0.45) / sr);
+let ggTone = gTone / (1.0 + gTone);
+
+let G = maximum(dbtoa(clamp(drive_db, 0.0, 40.0)) - 1.0, 0.0);
+// diode knee in digital full scale
+let vd = 0.3;
+
+// --- Gain branch: high-pass, gain, feedback-cap lowpass ----------------------
+let hL = xL - lp1(0, xL, ggHp);
+let hR = xR - lp1(1, xR, ggHp);
+let bL = lp1(2, G * hL, ggBr);
+let bR = lp1(3, G * hR, ggBr);
+
+// --- Diode limiter in the feedback loop: dry + limited branch ----------------
+let cL = xL + vd * tanhAdaa(0, bL / vd);
+let cR = xR + vd * tanhAdaa(1, bR / vd);
+
+// --- Tone stage ------------------------------------------------------------
+let wetL = lp1(4, cL, ggTone);
+let wetR = lp1(5, cR, ggTone);
+
+// --- Output coupling cap (10 Hz): the clipper makes DC on asymmetric notes --
+let gDc = tan(pi * 10.0 / sr);
+let ggDc = gDc / (1.0 + gDc);
+wetL = wetL - lp1(6, wetL, ggDc);
+wetR = wetR - lp1(7, wetR, ggDc);
+
+let w = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(w, xL, wetL) * outGain;
+out2 = linearinterp(w, xR, wetR) * outGain;

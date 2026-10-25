@@ -1,0 +1,46 @@
+================================================================================
+ts_feedback_diode_od — Parameter Information
+================================================================================
+
+WHAT IT IS
+Tube-Screamer-style overdrive. The diodes sit in the op amp's feedback loop,
+so the clean horn always passes at unity and only the high-passed gain
+branch is clipped on top of it: the low end stays round and the mids get the
+familiar smooth, compressed bark. A tone lowpass follows. Antiderivative
+antialiasing keeps the clipping from fizzing.
+
+Source: Yeh, Abel & Smith, DAFx-07 p189 §4.1–4.3 (Overdrive pedal: input
+high-pass, non-inverting op amp with diode limiter, tone stage); Parker,
+Zavalishin & Le Bivic, DAFx-16 paper 41 §2, §5.1 (ADAA tanh).
+
+PARAMETERS (4 + output gain)
+
+1. drive_db — 0…40 dB, default 24 dB
+   Op-amp gain of the clipped branch (the pedal's Drive knob). 0 dB = clean.
+
+2. bass_cut_hz — 40…800 Hz, default 250 Hz
+   High-pass in front of the clipper (the pedal's fixed 720 Hz leg, made
+   adjustable for tuba). Lower = the fundamental gets clipped too, fuzzier;
+   higher = only the mids break up.
+
+3. tone_hz — 500…8000 Hz, default 2000 Hz
+   Lowpass after the clipper (Tone knob). Darker to the left.
+
+4. mix — 0…1, default 1
+   Dry/wet.
+
+5. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- A fixed 6 kHz lowpass on the gain branch stands in for the feedback cap.
+- A 10 Hz output coupling cap removes the DC the clipper makes on
+  asymmetric notes.
+- At drive 0 dB the effect is a plain tone lowpass.
+- Measured with the -32 dB RMS tuba recording: output about -18 dB RMS at
+  the defaults, so start with output_db around -10 dB.
+- No safety limiter.

@@ -1,0 +1,50 @@
+================================================================================
+rat_slew_hardclip — Parameter Information
+================================================================================
+
+WHAT IT IS
+RAT-style distortion. A slow op amp is driven into its 9 V rails; the more
+gain, the less bandwidth it has, and its output can only move so fast (slew
+rate), which rounds the buzz into a growl. Hard silicon diodes to ground
+square it off, and a passive lowpass "filter" knob tames it. Thick, dense,
+gated-sounding fuzz-distortion; hard clipping is antialiased.
+
+Source: Yeh, Abel & Smith, DAFx-07 p189 §3.3–3.5 (op amp gain stage with
+GBW limit, diode clipper to ground, tone stage); Yeh, DAFx-07 p197 §1.3
+(diode clipper equation); Werner & Azelborn, DAFx-23 paper 61 §3 (ADAA hard
+clipper).
+
+PARAMETERS (4 + output gain)
+
+1. drive_db — 0…60 dB, default 36 dB
+   Op-amp gain (Distortion knob). The closed-loop bandwidth is 1 MHz / gain,
+   so high settings also get darker, like the real pedal.
+
+2. slew_v_us — 0.001…0.3 V/µs, default 0.005 V/µs
+   How fast the op amp's output can move. 0.3 = the LM308 datasheet value,
+   which on tuba changes nothing audible; below ~0.02 the edges round off
+   and high notes turn into soft triangles (and lose some level).
+
+3. filter_hz — 400…12000 Hz, default 3000 Hz
+   Lowpass after the diodes (the RAT's Filter knob, inverted: higher =
+   brighter).
+
+4. mix — 0…1, default 1
+   Dry/wet.
+
+5. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- The diodes' 0.6 V is scaled to -6 dBFS, so the output level hardly moves
+  with drive (about -10 dB RMS with the tuba recording at the defaults).
+- The gain branch is high-passed at 60 Hz, as in the pedal's RC legs.
+- A 10 Hz output coupling cap removes the DC the clipper makes on
+  asymmetric notes.
+- Port quirk: the slew range sits below the LM308's real 0.3 V/µs because
+  the real value does nothing audible at tuba frequencies.
+- No safety limiter.

@@ -1,0 +1,110 @@
+// ============================================================================
+// rectifier_sag.txt — tube-rectifier power-supply sag: the B+ rail drops as
+//                     the power stage draws current, taking headroom and
+//                     gain down with it, then recharges over recovery_ms
+//                     (attacks hit hard, sustains compress and break up,
+//                     notes bloom back after a hit)
+//
+// From: J. Macak, J. Schimmel, "Simulation of a Vacuum-Tube Push-Pull Guitar
+//       Power Amplifier", DAFx-11 (2011_05_e): §3, eq. 13-14 (the supply
+//       node V_D is a state: the reservoir cap C_D is charged from V_PS
+//       through the supply resistance R and discharged by the plate and
+//       screen currents of both tubes:
+//       V_D[n] = V_D[n-1] + dt/C_D ((V_PS - V_D[n-1])/R - Ia1 - Ia2 - Is1 - Is2));
+//       J. Macak, J. Schimmel, "Real-Time Guitar Tube Amplifier Simulation
+//       using an Approximation of Differential Equations", DAFx-10 P12 §2
+//       (block diagram: power supply feeding the power amp; the preamp
+//       supply assumed constant, so the sag lives in the power stage).
+//
+// Model (B = V_D / V_PS, 1 at rest; one supply shared by both channels):
+//   I  = (|yL| + |yR|) / 2                     (plate current drawn)
+//   B += dt / tau * (1 - B - S I)              (tau = recovery_ms = R C_D,
+//                                               S = 1.5 * sag_pct / 100:
+//                                               R relative to full load)
+//   y  = B tanh(G sqrt(B) x / B)               (headroom ~ B, gain ~ sqrt(B):
+//                                               a sagging rail clips harder
+//                                               and plays quieter)
+// tanh is first-order antiderivative antialiased; output y * 0.5, 10 Hz DC
+// block.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Drive into the power stage (dB)
+@param({ min: 0, max: 40 }) drive_db = 18;
+// Sag (rectifier resistance)
+@param({ min: 0, max: 100 }) sag_pct = 60;
+// Supply recovery (ms)
+@param({ min: 20, max: 1000, exponent: 2 }) recovery_ms = 150;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+// supply rail, 1 = full B+
+@state rail = 1.0;
+@state prevU = new FixedSampleArray(2);
+// TPT one-pole states: 0/1 DC block
+@state zs = new FixedSampleArray(2);
+
+// TPT one-pole lowpass on state slot idx; gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - zs[idx]) * gg;
+	let y = v + zs[idx];
+	zs[idx] = y + v;
+	return y;
+}
+
+// log cosh u, overflow-safe
+function logCosh(u: number): number {
+	let a = abs(u);
+	return a + log(1.0 + exp(0.0 - 2.0 * a)) - 0.6931471805599453;
+}
+
+// First-order ADAA tanh on channel ch
+function tanhAdaa(ch: Int, u: number): number {
+	let u1 = prevU[ch];
+	prevU[ch] = u;
+	let du = u - u1;
+	let y = 0.0;
+	if (abs(du) < 0.00001) {
+		y = tanh(0.5 * (u + u1));
+	} else {
+		y = (logCosh(u) - logCosh(u1)) / du;
+	}
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+
+let G = dbtoa(clamp(drive_db, 0.0, 40.0));
+let S = 1.5 * clamp(sag_pct, 0.0, 100.0) * 0.01;
+let k = 1.0 / (clamp(recovery_ms, 20.0, 1000.0) * 0.001 * sr);
+let gDc = tan(pi * 10.0 / sr);
+let ggDc = gDc / (1.0 + gDc);
+
+// --- Power stage on the present rail -----------------------------------------
+let B = rail;
+let gEff = G / sqrt(maximum(B, 0.05));
+let yL = B * tanhAdaa(0, gEff * xL);
+let yR = B * tanhAdaa(1, gEff * xR);
+
+// --- Reservoir cap: recharged through R, drained by the plate current -------
+let load = 0.5 * (abs(yL) + abs(yR));
+rail = clamp(rail + k * (1.0 - rail - S * load), 0.05, 1.0);
+
+let wL = 0.5 * yL;
+let wR = 0.5 * yR;
+let wetL = wL - lp1(0, wL, ggDc);
+let wetR = wR - lp1(1, wR, ggDc);
+
+let w = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(w, xL, wetL) * outGain;
+out2 = linearinterp(w, xR, wetR) * outGain;

@@ -1,0 +1,54 @@
+================================================================================
+octave_fwr_fuzz — Parameter Information
+================================================================================
+
+WHAT IT IS
+An Octavia-style octave-up fuzz that tracks the tuba. A lowpass that follows
+your pitch strips the note down to its fundamental, a full-wave rectifier
+flips the bottom half up so the tone jumps an octave, and a fuzz stage
+saturates the result: a ringing, synthy octave-up buzz an octave above the
+horn. Because the rectifier only ever sees a clean fundamental, the octave
+stays clear instead of turning to mush. At half-wave the fundamental stays in.
+
+Source: Enderby & Stables, DAFx-17 paper 17 §3 and Fig. 4 (lowpass-isolated
+fundamental -> full-wave rectification); Parker, Zavalishin & Le Bivic,
+DAFx-16 paper 41 §5.1 (ADAA tanh).
+
+PARAMETERS (5 + output gain)
+
+1. octave_pct — 0…100 %, default 100 %
+   Rectifier: 0 = half-wave (fundamental + octave, fuzzy and lopsided);
+   100 = full-wave (octave only: on a sine the fundamental drops out
+   completely and only even harmonics are left).
+
+2. track_ratio — 1…4, default 1.5
+   Isolating lowpass = f0 × this (when in3 > 0). 1 = the purest octave;
+   higher lets more harmonics into the rectifier: richer, grittier, more
+   intermod.
+
+3. fixed_hz — 40…400 Hz, default 120 Hz
+   Isolating lowpass when in3 = 0 (no tracker). Set it a little above the
+   notes you play.
+
+4. fuzz_db — 0…40 dB, default 18 dB
+   Fuzz gain after the rectifier. 0 = a clean octave (much quieter);
+   40 = square-wave octave.
+
+5. mix — 0…1, default 1
+   Dry/wet. Blend in the dry for horn + octave.
+
+6. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3: f0 in Hz. > 0 = the lowpass tracks track_ratio × f0 (10 ms glide);
+  0 = disconnected -> fixed_hz. No zero-crossing fallback.
+- in4 is not used.
+
+NOTES
+- The lowpass only feeds the rectifier; it is not a crossover.
+- 2-pole linear TPT lowpass (Q 0.707), fixed ×4 preamp before the rectifier,
+  20 Hz DC block after it, 10 Hz after the fuzz.
+- About -19 dB RMS out with the -32 dB RMS tuba recording at the defaults.
+- No safety limiter.

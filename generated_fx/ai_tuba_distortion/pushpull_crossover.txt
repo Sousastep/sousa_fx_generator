@@ -1,0 +1,104 @@
+// ============================================================================
+// pushpull_crossover.txt — class B / AB push-pull pentode pair: each tube
+//                          amplifies one half of the wave, so with low idle
+//                          bias the hand-over at zero leaves a crossover
+//                          notch (spitty, gated decays); tube mismatch adds
+//                          even harmonics, global negative feedback tightens
+//
+// From: J. Macak, J. Schimmel, "Simulation of a Vacuum-Tube Push-Pull Guitar
+//       Power Amplifier", DAFx-11 (2011_05_e): §2.1 (pentode model: plate
+//       current from the control-grid voltage, cut off below -Vco and
+//       limited at the top), §3 (push-pull circuit: the phase splitter
+//       drives the tubes in antiphase and the output transformer sums the
+//       difference of their plate currents);
+//       I. Cohen, T. Hélie, "Real-Time Simulation of a Guitar Power
+//       Amplifier", DAFx-10 P45 §3.2 (Koren's tube model: a softplus knee
+//       raised to the 3/2 power, which is what makes the class B hand-over
+//       soft-edged instead of a hard dead zone).
+//
+// Model, per channel:
+//   v   = G x - beta * y[n-1]                    (global NFB, one-sample loop)
+//   ip(v, b, gm) = tanh( gm (softplus(16 (v + b)) / 16)^1.5 )  (1 = plate limit)
+//   y   = (ip(v, b, 1) - ip0a) - (ip(-v, b2, gm2) - ip0b)      (idle removed)
+//   b   = -0.1 + 0.6 * bias_pct / 100   (0 = a 0.1 dead band, past class B;
+//         ~17 % = class B, cut off at v = 0; above = class AB)
+//   tube B: gm2 = 1 - mismatch, b2 = b (1 - mismatch / 2)
+// Output: y * 0.5 (plate limit = -6 dBFS), 10 Hz DC block.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Drive into the power tubes (dB)
+@param({ min: 0, max: 40 }) drive_db = 18;
+// Idle bias (0 = past class B, 17 = class B)
+@param({ min: 0, max: 100 }) bias_pct = 15;
+// Tube mismatch
+@param({ min: 0, max: 50 }) mismatch_pct = 10;
+// Global negative feedback
+@param({ min: 0, max: 100 }) negfb_pct = 30;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+@state yPrev = new FixedSampleArray(2);
+// TPT one-pole states: 0/1 DC block
+@state zs = new FixedSampleArray(2);
+
+// TPT one-pole lowpass on state slot idx; gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - zs[idx]) * gg;
+	let y = v + zs[idx];
+	zs[idx] = y + v;
+	return y;
+}
+
+function softplus(z: number): number {
+	return (z > 30.0) ? z : log(1.0 + exp(z));
+}
+
+// Pentode plate current, normalized to a plate limit of 1
+function plate(v: number, b: number, gm: number): number {
+	let base = softplus(16.0 * (v + b)) * 0.0625;
+	return tanh(gm * base * sqrt(base));
+}
+
+// Push-pull pair with global feedback on channel ch
+function pushPull(ch: Int, x: number, beta: number, b: number, b2: number, gm2: number, ip0a: number, ip0b: number): number {
+	let v = x - beta * yPrev[ch];
+	let y = (plate(v, b, 1.0) - ip0a) - (plate(0.0 - v, b2, gm2) - ip0b);
+	yPrev[ch] = y;
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+
+let G = dbtoa(clamp(drive_db, 0.0, 40.0));
+let b = -0.1 + 0.6 * clamp(bias_pct, 0.0, 100.0) * 0.01;
+let m = clamp(mismatch_pct, 0.0, 50.0) * 0.01;
+let gm2 = 1.0 - m;
+let b2 = b * (1.0 - 0.5 * m);
+let ip0a = plate(0.0, b, 1.0);
+let ip0b = plate(0.0, b2, gm2);
+// |beta * dy/dv| < 1 keeps the one-sample loop stable (dy/dv peaks near 1.1)
+let beta = clamp(negfb_pct, 0.0, 100.0) * 0.01 * 0.85;
+let gDc = tan(pi * 10.0 / sr);
+let ggDc = gDc / (1.0 + gDc);
+
+let yL = pushPull(0, G * xL, beta, b, b2, gm2, ip0a, ip0b) * 0.5;
+let yR = pushPull(1, G * xR, beta, b, b2, gm2, ip0a, ip0b) * 0.5;
+
+// mismatch makes signal-dependent DC: block it
+let wetL = yL - lp1(0, yL, ggDc);
+let wetR = yR - lp1(1, yR, ggDc);
+
+let w = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(w, xL, wetL) * outGain;
+out2 = linearinterp(w, xR, wetR) * outGain;

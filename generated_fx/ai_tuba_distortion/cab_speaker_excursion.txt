@@ -1,0 +1,158 @@
+// ============================================================================
+// cab_speaker_excursion.txt — guitar-cab speaker simulation with excursion
+//                             distortion: a nonlinear cone oscillator whose
+//                             motor force falls and whose suspension
+//                             stiffens with excursion (so low, loud notes
+//                             distort and compress while highs stay clean),
+//                             plus box, cone breakup and off-axis mic tone
+//
+// From: M. Karjalainen, "Nonlinear Modeling of a Guitar Loudspeaker Cabinet",
+//       DAFx-08 (2008 paper 17): §2.1 (linear driver: a mass-spring-damper
+//       driven by the voice-coil force; radiated pressure ~ cone
+//       acceleration, so the response rolls off at 12 dB/oct below the
+//       mechanical resonance), §2.2 (nonlinear behaviour at low frequencies
+//       and high levels: force factor Bl(x) and suspension stiffness K(x)
+//       vary with excursion x), §5.1 (model development: a low-frequency
+//       excursion-dependent nonlinearity plus linear filtering for the
+//       cabinet's upper response, cone breakup region included);
+//       J. Macak, J. Schimmel, DAFx-10 P12 §8 (the speaker cabinet as the
+//       last block of the amp chain).
+//
+// Cone (mass 1, normalized excursion e = x w^2; one oscillator per channel):
+//   F  = Bl(e) u - w^2 (1 + 0.3 e^2) x - (w / Q) v,  Bl(e) = 1 / (1 + 0.15 e^2)
+//   v += F dt,  x += v dt                    (semi-implicit Euler)
+//   p  = F                                   (pressure ~ acceleration)
+//   u  = x_in * dbtoa(excursion_db) * 2,  wet scaled by 1 / that gain
+//   w  = 2 pi resonance_hz (1 + 0.4 c),  Q = 0.7 + 1.3 c  (c = closed_pct/100:
+//        a sealed box's air spring raises resonance and Q)
+// Box: open back adds dipole cancellation, p_open = hp1(p, 150 Hz);
+//      p = c p + (1 - c) p_open
+// Cone breakup: +6 dB peak at breakup_hz (Q 1.5), 2-pole lowpass at
+//      1.6 breakup_hz (Q 0.8)
+// Mic: 2-pole lowpass at mic_hz (Q 0.6), off-axis darkening
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Speaker resonance (Hz)
+@param({ min: 50, max: 150 }) resonance_hz = 80;
+// Drive into the speaker (dB)
+@param({ min: 0, max: 30 }) excursion_db = 12;
+// Cone breakup (Hz)
+@param({ min: 1000, max: 5000, exponent: 2 }) breakup_hz = 2500;
+// Closed back (0 = open back)
+@param({ min: 0, max: 100 }) closed_pct = 70;
+// Mic off-axis lowpass (Hz)
+@param({ min: 2000, max: 10000, exponent: 2 }) mic_hz = 5000;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+@state conePos = new FixedSampleArray(2);
+@state coneVel = new FixedSampleArray(2);
+// TPT one-pole states: 0/1 dipole high-pass
+@state zs = new FixedSampleArray(2);
+// SVF states: slot = 2 * filter + ch (0 breakup lp, 1 mic lp)
+@state ic1 = new FixedSampleArray(4);
+@state ic2 = new FixedSampleArray(4);
+// breakup peak biquad (TDF2)
+@state bq1 = new FixedSampleArray(2);
+@state bq2 = new FixedSampleArray(2);
+
+// TPT one-pole lowpass on state slot idx; gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - zs[idx]) * gg;
+	let y = v + zs[idx];
+	zs[idx] = y + v;
+	return y;
+}
+
+// Linear TPT state-variable lowpass on slot k (kd = 1/Q)
+function svfLp(k: Int, x: number, g: number, kd: number): number {
+	let a1 = 1.0 / (1.0 + g * (g + kd));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - ic2[k];
+	let v1 = a1 * ic1[k] + a2 * v3;
+	let v2 = ic2[k] + a2 * ic1[k] + a3 * v3;
+	ic1[k] = 2.0 * v1 - ic1[k];
+	ic2[k] = 2.0 * v2 - ic2[k];
+	return v2;
+}
+
+// Transposed direct-form II biquad on slot k (coefficients normalized by a0)
+function biquad(k: Int, x: number, b0: number, b1: number, b2: number, a1: number, a2: number): number {
+	let y = b0 * x + bq1[k];
+	bq1[k] = b1 * x - a1 * y + bq2[k];
+	bq2[k] = b2 * x - a2 * y;
+	return y;
+}
+
+// Nonlinear cone on channel ch; returns the acceleration (pressure)
+function cone(ch: Int, u: number, w: number, w2: number, damp: number, dt: number): number {
+	let x = conePos[ch];
+	let v = coneVel[ch];
+	let ex = clamp(x * w2, -50.0, 50.0);
+	let bl = 1.0 / (1.0 + 0.15 * ex * ex);
+	let f = bl * u - w2 * (1.0 + 0.3 * ex * ex) * x - damp * v;
+	v = v + f * dt;
+	x = x + v * dt;
+	coneVel[ch] = v;
+	conePos[ch] = x;
+	return f;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let dt = 1.0 / sr;
+let xL = in1;
+let xR = in2;
+
+let c = clamp(closed_pct, 0.0, 100.0) * 0.01;
+let w = 2.0 * pi * clamp(resonance_hz, 50.0, 150.0) * (1.0 + 0.4 * c);
+let w2 = w * w;
+let damp = w / (0.7 + 1.3 * c);
+let G = dbtoa(clamp(excursion_db, 0.0, 30.0)) * 2.0;
+
+// --- Cone ----------------------------------------------------------------------
+let pL = cone(0, G * xL, w, w2, damp, dt) / G;
+let pR = cone(1, G * xR, w, w2, damp, dt) / G;
+
+// --- Box: open back = dipole cancellation below ~150 Hz ----------------------
+let gD = tan(pi * 150.0 / sr);
+let ggD = gD / (1.0 + gD);
+let oL = pL - lp1(0, pL, ggD);
+let oR = pR - lp1(1, pR, ggD);
+pL = c * pL + (1.0 - c) * oL;
+pR = c * pR + (1.0 - c) * oR;
+
+// --- Cone breakup: peak, then rolloff ------------------------------------------
+let fB = minimum(clamp(breakup_hz, 1000.0, 5000.0), sr * 0.3);
+let aP = pow(10.0, 6.0 / 40.0);
+let wP = 2.0 * pi * fB / sr;
+let cP = cos(wP);
+let alP = sin(wP) / (2.0 * 1.5);
+let a0P = 1.0 + alP / aP;
+let pb0 = (1.0 + alP * aP) / a0P;
+let pb1 = (0.0 - 2.0) * cP / a0P;
+let pb2 = (1.0 - alP * aP) / a0P;
+let pa2 = (1.0 - alP / aP) / a0P;
+pL = biquad(0, pL, pb0, pb1, pb2, pb1, pa2);
+pR = biquad(1, pR, pb0, pb1, pb2, pb1, pa2);
+let gB = tan(pi * minimum(1.6 * fB, sr * 0.45) / sr);
+pL = svfLp(0, pL, gB, 1.25);
+pR = svfLp(1, pR, gB, 1.25);
+
+// --- Mic off-axis --------------------------------------------------------------
+let gM = tan(pi * minimum(clamp(mic_hz, 2000.0, 10000.0), sr * 0.45) / sr);
+let wetL = svfLp(2, pL, gM, 1.6666666666666667);
+let wetR = svfLp(3, pR, gM, 1.6666666666666667);
+
+let mx = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(mx, xL, wetL) * outGain;
+out2 = linearinterp(mx, xR, wetR) * outGain;

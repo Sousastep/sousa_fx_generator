@@ -1,0 +1,127 @@
+// ============================================================================
+// triode_bias_shift.txt — cascaded 12AX7 preamp stages with grid conduction:
+//                         each stage's coupling cap charges whenever its grid
+//                         is driven positive, shifting the bias toward cutoff
+//                         (blocking distortion: the choked, farty bloom after
+//                         a hard bass hit, recovering over blocking_ms)
+//
+// From: J. Macak, J. Schimmel, "Real-Time Guitar Tube Amplifier Simulation
+//       using an Approximation of Differential Equations", DAFx-10 P12: §3
+//       (triode models: plate current ~ (Vgk + Vpk/mu)^1.5 above cutoff,
+//       grid current once the grid goes positive), §4-5 (triode amplifier:
+//       the coupling-cap voltage is a state of the stage, so the operating
+//       point moves with the signal), §10 (the coupling-cap/grid-current
+//       interaction is what makes a cascade "block");
+//       W. R. Dunkel et al., "The Fender Bassman 5F6-A Family of Preamplifier
+//       Circuits — A Wave Digital Filter Case Study", DAFx-16 paper 53: §2.2
+//       (cascaded voltage-amp stages coupled by RC networks), §3.4 (triode
+//       model with grid current);
+//       I. Cohen, T. Hélie, "Real-Time Simulation of a Guitar Power
+//       Amplifier", DAFx-10 P45 §3.3 (grid current and its effect on bias).
+//
+// One stage (normalized volts, cutoff at grid = -1):
+//   vg  = vin - vc                         (coupling cap vc, grid leak Rg)
+//   vc += a * (vg + 100 * max(vg, 0))      (a = 1 / (blocking_ms * sr):
+//                                           Rg leak + grid-current charge)
+//   ve  = vg - 0.9 * softplus(8 vg) / 8    (grid conduction squashes vg > 0)
+//   ip  = (softplus(6 (ve + bp)) / 6)^1.5  (bp = operating point, from bias)
+//   out = -(ip - ip0) / slope0             (inverting, unity small-signal)
+//   out = lp(out, 10 kHz)                  (Miller capacitance)
+// Stage 1 input = x * dbtoa(drive_db) * 2; later stages get x 3.
+// Output: cutoff ceiling scaled to -6 dBFS, then a 10 Hz coupling cap.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Drive into the first stage (dB)
+@param({ min: 0, max: 40 }) drive_db = 20;
+// Bias: cold (0) .. hot (1)
+@param({ min: 0, max: 1 }) bias = 0.5;
+// Coupling-cap recovery (ms)
+@param({ min: 5, max: 500, exponent: 2 }) blocking_ms = 60;
+// Number of triode stages
+@param({ min: 1, max: 3, steps: 3 }) stages = 2;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+// coupling-cap voltage per stage x channel: slot = 2 * stage + ch
+@state vc = new FixedSampleArray(6);
+// Miller lowpass per stage x channel, 6/7 output coupling cap
+@state zs = new FixedSampleArray(8);
+
+function softplus(z: number): number {
+	return (z > 30.0) ? z : log(1.0 + exp(z));
+}
+
+// One triode stage on slot k
+function triode(k: Int, vin: number, a: number, kc: number, bp: number, ip0: number, invSlope: number, ggM: number): number {
+	let vg = vin - vc[k];
+	vc[k] = vc[k] + a * vg + kc * maximum(vg, 0.0);
+	let ve = vg - 0.9 * softplus(8.0 * vg) * 0.125;
+	let base = softplus(6.0 * (ve + bp)) / 6.0;
+	let ip = base * sqrt(base);
+	let y = (ip0 - ip) * invSlope;
+	let v = (y - zs[k]) * ggM;
+	let lp = v + zs[k];
+	zs[k] = lp + v;
+	return lp;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+
+let bp = 0.2 + 0.6 * clamp(bias, 0.0, 1.0);
+let a = 1.0 / (clamp(blocking_ms, 5.0, 500.0) * 0.001 * sr);
+let kc = minimum(100.0 * a, 0.5);
+// idle point: the grid-conduction squash at vg = 0 is softplus(0) / 8
+let ve0 = 0.0 - 0.9 * 0.6931471805599453 * 0.125;
+let base0 = softplus(6.0 * (ve0 + bp)) / 6.0;
+let ip0 = base0 * sqrt(base0);
+// d ip / d vg at idle: 1.5 sqrt(base) * sigmoid(6 (ve0 + bp)) * (1 - 0.45)
+let sig0 = 1.0 / (1.0 + exp(0.0 - 6.0 * (ve0 + bp)));
+let invSlope = 1.0 / maximum(1.5 * sqrt(base0) * sig0 * 0.55, 0.0001);
+let gM = tan(pi * minimum(10000.0, sr * 0.45) / sr);
+let ggM = gM / (1.0 + gM);
+let nSt: Int = trunc(clamp(stages, 1.0, 3.0) + 0.5);
+let gIn = dbtoa(clamp(drive_db, 0.0, 40.0)) * 2.0;
+
+let yL = xL * gIn;
+let yR = xR * gIn;
+for (let s: Int = 0; s < 3; s++) {
+	if (s < nSt) {
+		let gs = (s == 0) ? 1.0 : 3.0;
+		yL = triode(2 * s, yL * gs, a, kc, bp, ip0, invSlope, ggM);
+		yR = triode(2 * s + 1, yR * gs, a, kc, bp, ip0, invSlope, ggM);
+	}
+}
+
+// odd stage counts invert: flip back so mix stays in phase; the cutoff
+// ceiling (ip0 * invSlope) is scaled to -6 dBFS whatever the bias
+let pol = (nSt == 2) ? 1.0 : -1.0;
+let scl = pol * 0.5 / maximum(ip0 * invSlope, 0.0001);
+let yoL = yL * scl;
+let yoR = yR * scl;
+
+// output coupling cap (10 Hz): asymmetric clipping and blocking make DC
+let gDc = tan(pi * 10.0 / sr);
+let ggDc = gDc / (1.0 + gDc);
+let vdL = (yoL - zs[6]) * ggDc;
+let lpL = vdL + zs[6];
+zs[6] = lpL + vdL;
+let vdR = (yoR - zs[7]) * ggDc;
+let lpR = vdR + zs[7];
+zs[7] = lpR + vdR;
+let wetL = yoL - lpL;
+let wetR = yoR - lpR;
+
+let w = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(w, xL, wetL) * outGain;
+out2 = linearinterp(w, xR, wetR) * outGain;

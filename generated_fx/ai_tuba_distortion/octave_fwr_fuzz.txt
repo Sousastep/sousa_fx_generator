@@ -1,0 +1,136 @@
+// ============================================================================
+// octave_fwr_fuzz.txt — octave-up fuzz: a pitch-tracked lowpass isolates the
+//                       fundamental, a full-wave rectifier folds it up an
+//                       octave (half-wave at the other end of the knob),
+//                       then a fuzz stage saturates it
+//
+// From: S. Enderby, R. Stables, "A Nonlinear Method for Manipulating Warmth
+//       and Brightness", DAFx-17 paper 17: §3 (a lowpass isolates f0 so the
+//       nonlinear device sees a near-sinusoid; full-wave rectification of
+//       that isolated fundamental generates its harmonic series starting
+//       from the octave, positively homogeneous so it follows the input
+//       level), Figure 4 (LPF -> FWR -> band shaping);
+//       J. D. Parker, V. Zavalishin, E. Le Bivic, "Reducing the aliasing of
+//       nonlinear waveshaping using continuous-time convolution", DAFx-16
+//       paper 41, §5.1 (ADAA tanh for the fuzz stage).
+//   The isolating lowpass only feeds the rectifier; it is not a crossover
+//   (nothing is split off and passed clean).
+//
+// Signal, per channel:
+//   fc   = in3 > 0 ? track_ratio * f0 : fixed_hz     (clamped 30..2000 Hz)
+//   iso  = 4 * lp2(x, fc)                              (TPT SVF, Q 0.707)
+//   rect = (1 + o)/2 |iso| + (1 - o)/2 iso             (o = octave_pct / 100:
+//                                                       0 = half-wave,
+//                                                       1 = full-wave)
+//   rect = hp20(rect)                                  (rectifier DC)
+//   wet  = hp10(0.5 tanh_adaa(dbtoa(fuzz_db) rect))
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+//   in3: f0 in Hz. > 0 = the isolating lowpass follows track_ratio * f0;
+//        0 = disconnected -> fixed_hz. No zero-crossing fallback.
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Octave: half-wave (0) .. full-wave (100)
+@param({ min: 0, max: 100 }) octave_pct = 100;
+// Isolating lowpass = pitch x this (when in3 > 0)
+@param({ min: 1, max: 4 }) track_ratio = 1.5;
+// Isolating lowpass when in3 = 0 (Hz)
+@param({ min: 40, max: 400, exponent: 2 }) fixed_hz = 120;
+// Fuzz (dB)
+@param({ min: 0, max: 40 }) fuzz_db = 18;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+@state f0Sm = 0.0;
+// SVF states L/R
+@state ic1 = new FixedSampleArray(2);
+@state ic2 = new FixedSampleArray(2);
+@state prevU = new FixedSampleArray(2);
+// TPT one-pole states: 0/1 rectifier DC, 2/3 output DC
+@state zs = new FixedSampleArray(4);
+
+// TPT one-pole lowpass on state slot idx; gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - zs[idx]) * gg;
+	let y = v + zs[idx];
+	zs[idx] = y + v;
+	return y;
+}
+
+// Linear TPT state-variable lowpass on channel ch (k = 1/Q)
+function svfLp(ch: Int, x: number, g: number, k: number): number {
+	let a1 = 1.0 / (1.0 + g * (g + k));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - ic2[ch];
+	let v1 = a1 * ic1[ch] + a2 * v3;
+	let v2 = ic2[ch] + a2 * ic1[ch] + a3 * v3;
+	ic1[ch] = 2.0 * v1 - ic1[ch];
+	ic2[ch] = 2.0 * v2 - ic2[ch];
+	return v2;
+}
+
+// log cosh u, overflow-safe
+function logCosh(u: number): number {
+	let a = abs(u);
+	return a + log(1.0 + exp(0.0 - 2.0 * a)) - 0.6931471805599453;
+}
+
+// First-order ADAA tanh on channel ch
+function tanhAdaa(ch: Int, u: number): number {
+	let u1 = prevU[ch];
+	prevU[ch] = u;
+	let du = u - u1;
+	let y = 0.0;
+	if (abs(du) < 0.00001) {
+		y = tanh(0.5 * (u + u1));
+	} else {
+		y = (logCosh(u) - logCosh(u1)) / du;
+	}
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let pitchIn = in3;
+
+// --- Isolating lowpass: tracks f0 when in3 > 0, else fixed_hz ---------------
+let fcT = (pitchIn > 0.0) ? clamp(pitchIn, 20.0, 1000.0) * clamp(track_ratio, 1.0, 4.0) : clamp(fixed_hz, 40.0, 400.0);
+if (f0Sm <= 0.0) {
+	f0Sm = fcT;
+}
+f0Sm += (fcT - f0Sm) * (1.0 - exp(-1.0 / (0.010 * sr)));
+let fc = clamp(f0Sm, 30.0, minimum(2000.0, sr * 0.45));
+let g = tan(pi * fc / sr);
+let isoL = 4.0 * svfLp(0, xL, g, 1.4142135623730951);
+let isoR = 4.0 * svfLp(1, xR, g, 1.4142135623730951);
+
+// --- Rectifier: half-wave (0) .. full-wave (1) -----------------------------
+let o = clamp(octave_pct, 0.0, 100.0) * 0.01;
+let rL = 0.5 * (1.0 + o) * abs(isoL) + 0.5 * (1.0 - o) * isoL;
+let rR = 0.5 * (1.0 + o) * abs(isoR) + 0.5 * (1.0 - o) * isoR;
+let g20 = tan(pi * 20.0 / sr);
+let gg20 = g20 / (1.0 + g20);
+rL = rL - lp1(0, rL, gg20);
+rR = rR - lp1(1, rR, gg20);
+
+// --- Fuzz --------------------------------------------------------------------
+let G = dbtoa(clamp(fuzz_db, 0.0, 40.0));
+let fL = 0.5 * tanhAdaa(0, G * rL);
+let fR = 0.5 * tanhAdaa(1, G * rR);
+let g10 = tan(pi * 10.0 / sr);
+let gg10 = g10 / (1.0 + g10);
+let wetL = fL - lp1(2, fL, gg10);
+let wetR = fR - lp1(3, fR, gg10);
+
+let w = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(w, xL, wetL) * outGain;
+out2 = linearinterp(w, xR, wetR) * outGain;

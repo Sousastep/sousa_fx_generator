@@ -1,0 +1,53 @@
+================================================================================
+aged_supply_ripple — Parameter Information
+================================================================================
+
+WHAT IT IS
+An old amp whose filter caps have dried out. The supply can't hold its
+voltage between rectifier pulses any more, so a 100/120 Hz sawtooth ripple
+rides the rail, and the harder you play the deeper it gets: hum and
+gritty sidebands bloom inside your notes and vanish when you stop (silence
+in = silence out, no idle hum). A worn decoupling cap lets the rail feed
+back into the preamp: an attack bounces, and turned up far enough the amp
+motorboats, putt-putting at about 8 Hz while you hold a note.
+
+Source: Macak & Schimmel, DAFx-11 (2011_05_e) §3 eq. 13–14 (supply node as
+a state charged through R, drained by the tubes); Dempwolf, Holters, Möller &
+Zölzer, DAFx-09 paper 29 §4.3 (component drift changes the sound). The ripple
+and motorboat mechanisms extend that supply model to aged parts; no paper in
+the corpus models them directly.
+
+PARAMETERS (5 + output gain)
+
+1. drive_db — 0…40 dB, default 15 dB
+   Level into the amp. More drive = more current = more ripple and sag.
+
+2. mains_hz — 45…65 Hz, default 60 Hz
+   Mains frequency; the ripple runs at twice this (50 = European 100 Hz hum,
+   60 = US 120 Hz).
+
+3. cap_age_pct — 0…100 %, default 50 %
+   How dried-out the reservoir cap is: ripple depth and sag. Measured on a
+   sustained 58 Hz note, 120 Hz hum vs the note: -44 dB at 0, -24 dB at 50,
+   -18 dB at 100 (sidebands at 62/178 Hz: -52 / -29 / -21 dB).
+
+4. motorboat_pct — 0…100 %, default 20 %
+   Decoupling feedback. Below ~55 % an attack bounces (2–4 dB, settling in
+   ~150 ms); from ~60 % the amp self-oscillates at ~8 Hz while you play
+   (up to about ±5 dB swing at 100 %).
+
+5. mix — 0…1, default 1
+   Dry/wet.
+
+6. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- The ripple is a fixed mains hum, not pitch-locked: it is meant to clash.
+- One supply feeds both channels. 10 Hz DC block; antialiased clipping.
+- About -24 dB RMS out with the -32 dB RMS tuba recording at the defaults.
+- No safety limiter.

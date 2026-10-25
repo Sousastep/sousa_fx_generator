@@ -1,0 +1,55 @@
+================================================================================
+bitcrush_pitch_hold — Parameter Information
+================================================================================
+
+WHAT IT IS
+A bitcrusher whose sample-rate reduction follows your pitch. The hold clock
+runs at an exact multiple of the tuba's f0, so all the aliasing lands on
+harmonics of the note: a crunchy, chiptune-ish buzz that stays in tune
+instead of the usual clangorous fog. Bit-depth reduction adds the grainy
+staircase (and gates the quietest tails). It can also crush harder toward
+the middle of every bar.
+
+Source: Werner, DAFx-13 "Bit Bending" §2.2, §3.4.3–3.4.4 (bit-depth and
+clock bends); Parker, Zavalishin & Le Bivic, DAFx-16 paper 41 §1–2
+(continuous-time treatment of discontinuities, used here as polyBLEP steps).
+The pitch-locked clock is this effect's own design.
+
+PARAMETERS (5 + output gain)
+
+1. bits — 1…16, default 6
+   Word length (fractional values allowed). Quantization is relative to
+   full scale, so quiet playing crushes harder; 16 = practically clean.
+
+2. hold_hz — 200…48000 Hz, default 4000 Hz
+   Hold clock when in3 = 0 (no tracker): a classic, unlocked downsampler.
+   48000 (at 48 kHz) = no hold.
+
+3. pitch_ratio — 1…64, default 16
+   Hold clock = f0 × this, when in3 > 0. Low = fat, square-ish chip bass
+   (4 = four steps per cycle); high = finer grain. Measured on a 55 Hz sine:
+   off-harmonic energy -46 dB locked vs -26 dB for a fixed 4 kHz clock.
+
+4. bar_sweep — 0…1, default 0
+   Drops up to 8 bits over each bar on a smooth hump (deepest mid-bar, no
+   jump at the wrap). Needs a moving in4; with in4 held it does nothing.
+
+5. mix — 0…1, default 1
+   Dry/wet (the dry is delayed one sample to stay in phase).
+
+6. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3: f0 in Hz. > 0 locks the clock to pitch_ratio × f0 (f0 clamped
+  20…2000 Hz); 0 = disconnected -> hold_hz. No zero-crossing fallback.
+- in4: 0..1 one-bar phasor for bar_sweep; counts as running for 100 ms after
+  it last moved. Held at 0 = no sweep.
+
+NOTES
+- Steps land at their exact sub-sample time (input interpolated at the tick,
+  two-sample polyBLEP on each step); one sample of latency.
+- Mid-tread quantizer: silence in = exactly silence out.
+- Roughly level-neutral: about -32 dB RMS out with the -32 dB RMS tuba.
+- No safety limiter.

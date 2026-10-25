@@ -1,0 +1,52 @@
+================================================================================
+triode_bias_shift — Parameter Information
+================================================================================
+
+WHAT IT IS
+A cascade of 12AX7 preamp stages, with the misbehaviour left in. When a hard
+note drives a grid positive, grid current charges the coupling cap and
+shoves the next notes toward cutoff: the stage chokes, then breathes back
+over blocking_ms. On tuba that is the farty, compressed bloom of an amp
+pushed past its sweet spot. Asymmetric triode curves give a strong 2nd
+harmonic; more stages = more gain and fizz.
+
+Source: Macak & Schimmel, DAFx-10 P12 §3–5, §10 (triode and grid-current
+models, coupling-cap state); Dunkel et al., DAFx-16 paper 53 §2.2, §3.4
+(Bassman cascaded stages, triode model); Cohen & Hélie, DAFx-10 P45 §3.3
+(grid current).
+
+PARAMETERS (5 + output gain)
+
+1. drive_db — 0…40 dB, default 20 dB
+   Level into the first stage. Even 0 dB breaks up with 2+ stages.
+
+2. bias — 0…1, default 0.5
+   Operating point. 0 = cold (near cutoff: sputtery, gated, buzzy);
+   1 = hot (near grid conduction: fatter, earlier blocking).
+
+3. blocking_ms — 5…500 ms, default 60 ms
+   Coupling-cap recovery time. Measured after a loud 110 Hz burst: 5 ms =
+   no choke; 60 ms = about 15 dB dip for ~100 ms; 500 ms = silence for
+   ~300 ms, then a slow swell back.
+
+4. stages — 1…3 (stepped), default 2
+   Number of triode stages in series (later stages get ×3 gain).
+
+5. mix — 0…1, default 1
+   Dry/wet (polarity is corrected for odd stage counts).
+
+6. output_db — -36…+12 dB, default 0 dB
+   Final trim, last in the chain. Does not count toward the 8-parameter limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo tuba.  out1 / out2: stereo.
+- in3 / in4 are not used.
+
+NOTES
+- The cutoff ceiling is scaled to -6 dBFS at any bias; about -18 dB RMS out
+  with the tuba recording at the defaults.
+- A 10 kHz lowpass per stage stands in for Miller capacitance; a 10 Hz
+  output coupling cap removes the DC that blocking produces.
+- The triode curve is not antialiased (it has no closed-form antiderivative);
+  its knees are soft, so aliasing stays low at moderate drive.
+- No safety limiter.

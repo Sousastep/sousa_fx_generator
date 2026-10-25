@@ -1,0 +1,152 @@
+// ============================================================================
+// aged_supply_ripple.txt — an amp with dried-out filter caps: the reservoir
+//                          can no longer hold the rail between rectifier
+//                          peaks, so a sawtooth ripple at twice the mains
+//                          frequency rides on B+ in proportion to the
+//                          current drawn (hum sidebands that appear only while
+//                          you play), and a worn decoupling cap lets the rail
+//                          feed back into the preamp gain (motorboating)
+//
+// From: J. Macak, J. Schimmel, "Simulation of a Vacuum-Tube Push-Pull Guitar
+//       Power Amplifier", DAFx-11 (2011_05_e): §3, eq. 13-14 (the supply
+//       node V_D is a state charged from V_PS through R and discharged by
+//       the tube currents; between rectifier peaks the cap only discharges,
+//       so the droop per half-cycle is I / (C_D * 2 f_mains));
+//       K. Dempwolf, M. Holters, S. Möller, U. Zölzer, "The Influence of
+//       Small Variations in a Simplified Guitar Amplifier Model", DAFx-09
+//       paper 29: §4.3 (component drift away from nominal values — supply
+//       and coupling — audibly changes the harmonic spectrum).
+//   The ripple and motorboat mechanisms are this effect's extension of that
+//   supply model to aged parts (no paper in the corpus models them).
+//
+// Model (rail B = V_D / V_PS; one supply for both channels):
+//   I     = smoothed (|yL| + |yR|) / 2          (20 ms, plate current)
+//   Bdc  += k30ms * (1 - Bdc - S I)             (S = 0.2 + 0.6 age)
+//   B     = Bdc - D I (rp - 0.5)                (rp: 0..1 ramp at 2 mains_hz,
+//                                                D = 0.1 + 1.8 age)
+// Motorboating (the preamp's decoupling network: its gain, lagged through
+// three RC sections, feeds back on itself; load changes kick it):
+//   kick  = clamp(hp40ms(log(|G x| smoothed 20 ms + 0.01)), -0.5, 0.5)
+//   lg    = clamp(-L r, -1.2, 0.6)               (preamp log gain)
+//   d    += k20ms (lg + kick - d),  m += k30ms (d - m),  r += k80ms (m - r)
+//   gpre  = exp(lg),  L = 20 * motorboat
+// Three lags (20/30/80 ms): an attack rings as a short bounce below
+// L = 11.5 (motorboat ~58 %); above it the loop sustains an ~8 Hz putt-putt,
+// limited by the clamp. Steady notes keep their level (kick is high-passed).
+//   y     = B tanh(pre / B) + 0.3 D I (rp - 0.5)   (ripple bleeds through the
+//                                                push-pull imbalance)
+// Output y * 0.5, 10 Hz DC block. Silence in = silence out (no idle current,
+// so no ripple and no hum).
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Drive (dB)
+@param({ min: 0, max: 40 }) drive_db = 15;
+// Mains frequency (Hz; ripple at twice this)
+@param({ min: 45, max: 65 }) mains_hz = 60;
+// Filter-cap age
+@param({ min: 0, max: 100 }) cap_age_pct = 50;
+// Motorboating (decoupling feedback)
+@param({ min: 0, max: 100 }) motorboat_pct = 20;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+@state railDc = 1.0;
+@state eIn = 0.0;
+@state lEnvLp = -4.6;
+@state mbD = 0.0;
+@state mbMid = 0.0;
+@state mbPre = 0.0;
+@state iLoad = 0.0;
+@state ripPh = 0.0;
+@state prevU = new FixedSampleArray(2);
+// TPT one-pole states: 0/1 DC block
+@state zs = new FixedSampleArray(2);
+
+// TPT one-pole lowpass on state slot idx; gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - zs[idx]) * gg;
+	let y = v + zs[idx];
+	zs[idx] = y + v;
+	return y;
+}
+
+// log cosh u, overflow-safe
+function logCosh(u: number): number {
+	let a = abs(u);
+	return a + log(1.0 + exp(0.0 - 2.0 * a)) - 0.6931471805599453;
+}
+
+// First-order ADAA tanh on channel ch
+function tanhAdaa(ch: Int, u: number): number {
+	let u1 = prevU[ch];
+	prevU[ch] = u;
+	let du = u - u1;
+	let y = 0.0;
+	if (abs(du) < 0.00001) {
+		y = tanh(0.5 * (u + u1));
+	} else {
+		y = (logCosh(u) - logCosh(u1)) / du;
+	}
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+
+let G = dbtoa(clamp(drive_db, 0.0, 40.0));
+let age = clamp(cap_age_pct, 0.0, 100.0) * 0.01;
+let S = 0.2 + 0.6 * age;
+let D = 0.1 + 1.8 * age;
+let L = 20.0 * clamp(motorboat_pct, 0.0, 100.0) * 0.01;
+let kI = 1.0 - exp(-1.0 / (0.020 * sr));
+let kDc = 1.0 - exp(-1.0 / (0.030 * sr));
+let kPre = 1.0 - exp(-1.0 / (0.080 * sr));
+let kHp = 1.0 - exp(-1.0 / (0.040 * sr));
+let gDc = tan(pi * 10.0 / sr);
+let ggDc = gDc / (1.0 + gDc);
+
+// --- Rail: DC sag plus a sawtooth ripple whose depth follows the load -------
+ripPh = wrap(ripPh + 2.0 * clamp(mains_hz, 45.0, 65.0) / sr, 0.0, 1.0);
+let rip = D * iLoad * (ripPh - 0.5);
+let B = clamp(railDc - rip, 0.05, 1.5);
+
+// --- Preamp: gain set by the decoupling loop ---------------------------------
+let lg = clamp(0.0 - L * mbPre, -1.2, 0.6);
+let gPre = exp(lg);
+let preL = G * gPre * xL;
+let preR = G * gPre * xR;
+eIn = eIn + kI * (0.5 * G * (abs(xL) + abs(xR)) - eIn);
+let lEnv = log(eIn + 0.01);
+lEnvLp = lEnvLp + kHp * (lEnv - lEnvLp);
+let kick = clamp(lEnv - lEnvLp, -0.5, 0.5);
+mbD = mbD + kI * (lg + kick - mbD);
+mbMid = mbMid + kDc * (mbD - mbMid);
+mbPre = mbPre + kPre * (mbMid - mbPre);
+
+// --- Power stage on the rippling rail ----------------------------------------
+let yL = B * tanhAdaa(0, preL / B) + 0.3 * rip;
+let yR = B * tanhAdaa(1, preR / B) + 0.3 * rip;
+
+// --- Load current drains the rail -----------------------------------------
+let load = 0.5 * (abs(yL) + abs(yR));
+iLoad = iLoad + kI * (load - iLoad);
+railDc = clamp(railDc + kDc * (1.0 - railDc - S * iLoad), 0.05, 1.0);
+
+let wL = 0.5 * yL;
+let wR = 0.5 * yR;
+let wetL = wL - lp1(0, wL, ggDc);
+let wetR = wR - lp1(1, wR, ggDc);
+
+let w = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(w, xL, wetL) * outGain;
+out2 = linearinterp(w, xR, wetR) * outGain;

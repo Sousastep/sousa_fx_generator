@@ -1,0 +1,212 @@
+// ============================================================================
+// highgain_cascade_amp.txt — modern high-gain amp preamp (6505 / 5150 type):
+//                            a tight pre-high-pass, three asymmetric gain
+//                            stages with filtering between them, then a
+//                            bass / mid / treble tone stack. No cab: chain
+//                            cab_speaker_excursion after it.
+//
+// From: F. Eichas, U. Zölzer, "Black-box modeling of distortion circuits with
+//       block-oriented models", DAFx-16 paper 16: §3 (model topology: linear
+//       filter -> static nonlinearity -> linear filter, cascaded), §4-5 (the
+//       nonlinear block as a parametric, asymmetric tanh-type mapping);
+//       W. J. Cassidy, E. De Sena, "Perceptual Evaluation and Genre-specific
+//       Training of Deep Neural Network models of a High-gain Guitar
+//       Amplifier", DAFx-23 paper 40, §2 (the target: Peavey 6505, a cascade
+//       of high-gain triode stages ahead of a passive tone stack);
+//       T. Sinjanakhom et al., "Guitar Tone Stack Modeling with a Neural
+//       State-Space Filter", DAFx-24 paper 58, §2 (tone stacks: interacting
+//       low / mid / high controls, approximated here by a low shelf, a mid
+//       peak and a high shelf);
+//       J. D. Parker, V. Zavalishin, E. Le Bivic, DAFx-16 paper 41 §5.1
+//       (ADAA tanh in each stage).
+//
+// Signal, per channel:
+//   x1 = hp2(x, tight_hz)                                  (TPT SVF, Q 0.707)
+//   stage k: y = tanh_adaa(g_k u + b_k) - tanh(b_k), b = 0.25 / -0.15 / 0.1
+//            then lp (8 / 6 / 5 kHz) and a 25 Hz coupling high-pass
+//   g_1 = dbtoa(gain_db) * 2, g_2 = 4, g_3 = 3
+//   tone: low shelf 100 Hz (bass_db), peak 650 Hz Q 0.7 (mid_db),
+//         high shelf 3 kHz (treble_db)                     (RBJ biquads)
+//   wet = 0.35 * tone(y3)
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+// Outlets:
+//   out1 / out2: stereo
+// No safety limiter, no metering.
+// ============================================================================
+
+// Gain (dB)
+@param({ min: 0, max: 60 }) gain_db = 40;
+// Tight pre-high-pass (Hz)
+@param({ min: 20, max: 400, exponent: 2 }) tight_hz = 90;
+// Bass (dB)
+@param({ min: -12, max: 12 }) bass_db = 0;
+// Mid (dB)
+@param({ min: -12, max: 12 }) mid_db = -4;
+// Treble (dB)
+@param({ min: -12, max: 12 }) treble_db = 2;
+// Dry/wet
+@param({ min: 0, max: 1 }) mix = 1;
+// Output gain (dB)
+@param({ min: -36, max: 12 }) output_db = 0;
+
+// tight SVF states L/R
+@state ic1 = new FixedSampleArray(2);
+@state ic2 = new FixedSampleArray(2);
+// ADAA memory: slot = 2 * stage + ch
+@state prevU = new FixedSampleArray(6);
+@state primed = 0;
+// TPT one-pole states: lowpass 0..5, coupling high-pass 6..11 (2 * stage + ch)
+@state zs = new FixedSampleArray(12);
+// biquad states (TDF2): slot = 2 * filter + ch, two words each
+@state bq1 = new FixedSampleArray(6);
+@state bq2 = new FixedSampleArray(6);
+
+// TPT one-pole lowpass on state slot idx; gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - zs[idx]) * gg;
+	let y = v + zs[idx];
+	zs[idx] = y + v;
+	return y;
+}
+
+// Linear TPT state-variable high-pass on channel ch (k = 1/Q)
+function svfHp(ch: Int, x: number, g: number, k: number): number {
+	let a1 = 1.0 / (1.0 + g * (g + k));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - ic2[ch];
+	let v1 = a1 * ic1[ch] + a2 * v3;
+	let v2 = ic2[ch] + a2 * ic1[ch] + a3 * v3;
+	ic1[ch] = 2.0 * v1 - ic1[ch];
+	ic2[ch] = 2.0 * v2 - ic2[ch];
+	return x - k * v1 - v2;
+}
+
+// log cosh u, overflow-safe
+function logCosh(u: number): number {
+	let a = abs(u);
+	return a + log(1.0 + exp(0.0 - 2.0 * a)) - 0.6931471805599453;
+}
+
+// First-order ADAA tanh on slot k
+function tanhAdaa(k: Int, u: number): number {
+	let u1 = prevU[k];
+	prevU[k] = u;
+	let du = u - u1;
+	let y = 0.0;
+	if (abs(du) < 0.00001) {
+		y = tanh(0.5 * (u + u1));
+	} else {
+		y = (logCosh(u) - logCosh(u1)) / du;
+	}
+	return y;
+}
+
+// One gain stage on channel ch: asymmetric tanh, lowpass, coupling cap
+function stage(s: Int, ch: Int, u: number, g: number, b: number, ggLp: number, ggHp: number): number {
+	let k: Int = 2 * s + ch;
+	let y = tanhAdaa(k, g * u + b) - tanh(b);
+	y = lp1(k, y, ggLp);
+	return y - lp1(6 + k, y, ggHp);
+}
+
+// Transposed direct-form II biquad on slot k (coefficients normalized by a0)
+function biquad(k: Int, x: number, b0: number, b1: number, b2: number, a1: number, a2: number): number {
+	let y = b0 * x + bq1[k];
+	bq1[k] = b1 * x - a1 * y + bq2[k];
+	bq2[k] = b2 * x - a2 * y;
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+
+let b1s = 0.25;
+let b2s = -0.15;
+let b3s = 0.1;
+if (primed == 0) {
+	prevU[0] = b1s;
+	prevU[1] = b1s;
+	prevU[2] = b2s;
+	prevU[3] = b2s;
+	prevU[4] = b3s;
+	prevU[5] = b3s;
+	primed = 1;
+}
+
+// --- Tight pre-high-pass -----------------------------------------------------
+let gT = tan(pi * clamp(tight_hz, 20.0, 400.0) / sr);
+let tL = svfHp(0, xL, gT, 1.4142135623730951);
+let tR = svfHp(1, xR, gT, 1.4142135623730951);
+
+// --- Three gain stages -------------------------------------------------------
+let g1 = dbtoa(clamp(gain_db, 0.0, 60.0)) * 2.0;
+let gLp1 = tan(pi * minimum(8000.0, sr * 0.45) / sr);
+let gLp2 = tan(pi * minimum(6000.0, sr * 0.45) / sr);
+let gLp3 = tan(pi * minimum(5000.0, sr * 0.45) / sr);
+let gHp = tan(pi * 25.0 / sr);
+let ggLp1 = gLp1 / (1.0 + gLp1);
+let ggLp2 = gLp2 / (1.0 + gLp2);
+let ggLp3 = gLp3 / (1.0 + gLp3);
+let ggHp = gHp / (1.0 + gHp);
+let sL = stage(0, 0, tL, g1, b1s, ggLp1, ggHp);
+let sR = stage(0, 1, tR, g1, b1s, ggLp1, ggHp);
+sL = stage(1, 0, sL, 4.0, b2s, ggLp2, ggHp);
+sR = stage(1, 1, sR, 4.0, b2s, ggLp2, ggHp);
+sL = stage(2, 0, sL, 3.0, b3s, ggLp3, ggHp);
+sR = stage(2, 1, sR, 3.0, b3s, ggLp3, ggHp);
+
+// --- Tone stack: low shelf / mid peak / high shelf (RBJ) --------------------
+let sq2 = 1.4142135623730951;
+// low shelf, 100 Hz, S = 1
+let aB = pow(10.0, clamp(bass_db, -12.0, 12.0) / 40.0);
+let wB = 2.0 * pi * 100.0 / sr;
+let cB = cos(wB);
+let alB = 0.5 * sin(wB) * sq2;
+let rB = 2.0 * sqrt(aB) * alB;
+let a0B = (aB + 1.0) + (aB - 1.0) * cB + rB;
+let lb0 = aB * ((aB + 1.0) - (aB - 1.0) * cB + rB) / a0B;
+let lb1 = 2.0 * aB * ((aB - 1.0) - (aB + 1.0) * cB) / a0B;
+let lb2 = aB * ((aB + 1.0) - (aB - 1.0) * cB - rB) / a0B;
+let la1 = (0.0 - 2.0) * ((aB - 1.0) + (aB + 1.0) * cB) / a0B;
+let la2 = ((aB + 1.0) + (aB - 1.0) * cB - rB) / a0B;
+// mid peak, 650 Hz, Q 0.7
+let aM = pow(10.0, clamp(mid_db, -12.0, 12.0) / 40.0);
+let wM = 2.0 * pi * 650.0 / sr;
+let cM = cos(wM);
+let alM = sin(wM) / (2.0 * 0.7);
+let a0M = 1.0 + alM / aM;
+let mb0 = (1.0 + alM * aM) / a0M;
+let mb1 = (0.0 - 2.0) * cM / a0M;
+let mb2 = (1.0 - alM * aM) / a0M;
+let ma2 = (1.0 - alM / aM) / a0M;
+// high shelf, 3 kHz, S = 1
+let aT = pow(10.0, clamp(treble_db, -12.0, 12.0) / 40.0);
+let wT = 2.0 * pi * minimum(3000.0, sr * 0.45) / sr;
+let cT = cos(wT);
+let alT = 0.5 * sin(wT) * sq2;
+let rT = 2.0 * sqrt(aT) * alT;
+let a0T = (aT + 1.0) - (aT - 1.0) * cT + rT;
+let hb0 = aT * ((aT + 1.0) + (aT - 1.0) * cT + rT) / a0T;
+let hb1 = (0.0 - 2.0) * aT * ((aT - 1.0) + (aT + 1.0) * cT) / a0T;
+let hb2 = aT * ((aT + 1.0) + (aT - 1.0) * cT - rT) / a0T;
+let ha1 = 2.0 * ((aT - 1.0) - (aT + 1.0) * cT) / a0T;
+let ha2 = ((aT + 1.0) - (aT - 1.0) * cT - rT) / a0T;
+
+let oL = biquad(0, sL, lb0, lb1, lb2, la1, la2);
+let oR = biquad(1, sR, lb0, lb1, lb2, la1, la2);
+oL = biquad(2, oL, mb0, mb1, mb2, mb1, ma2);
+oR = biquad(3, oR, mb0, mb1, mb2, mb1, ma2);
+oL = biquad(4, oL, hb0, hb1, hb2, ha1, ha2);
+oR = biquad(5, oR, hb0, hb1, hb2, ha1, ha2);
+
+let wetL = 0.35 * oL;
+let wetR = 0.35 * oR;
+
+let w = clamp(mix, 0.0, 1.0);
+let outGain = dbtoa(clamp(output_db, -36.0, 12.0));
+out1 = linearinterp(w, xL, wetL) * outGain;
+out2 = linearinterp(w, xR, wetR) * outGain;
