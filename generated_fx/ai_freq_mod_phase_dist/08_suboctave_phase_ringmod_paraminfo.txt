@@ -30,6 +30,7 @@ PARAMETERS (4)
    - Range: 0.0 to 0.92 (Feedback Amplitude Modulation Coefficient k)
    - Taper: Power curve (x^1.4) for subtle warmth in the lower half and aggressive sawtooth brightening near 0.92.
    - Function: Feeds the previous output sample y[n-1] back into the amplitude modulator (Kleimola et al. 2011), transforming rounded brass partials into a bright, buzzy harmonic slope.
+   - Level-independent: the feedback loop runs on the tuba normalised by its own peak envelope (200 ms release) and the envelope is restored afterwards, as FBAM expects a full-scale carrier. (Earlier versions fed back the raw output, so at playing level the term was 60-70 dB down and the knob did nothing.) On a steady 58 Hz sine with rm_depth 0 the 2nd harmonic sits about -22 dB at 0.35 and -12 dB at 0.92; on the tuba take the output rises about +1 dB at 0.35 and +4 dB at 0.92.
 
 4. mix
    - Range: 0.0 to 1.0 (0% Dry to 100% Wet)

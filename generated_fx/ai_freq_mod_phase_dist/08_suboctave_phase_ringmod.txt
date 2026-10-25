@@ -37,6 +37,8 @@
 // Feedback AM state (Kleimola et al. 2011)
 @state prevYL = 0.0;
 @state prevYR = 0.0;
+@state envL = 0.0;
+@state envR = 0.0;
 
 // Pre-filter for clean fundamental phase tracking, fallback tracker + DC blockers
 @state lpTrack = new onepole();
@@ -155,20 +157,31 @@ let kFb = pow(clamp(fb_am / 0.92, 0.0, 1.0), 1.4) * 0.92;
 let amModL = (1.0 - d) + d * modWaveL;
 let amModR = (1.0 - d) + d * modWaveR;
 
-let rawYL = xL * (amModL + kFb * prevYL);
-let rawYR = xR * (amModR + kFb * prevYR);
+// FBAM assumes a unit-amplitude carrier: at tuba level (~0.03) the raw k*y[n-1] term
+// is k*x^2, 60-70 dB down, so fb_am was inaudible. Run the loop on the peak-normalised
+// carrier and restore the envelope afterwards (exactly the old path when fb_am = 0).
+let envRel = exp(-1.0 / (0.2 * sr));
+envL = maximum(abs(xL), envL * envRel);
+envR = maximum(abs(xR), envR * envRel);
+let normL = maximum(envL, 0.0005);
+let normR = maximum(envR, 0.0005);
+
+let fbYL = (xL / normL) * (amModL + kFb * prevYL);
+let fbYR = (xR / normR) * (amModR + kFb * prevYR);
 
 // Soft-saturate feedback loop to prevent runaway while keeping sawtooth bite
-prevYL = tanh(rawYL);
-prevYR = tanh(rawYR);
+prevYL = tanh(fbYL);
+prevYR = tanh(fbYR);
+let wetL = tanh(fbYL * normL);
+let wetR = tanh(fbYR * normR);
 
 // --- 5. DC Blocking Filter (Highpass at ~12 Hz) ---
 let dcR = 1.0 - (2.0 * pi * 12.0 / sr);
-let cleanL = prevYL - dcX1L + dcR * dcY1L;
-dcX1L = prevYL; dcY1L = cleanL;
+let cleanL = wetL - dcX1L + dcR * dcY1L;
+dcX1L = wetL; dcY1L = cleanL;
 
-let cleanR = prevYR - dcX1R + dcR * dcY1R;
-dcX1R = prevYR; dcY1R = cleanR;
+let cleanR = wetR - dcX1R + dcR * dcY1R;
+dcX1R = wetR; dcY1R = cleanR;
 
 out1 = linearinterp(clamp(mix, 0.0, 1.0), xL, cleanL);
 out2 = linearinterp(clamp(mix, 0.0, 1.0), xR, cleanR);
