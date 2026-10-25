@@ -13,26 +13,30 @@
 //      with harmonic number k (Eq. 1 & Fig. 7)!
 //   2. Section 3 & 4 (Fig. 1-5, Eq. 17-23): Hutchins Multi-Channel Triangle-LFO
 //      Comparator PWM Waveform Animator, peaking at duty-cycle width 0.70 (Fig. 5).
+//      The paper's input is a sawtooth of known amplitude A; for live audio the input is
+//      normalised by its peak envelope so the LFO threshold stays at 0.70 of the signal
+//      level, and the comparator output is scaled back by that envelope (silent in rests).
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Tracked Pitch f0 in Hz or Detune Spread Modulator [0..1]
-//   in4: Optional 1-Bar Phasor [0..1]
+//   in3: unused
+//   in4: unused
 // Outlets:
 //   out1: Left 7-Voice Unison Supersaw Animated Chorus Output
 //   out2: Right 7-Voice Unison Supersaw Animated Chorus Output
 
-@param({ min: 1.0, max: 45.0 }) unison_detune_cents = 14.0;
-@param({ min: 12.0, max: 45.0 }) grain_window_ms = 24.0;
-@param({ min: 0.0, max: 1.0 }) hutchins_pwm_anim = 0.25;
-@param({ min: 0.1, max: 2.0 }) pwm_lfo_rate_hz = 0.65;
-@param({ min: 0.0, max: 1.0 }) stereo_voice_spread = 0.85;
-@param({ min: 0.0, max: 1.0 }) center_to_side_mix = 0.65;
+@param({ min: 1.0, max: 45.0 }) unison_detune_cents = 14.0;     // outer voice detune
+@param({ min: 12.0, max: 45.0 }) grain_window_ms = 24.0;        // shifter window
+@param({ min: 0.0, max: 1.0 }) hutchins_pwm_anim = 0.25;        // PWM animator depth
+@param({ min: 0.1, max: 2.0 }) pwm_lfo_rate_hz = 0.65;          // animator LFO rate
+@param({ min: 0.0, max: 1.0 }) stereo_voice_spread = 0.85;      // stereo spread
+@param({ min: 0.0, max: 1.0 }) center_to_side_mix = 0.65;       // side voice level
 
-// Circular delay buffers for the 4 dual-grain pitch-shifter voices + 2 LFO voices (4096 samples)
-@state animBufL = new FixedSampleArray(4096);
-@state animBufR = new FixedSampleArray(4096);
+// Circular delay buffers for the 4 dual-grain pitch-shifter voices + 2 LFO voices
+// (16384 samples: the 45 ms window plus margin fits at 192 kHz)
+@state animBufL = new FixedSampleArray(16384);
+@state animBufR = new FixedSampleArray(16384);
 @state writeIdx: Int = 0;
 
 // Ramp phases gamma_1..gamma_4 for transpositions s, s^3, 1/s, 1/s^3 (DAFx-14 Eq. 24-27, Fig. 6)
@@ -44,12 +48,22 @@
 @state triPh3 = new phasor();
 @state dcXL = 0.0; @state dcYL = 0.0;
 @state dcXR = 0.0; @state dcYR = 0.0;
+// Peak envelopes that normalise the live input for the Hutchins comparators
+@state envPkL = 0.0; @state envPkR = 0.0;
+@state in2Hold = 0.0;
 
 // Evaluate dual-head raised-cosine windowed pitch shifter (DAFx-14 Sec 5, Eq. 24-27)
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 
 animBufL[writeIdx] = xL;
 animBufR[writeIdx] = xR;
@@ -62,7 +76,7 @@ let s3Ratio = sRatio * sRatio * sRatio;
 let invSRatio = 1.0 / sRatio;
 let invS3Ratio = 1.0 / s3Ratio;
 
-let tauSamps = clamp(mstosamps(clamp(grain_window_ms, 12.0, 45.0)), 256.0, 3800.0);
+let tauSamps = clamp(mstosamps(clamp(grain_window_ms, 12.0, 45.0)), 256.0, 16370.0);
 
 // Eq. 25: delay growth rate dD/dt = 1 - s, normalized by window length tauSamps
 let inc0 = (1.0 - sRatio) / tauSamps;
@@ -82,15 +96,15 @@ let g2A = wrap(g1A + 0.5, 0.0, 1.0);
 let w1A = 0.5 * (1.0 - cos(2.0 * pi * g1A));
 let w2A = 1.0 - w1A;
 let d1A = 4.0 + g1A * tauSamps;
-let rp1A = writeIdx - clamp(d1A, 2.0, 4090.0);
-while (rp1A < 0.0) { rp1A += 4096.0; }
+let rp1A = writeIdx - clamp(d1A, 2.0, 16378.0);
+while (rp1A < 0.0) { rp1A += 16384.0; }
 let i1A: Int = floor(rp1A);
-let r1A = cubicinterp(rp1A - i1A, animBufL[(i1A - 1 + 4096) & 4095], animBufL[i1A & 4095], animBufL[(i1A + 1) & 4095], animBufL[(i1A + 2) & 4095]);
+let r1A = cubicinterp(rp1A - i1A, animBufL[(i1A - 1 + 16384) & 16383], animBufL[i1A & 16383], animBufL[(i1A + 1) & 16383], animBufL[(i1A + 2) & 16383]);
 let d2A = 4.0 + g2A * tauSamps;
-let rp2A = writeIdx - clamp(d2A, 2.0, 4090.0);
-while (rp2A < 0.0) { rp2A += 4096.0; }
+let rp2A = writeIdx - clamp(d2A, 2.0, 16378.0);
+while (rp2A < 0.0) { rp2A += 16384.0; }
 let i2A: Int = floor(rp2A);
-let r2A = cubicinterp(rp2A - i2A, animBufL[(i2A - 1 + 4096) & 4095], animBufL[i2A & 4095], animBufL[(i2A + 1) & 4095], animBufL[(i2A + 2) & 4095]);
+let r2A = cubicinterp(rp2A - i2A, animBufL[(i2A - 1 + 16384) & 16383], animBufL[i2A & 16383], animBufL[(i2A + 1) & 16383], animBufL[(i2A + 2) & 16383]);
 let vUp1L = w1A * r1A + w2A * r2A;
 
 let g1B = wrap(rampPh[1], 0.0, 1.0);
@@ -98,15 +112,15 @@ let g2B = wrap(g1B + 0.5, 0.0, 1.0);
 let w1B = 0.5 * (1.0 - cos(2.0 * pi * g1B));
 let w2B = 1.0 - w1B;
 let d1B = 4.0 + g1B * tauSamps;
-let rp1B = writeIdx - clamp(d1B, 2.0, 4090.0);
-while (rp1B < 0.0) { rp1B += 4096.0; }
+let rp1B = writeIdx - clamp(d1B, 2.0, 16378.0);
+while (rp1B < 0.0) { rp1B += 16384.0; }
 let i1B: Int = floor(rp1B);
-let r1B = cubicinterp(rp1B - i1B, animBufR[(i1B - 1 + 4096) & 4095], animBufR[i1B & 4095], animBufR[(i1B + 1) & 4095], animBufR[(i1B + 2) & 4095]);
+let r1B = cubicinterp(rp1B - i1B, animBufR[(i1B - 1 + 16384) & 16383], animBufR[i1B & 16383], animBufR[(i1B + 1) & 16383], animBufR[(i1B + 2) & 16383]);
 let d2B = 4.0 + g2B * tauSamps;
-let rp2B = writeIdx - clamp(d2B, 2.0, 4090.0);
-while (rp2B < 0.0) { rp2B += 4096.0; }
+let rp2B = writeIdx - clamp(d2B, 2.0, 16378.0);
+while (rp2B < 0.0) { rp2B += 16384.0; }
 let i2B: Int = floor(rp2B);
-let r2B = cubicinterp(rp2B - i2B, animBufR[(i2B - 1 + 4096) & 4095], animBufR[i2B & 4095], animBufR[(i2B + 1) & 4095], animBufR[(i2B + 2) & 4095]);
+let r2B = cubicinterp(rp2B - i2B, animBufR[(i2B - 1 + 16384) & 16383], animBufR[i2B & 16383], animBufR[(i2B + 1) & 16383], animBufR[(i2B + 2) & 16383]);
 let vUp3R = w1B * r1B + w2B * r2B;
 
 let g1C = wrap(rampPh[2], 0.0, 1.0);
@@ -114,15 +128,15 @@ let g2C = wrap(g1C + 0.5, 0.0, 1.0);
 let w1C = 0.5 * (1.0 - cos(2.0 * pi * g1C));
 let w2C = 1.0 - w1C;
 let d1C = 4.0 + g1C * tauSamps;
-let rp1C = writeIdx - clamp(d1C, 2.0, 4090.0);
-while (rp1C < 0.0) { rp1C += 4096.0; }
+let rp1C = writeIdx - clamp(d1C, 2.0, 16378.0);
+while (rp1C < 0.0) { rp1C += 16384.0; }
 let i1C: Int = floor(rp1C);
-let r1C = cubicinterp(rp1C - i1C, animBufR[(i1C - 1 + 4096) & 4095], animBufR[i1C & 4095], animBufR[(i1C + 1) & 4095], animBufR[(i1C + 2) & 4095]);
+let r1C = cubicinterp(rp1C - i1C, animBufR[(i1C - 1 + 16384) & 16383], animBufR[i1C & 16383], animBufR[(i1C + 1) & 16383], animBufR[(i1C + 2) & 16383]);
 let d2C = 4.0 + g2C * tauSamps;
-let rp2C = writeIdx - clamp(d2C, 2.0, 4090.0);
-while (rp2C < 0.0) { rp2C += 4096.0; }
+let rp2C = writeIdx - clamp(d2C, 2.0, 16378.0);
+while (rp2C < 0.0) { rp2C += 16384.0; }
 let i2C: Int = floor(rp2C);
-let r2C = cubicinterp(rp2C - i2C, animBufR[(i2C - 1 + 4096) & 4095], animBufR[i2C & 4095], animBufR[(i2C + 1) & 4095], animBufR[(i2C + 2) & 4095]);
+let r2C = cubicinterp(rp2C - i2C, animBufR[(i2C - 1 + 16384) & 16383], animBufR[i2C & 16383], animBufR[(i2C + 1) & 16383], animBufR[(i2C + 2) & 16383]);
 let vDn1R = w1C * r1C + w2C * r2C;
 
 let g1D = wrap(rampPh[3], 0.0, 1.0);
@@ -130,15 +144,15 @@ let g2D = wrap(g1D + 0.5, 0.0, 1.0);
 let w1D = 0.5 * (1.0 - cos(2.0 * pi * g1D));
 let w2D = 1.0 - w1D;
 let d1D = 4.0 + g1D * tauSamps;
-let rp1D = writeIdx - clamp(d1D, 2.0, 4090.0);
-while (rp1D < 0.0) { rp1D += 4096.0; }
+let rp1D = writeIdx - clamp(d1D, 2.0, 16378.0);
+while (rp1D < 0.0) { rp1D += 16384.0; }
 let i1D: Int = floor(rp1D);
-let r1D = cubicinterp(rp1D - i1D, animBufL[(i1D - 1 + 4096) & 4095], animBufL[i1D & 4095], animBufL[(i1D + 1) & 4095], animBufL[(i1D + 2) & 4095]);
+let r1D = cubicinterp(rp1D - i1D, animBufL[(i1D - 1 + 16384) & 16383], animBufL[i1D & 16383], animBufL[(i1D + 1) & 16383], animBufL[(i1D + 2) & 16383]);
 let d2D = 4.0 + g2D * tauSamps;
-let rp2D = writeIdx - clamp(d2D, 2.0, 4090.0);
-while (rp2D < 0.0) { rp2D += 4096.0; }
+let rp2D = writeIdx - clamp(d2D, 2.0, 16378.0);
+while (rp2D < 0.0) { rp2D += 16384.0; }
 let i2D: Int = floor(rp2D);
-let r2D = cubicinterp(rp2D - i2D, animBufL[(i2D - 1 + 4096) & 4095], animBufL[i2D & 4095], animBufL[(i2D + 1) & 4095], animBufL[(i2D + 2) & 4095]);
+let r2D = cubicinterp(rp2D - i2D, animBufL[(i2D - 1 + 16384) & 16383], animBufL[i2D & 16383], animBufL[(i2D + 1) & 16383], animBufL[(i2D + 2) & 16383]);
 let vDn3L = w1D * r1D + w2D * r2D;
 
 // --- 2. Hutchins Multi-Channel Comparator PWM Animator + LFO Voices 5 & 6 (Sec 3 & 4) ---
@@ -148,33 +162,36 @@ let t1 = 2.0 * triangle(triPh1.next(lfoRate * 0.73), 0.5) - 1.0;
 let t2 = 2.0 * triangle(triPh2.next(lfoRate * 1.00), 0.5) - 1.0;
 let t3 = 2.0 * triangle(triPh3.next(lfoRate * 1.37), 0.5) - 1.0;
 
-// Voices 5 & 6: Smoothly modulated delay-line unison voices
-let rpV5L = writeIdx - clamp(180.0 + 140.0 * t1, 2.0, 4090.0);
-while (rpV5L < 0.0) { rpV5L += 4096.0; }
+// Voices 5 & 6: Smoothly modulated delay-line unison voices (3.75 / 4.375 ms +/- 2.92 ms)
+let rpV5L = writeIdx - clamp(mstosamps(3.75 + 2.92 * t1), 2.0, 16378.0);
+while (rpV5L < 0.0) { rpV5L += 16384.0; }
 let iV5L: Int = floor(rpV5L);
-let vLfo5L = cubicinterp(rpV5L - iV5L, animBufL[(iV5L - 1 + 4096) & 4095], animBufL[iV5L & 4095], animBufL[(iV5L + 1) & 4095], animBufL[(iV5L + 2) & 4095]);
+let vLfo5L = cubicinterp(rpV5L - iV5L, animBufL[(iV5L - 1 + 16384) & 16383], animBufL[iV5L & 16383], animBufL[(iV5L + 1) & 16383], animBufL[(iV5L + 2) & 16383]);
 
-let rpV6R = writeIdx - clamp(210.0 + 140.0 * t2, 2.0, 4090.0);
-while (rpV6R < 0.0) { rpV6R += 4096.0; }
+let rpV6R = writeIdx - clamp(mstosamps(4.375 + 2.92 * t2), 2.0, 16378.0);
+while (rpV6R < 0.0) { rpV6R += 16384.0; }
 let iV6R: Int = floor(rpV6R);
-let vLfo6R = cubicinterp(rpV6R - iV6R, animBufR[(iV6R - 1 + 4096) & 4095], animBufR[iV6R & 4095], animBufR[(iV6R + 1) & 4095], animBufR[(iV6R + 2) & 4095]);
+let vLfo6R = cubicinterp(rpV6R - iV6R, animBufR[(iV6R - 1 + 16384) & 16383], animBufR[iV6R & 16383], animBufR[(iV6R + 1) & 16383], animBufR[(iV6R + 2) & 16383]);
 
-writeIdx = (writeIdx + 1) & 4095;
+writeIdx = (writeIdx + 1) & 16383;
 
 // Hutchins Soft-Comparator PWM Animator (Fig. 1-3, Eq. 2-17):
-// Subtract slow triangle LFO (scaled by 0.70 optimal duty-cycle width, Fig. 5) from signal
-// and subtract smooth comparator step when (x - LFO) crosses threshold
+// Compare the envelope-normalised signal u = x / env against a slow triangle LFO scaled by
+// the 0.70 optimal duty-cycle width (Fig. 5), then subtract the smooth comparator step,
+// scaled back by env so the pulse tracks the playing level and vanishes in rests
 let pwmAmt = clamp(hutchins_pwm_anim, 0.0, 1.0);
-let diff1L = xL - 0.70 * t1;
-let diff2L = xL - 0.70 * t3;
-let comp1L = 0.5 * (1.0 + tanh(12.0 * diff1L)) - 0.5;
-let comp2L = 0.5 * (1.0 + tanh(12.0 * diff2L)) - 0.5;
+let pkRel = exp(-1.0 / (0.08 * sr));
+envPkL = maximum(abs(xL), envPkL * pkRel);
+envPkR = maximum(abs(xR), envPkR * pkRel);
+let uL = xL / (envPkL + 0.0001);
+let uR = xR / (envPkR + 0.0001);
+
+let comp1L = 0.5 * tanh(12.0 * (uL - 0.70 * t1)) * envPkL;
+let comp2L = 0.5 * tanh(12.0 * (uL - 0.70 * t3)) * envPkL;
 let hutchL = xL - pwmAmt * 0.45 * (comp1L + comp2L);
 
-let diff1R = xR - 0.70 * t2;
-let diff2R = xR + 0.70 * t3;
-let comp1R = 0.5 * (1.0 + tanh(12.0 * diff1R)) - 0.5;
-let comp2R = 0.5 * (1.0 + tanh(12.0 * diff2R)) - 0.5;
+let comp1R = 0.5 * tanh(12.0 * (uR - 0.70 * t2)) * envPkR;
+let comp2R = 0.5 * tanh(12.0 * (uR + 0.70 * t3)) * envPkR;
 let hutchR = xR - pwmAmt * 0.45 * (comp1R + comp2R);
 
 let animCleanL = hutchL - dcXL + 0.995 * dcYL;

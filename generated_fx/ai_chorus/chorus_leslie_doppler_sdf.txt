@@ -19,19 +19,20 @@
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Speed Brake/Throw Switch or Envelope [0..1] (0 = Chorale, 1 = Tremolo)
-//   in4: Optional 1-Bar Phasor [0..1]
+//   in3: Optional Speed Throw Switch or Envelope [0..1] (added to speed_chorale_tremolo).
+//        Exception to the in3-pitch contract: values above 20 (a pitch in Hz) are ignored.
+//   in4: unused
 // Outlets:
 //   out1: Left Stereo Leslie Cabinet Chorus Output
 //   out2: Right Stereo Leslie Cabinet Chorus Output
 
-@param({ min: 0.0, max: 1.0 }) speed_chorale_tremolo = 0.25;
-@param({ min: 0.0, max: 1.0 }) doppler_horn_depth = 0.65;
-@param({ min: 0.0, max: 1.0 }) sdf_dispersion_depth = 0.70;
-@param({ min: 0.0, max: 1.0 }) directional_am_depth = 0.55;
-@param({ min: 0.0, max: 18.0 }) tube_amp_growl_db = 4.5;
-@param({ min: 0.0, max: 1.0 }) cabinet_stereo_width = 0.80;
-@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 1.0;
+@param({ min: 0.0, max: 1.0 }) speed_chorale_tremolo = 0.25;   // rotor speed
+@param({ min: 0.0, max: 1.0 }) doppler_horn_depth = 0.65;       // horn Doppler depth
+@param({ min: 0.0, max: 1.0 }) sdf_dispersion_depth = 0.70;     // SDF phase depth
+@param({ min: 0.0, max: 1.0 }) directional_am_depth = 0.55;     // rotor AM depth
+@param({ min: 0.0, max: 18.0 }) tube_amp_growl_db = 4.5;        // amp drive
+@param({ min: 0.0, max: 1.0 }) cabinet_stereo_width = 0.80;     // stereo width
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 1.0;               // dry/wet
 
 // 800 Hz Crossover Filters (DAFx-11 Sec 3.2: 2-stage cascaded one-poles per channel)
 @state xLp1L = new onepole(); @state xLp2L = new onepole();
@@ -53,15 +54,25 @@
 @state drumPhasor = new phasor();
 @state smoothHornHz = 1.8;
 @state smoothDrumHz = 1.7;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
-let throwIn = clamp(in3, 0.0, 1.0);
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
+let throwIn = (in3 > 20.0) ? 0.0 : clamp(in3, 0.0, 1.0);
 
 // --- 1. Leslie Tube Amplifier Soft Overdrive ("Growl", DAFx-02 Sec 1) ---
+// Level-matched at a -12 dBFS (0.25) reference: more drive saturates peaks
+// without making normal playing levels louder
 let growlGain = dbtoa(clamp(tube_amp_growl_db, 0.0, 18.0));
-let normGrowl = 1.0 / tanh(maximum(growlGain * 0.7, 0.8));
+let normGrowl = 0.25 / tanh(growlGain * 0.7 * 0.25);
 let ampL = tanh(xL * growlGain * 0.7) * normGrowl;
 let ampR = tanh(xR * growlGain * 0.7) * normGrowl;
 
@@ -72,10 +83,10 @@ let trebInL = ampL - bassInL;
 let trebInR = ampR - bassInR;
 
 // --- 3. Dual Motor Speeds with Physical Acceleration Inertia (DAFx-11 Sec 3.2) ---
-// Slow (Chorale) ~ 0.8..2.0 Hz, Fast (Tremolo) ~ 6.0..6.8 Hz, with 0.1 Hz mistuning
+// Slow (Chorale) 0.85 Hz, Fast (Tremolo) 6.2 Hz, bass drum 0.1 Hz below the horn
 let speedCtrl = clamp(speed_chorale_tremolo + throwIn, 0.0, 1.0);
 let targetHornHz = 0.85 + 5.35 * speedCtrl;
-let targetDrumHz = 0.75 + 5.05 * speedCtrl; // 0.1-0.3 Hz mistuning (Henricksen / Pekonen Sec 3.2)
+let targetDrumHz = targetHornHz - 0.1; // 0.1 Hz motor mistuning (Henricksen / Pekonen Sec 3.2)
 
 // Treble horn accelerates in ~0.8s; heavy wooden bass drum takes ~2.5s!
 let hornSlew = 1.0 - exp(-1.0 / (0.18 * sr));
@@ -132,8 +143,8 @@ for (let k: Int = 0; k < 4; k++) {
 }
 
 // --- 5. Bass Pathway: 3-Stage Time-Varying SDF (DAFx-11 Table 1: N = 3, Mb = -0.92, Ms = 0.04) ---
-let mBassL = clamp(-0.92 + 0.055 * sdfDepth * sinDrumL, -0.97, -0.50);
-let mBassR = clamp(-0.92 + 0.055 * sdfDepth * sinDrumR, -0.97, -0.50);
+let mBassL = clamp(-0.92 + 0.04 * sdfDepth * sinDrumL, -0.97, -0.50);
+let mBassR = clamp(-0.92 + 0.04 * sdfDepth * sinDrumR, -0.97, -0.50);
 
 let bSigL = bassInL;
 let bSigR = bassInR;
@@ -146,16 +157,21 @@ for (let k: Int = 0; k < 3; k++) {
 }
 
 // --- 6. Synchronous Directional Horn/Drum AM & Cabinet Cross-Mixing (DAFx-99 Fig. 8-9) ---
+// Loudest when the horn mouth points at the mic, which is also its closest (minimum-delay,
+// zero-Doppler) point: delay goes as +sin, so the AM goes as -sin
 let amAmt = clamp(directional_am_depth, 0.0, 1.0) * 0.45;
-let hornModL = tSigL * (1.0 + amAmt * cosHornA);
-let hornModR = tSigR * (1.0 + amAmt * cosHornB);
+let hornModL = tSigL * (1.0 - amAmt * sinHornA);
+let hornModR = tSigR * (1.0 - amAmt * sinHornB);
 let drumModL = bSigL * (1.0 + amAmt * 0.7 * sinDrumL);
 let drumModR = bSigR * (1.0 + amAmt * 0.7 * sinDrumR);
 
-// DAFx-99 Fig. 9: 0.7 cross-mixing of opposite horns inside the wooden cabinet
+// DAFx-99 Fig. 9: cross-mixing of opposite horns inside the wooden cabinet
+// (cross gain 1.0 = mono at width 0, 0.35 at width 1; Fig. 9's 0.7 is width ~0.46).
+// cabGain keeps the level of coherent (bass) content constant across the width range.
 let crossMix = 1.0 - 0.65 * clamp(cabinet_stereo_width, 0.0, 1.0);
-let cabL = (hornModL + crossMix * hornModR) * 0.75 + (drumModL + crossMix * drumModR) * 0.75;
-let cabR = (hornModR + crossMix * hornModL) * 0.75 + (drumModR + crossMix * drumModL) * 0.75;
+let cabGain = 1.11 / (1.0 + crossMix);
+let cabL = (hornModL + crossMix * hornModR) * cabGain + (drumModL + crossMix * drumModR) * cabGain;
+let cabR = (hornModR + crossMix * hornModL) * cabGain + (drumModR + crossMix * drumModL) * cabGain;
 
 let mix = clamp(dry_wet_mix, 0.0, 1.0);
 out1 = linearinterp(mix, xL, cabL);

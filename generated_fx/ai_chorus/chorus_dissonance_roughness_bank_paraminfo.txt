@@ -8,8 +8,8 @@ A standalone stereo Critical-Band Chorus & Sensory Roughness Processor ("Dissona
 - Cranking `roughness_scale_g` to 1.00 places every subband at the exact Kameoka-Kuriyagawa maximum sensory roughness peak for aggressive dubstep/riddim brass growl!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
-- in3: Optional Envelope Modulator [0..1] (dynamically boosts `impact_depth_p` on loud notes, acting as the "dissonance pedal" described in DAFx-08 Section 2.1)
+- in1 / in2: Stereo Audio Input (Tuba). If in2 stays silent for 250 ms, in1 is used for both sides.
+- in3: Optional Envelope Modulator [0..1] (adds up to +0.35 to `impact_depth_p` on loud notes, acting as the "dissonance pedal" described in DAFx-08 Section 2.1). This is an exception to the repo's in3-pitch convention: values above 20 (a tracked pitch in Hz) are ignored.
 - in4: Unused / Thru
 - out1 / out2: Stereo Critical-Band Roughness / Chorus Output
 
@@ -28,7 +28,7 @@ PARAMETERS (6)
 3. noise_smear_chorus
    - Range: 0.0 to 1.0 (0.0 = Section 2 Periodic Sinusoidal Beating, 1.0 = Section 4 Lowpass-Noise Dissonance-Reduction Chorus; Default: 0.40)
    - Taper: Linear crossfade between sinusoidal and subband-filtered random noise modulators (DAFx-08 Section 4, p. 4).
-   - Function: Implements the Section 4 discovery that modulating subbands with narrowband lowpass-filtered noise smears sharp beating partials into a warm, choir-like ensemble resonance.
+   - Function: Implements the Section 4 discovery that modulating subbands with narrowband lowpass-filtered noise smears sharp beating partials into a warm, choir-like ensemble resonance. Each band's noise is lowpassed at 1.5 × its beat rate and normalized to unit level before a tanh, so the noise modulator is about as strong as the sine it replaces at any `roughness_scale_g` and sample rate.
 
 4. bass_clean_protect
    - Range: 0.0 to 1.0 (Sub/Bass Band Protection < 160 Hz, Default: 0.70)
@@ -37,8 +37,8 @@ PARAMETERS (6)
 
 5. subband_am_expand
    - Range: 0.0 to 1.0 (Section 3 Fast/Slow Envelope Ratio Exponent `p`, Default: 0.30)
-   - Taper: Linear exponent scaling `(fastEnv / slowEnv)^p` using Eq. 4 optimal fast-decay time constants `cf = 1 - 0.00083734 * sqrt(b_i)`.
-   - Function: Exaggerates existing natural harmonic beating and brass growl inside each critical band without altering overall note dynamics (DAFx-08 Fig. 4).
+   - Taper: Linear exponent `p` (0–0.85) in the Fig. 4 expander: each band is multiplied by `fastEnv^p` and then by `slowEnvI / slowEnvII` (slow followers of the input band and of the expanded band). The fast followers use the Eq. 4 decay `cf = 1 - 0.00083734 * sqrt(b_i)`, rescaled from 44.1 kHz to the running sample rate. The per-band gain is limited to 0.4–2.2.
+   - Function: Exaggerates existing natural harmonic beating and brass growl inside each critical band while the slow normalisation keeps the longer-scale band level unchanged (DAFx-08 Fig. 4).
 
 6. stereo_phase_spread
    - Range: 0.0 to 1.0 (maps to 0 to 90 degrees Left/Right Subband Modulator Quadrature Offset + Independent Noise Streams, Default: 0.75)

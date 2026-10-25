@@ -21,18 +21,20 @@
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Envelope Modulator [0..1] (modulates scanner depth V1->V3 dynamically)
-//   in4: Optional 1-Bar Phasor [0..1] (locks scanner motor rotation when patched)
+//   in3: Optional Envelope Modulator [0..1] (modulates scanner depth V1->V3 dynamically).
+//        Exception to the in3-pitch contract: values above 20 (a pitch in Hz) are ignored.
+//   in4: Optional 1-Bar Phasor [0..1] (exception to the in4-in-Hz contract): while it
+//        moves, the scanner makes 4 there-and-back sweeps per bar
 // Outlets:
 //   out1: Left Hammond Scanner Chorus/Vibrato Output
 //   out2: Right Hammond Scanner Chorus/Vibrato Output
 
-@param({ min: 1.0, max: 3.0 }) scanner_depth_c1_c3 = 2.5;
-@param({ min: 0.5, max: 12.0 }) scanner_rate_hz = 6.12;
-@param({ min: 1800.0, max: 12000.0 }) lc_cutoff_hz = 4800.0;
-@param({ min: 0.0, max: 0.75 }) lc_passband_ripple = 0.35;
-@param({ min: 0.0, max: 1.0 }) stereo_rotor_spread = 0.50;
-@param({ min: 0.0, max: 1.0 }) chorus_to_vibrato = 0.0;
+@param({ min: 1.0, max: 3.0 }) scanner_depth_c1_c3 = 2.5;      // depth V1/C1 .. V3/C3
+@param({ min: 0.5, max: 12.0 }) scanner_rate_hz = 6.87;         // scanner rate
+@param({ min: 1800.0, max: 12000.0 }) lc_cutoff_hz = 4800.0;    // line box cutoff
+@param({ min: 0.0, max: 0.75 }) lc_passband_ripple = 0.35;      // ladder ripple
+@param({ min: 0.0, max: 1.0 }) stereo_rotor_spread = 0.50;      // L/R rotor offset
+@param({ min: 0.0, max: 1.0 }) chorus_to_vibrato = 0.0;         // chorus -> vibrato
 
 // 18-Stage Dispersive LC Ladder State Arrays (Left & Right channels, nodes v_1..v_19)
 @state ladApXL = new FixedSampleArray(18); @state ladApYL = new FixedSampleArray(18);
@@ -43,26 +45,39 @@
 @state ladLpR  = new FixedSampleArray(18);
 @state nodeVR  = new FixedSampleArray(19);
 
-// Scanner synchronous motor phasor (physical Hammond motor = 6.12 Hz, Sec 3)
+// Scanner synchronous motor phasor (commonly cited B-3 scanner vibrato rate ~6.87 Hz)
 @state motorPhasor = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
 
 // Evaluate Table 2 Tap Selection & Fig. 3 "There-and-Back-Again" Capacitive Scanner
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
-let envMod = clamp(in3, 0.0, 1.0);
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
+let envMod = (in3 > 20.0) ? 0.0 : clamp(in3, 0.0, 1.0);
 let barIn = in4;
 
 // --- 1. Propagate Signal Through 18-Stage Dispersive LC Line Box (Sec 2.1, Table 1) ---
 let fc = clamp(lc_cutoff_hz, 1800.0, 12000.0);
 let ripple = clamp(lc_passband_ripple, 0.0, 0.75);
 
-// Dispersive allpass coefficient + lowpass cutoff per LC section (L = 500 mH, C = 0.004 uF)
-let w0 = 2.0 * pi * fc / sr;
-let apG = clamp((1.0 - sin(w0 * 0.35)) / cos(w0 * 0.35), -0.85, 0.85);
-let lpAlpha = clamp(1.0 - exp(-w0 * 1.35), 0.05, 0.99);
+// Dispersive allpass coefficient + lowpass cutoff per LC section (Sec 5.1: the real ladder
+// delays ~0.85 ms in total with its passband edge at ~7075 Hz; both scale with lc_cutoff_hz).
+// First-order allpass (g + z^-1)/(1 + g z^-1) has DC group delay (1 - g)/(1 + g) samples.
+let stageDelay = 0.00085 * (7075.0 / fc) * sr / 18.0;
+let apG = clamp((1.0 - stageDelay) / (1.0 + stageDelay), -0.95, 0.95);
+// Per-stage lowpass at 5.1 x fc puts the 18-stage cascade's -3 dB point near fc,
+// so every tap stays flat in the passband and deeper taps only roll off faster above it
+let lpAlpha = clamp(1.0 - exp(-2.0 * pi * fc * 5.1 / sr), 0.05, 0.999);
 
 nodeVL[0] = xL;
 nodeVR[0] = xR;
@@ -98,10 +113,16 @@ for (let k: Int = 0; k < 18; k++) {
 
 // --- 2. Electromechanical Capacitive Rotor Scanner (Sec 2.2 & 3, Fig. 3, Table 2) ---
 let rate = clamp(scanner_rate_hz, 0.5, 12.0);
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// Bar phasor counts as active for 100 ms after it last moved (a constant in4 must not freeze the scanner)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
 
-let phL = barActive ? wrap(barIn * 4.0, 0.0, 1.0) : motorPhasor.next(rate);
+let freePh = motorPhasor.next(rate);
+let phL = (barHold > 0.0) ? wrap(barIn * 4.0, 0.0, 1.0) : freePh;
 let spread = clamp(stereo_rotor_spread, 0.0, 1.0) * 0.5;
 let phR = wrap(phL + spread, 0.0, 1.0);
 

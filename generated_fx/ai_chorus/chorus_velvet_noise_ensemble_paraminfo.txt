@@ -9,17 +9,17 @@ A standalone stereo Velvet-Noise Ensemble Chorus & Spatial Decorrelator implemen
 3. Quadrature Tap Micro-Modulation (`tap_shimmer_depth`): Gently modulates the 16 sparse velvet tap positions with multi-phase quadrature LFOs, transforming the static velvet-noise decorrelator into a dense, comb-free 16-voice stereo ensemble!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
-- in3: Optional Transient Envelope [0..1] (automatically shortens `sequence_length_ms` on hard attacks to keep staccato articulation razor-sharp)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs shimmer LFO when patched)
+- in1 / in2: Stereo Audio Input (Tuba). If in2 stays silent for 250 ms, in1 is used for both sides.
+- in3: Optional Transient Envelope [0..1] (shortens `sequence_length_ms` by up to 35 % on hard attacks to keep staccato articulation sharp). The taps move with it, so a fast envelope gives a brief pitch blip; feed it a smoothed envelope. This is an exception to the repo's in3-pitch convention: values above 20 (a tracked pitch in Hz) are ignored.
+- in4: Optional 1-Bar Phasor [0..1] (an exception to the repo's in4-in-Hz convention). While it is moving, shimmer LFO 1 (left taps) runs at 1 cycle per bar; LFO 2 (right taps) stays free at 1.31 × `shimmer_rate_hz`. 100 ms after it stops, `shimmer_rate_hz` takes over again.
 - out1 / out2: Stereo Velvet-Noise Ensemble Chorus Output
 
 PARAMETERS (7)
 
 1. sequence_length_ms
-   - Range: 5.0 to 35.0 ms (Total Velvet-Noise Filter Span `Ls`, Default: 22.0 ms, matching DAFx-17 Section 1 & 4.1 recommendation of 20–30 ms)
+   - Range: 5.0 to 35.0 ms (Total Velvet-Noise Filter Span `Ls`, Default: 22.0 ms, inside the 20–30 ms range DAFx-17 Section 1 cites for noise decorrelators; the paper's own examples use 30 ms)
    - Taper: Direct sequence length in milliseconds.
-   - Function: Controls the spatial extent of the velvet-noise ensemble without crossing into discrete reverberation (>35 ms).
+   - Function: Controls the spatial extent of the velvet-noise ensemble without crossing into discrete reverberation (>35 ms). Below ~10 ms the 16 taps sit inside one period of the tuba's fundamental, so the wet path loses some deep bass (up to ~10 dB at 25–60 Hz on the right channel at 5 ms); 20 ms and above stay within a few dB of flat.
 
 2. log_tap_concentration
    - Range: 0.0 to 1.0 (0.0 = Uniform Grid Spacing Eq. 4, 1.0 = Logarithmic Grid Spacing Eq. 11–12; Default: 0.65)
@@ -42,8 +42,8 @@ PARAMETERS (7)
    - Function: Sets the modulation speed of the 16 velvet taps.
 
 6. stereo_decorrelation
-   - Range: 0.0 to 1.0 (Left/Right Velvet Impulse Position & Polarity Orthogonality, Default: 1.00)
-   - Taper: Linear crossfade between identical Left/Right sequences (0.0, mono center) and mutually orthogonal Left/Right sequences (1.0, minimum IACC).
+   - Range: 0.0 to 1.0 (Left/Right Velvet Impulse Position & Polarity Difference, Default: 1.00)
+   - Taper: Linear crossfade of both the impulse positions and the impulse signs between identical Left/Right sequences (0.0, mono center) and two different low-coherence sequences (1.0, minimum IACC). Around 0.5 the taps whose signs differ fade out, so the wet level dips by up to ~3 dB there.
    - Function: Controls the apparent sound source width (ASW) between Left and Right speakers.
 
 7. dry_wet_mix

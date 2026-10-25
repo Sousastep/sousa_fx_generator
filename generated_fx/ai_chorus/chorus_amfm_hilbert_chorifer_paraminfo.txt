@@ -3,12 +3,12 @@ chorus_amfm_hilbert_chorifer — Parameter Information
 ================================================================================
 
 OVERVIEW
-A standalone stereo AM/FM Analytic Chorus ("ChorIFer", "OctIFer", and "TransColorIFer") from Antonio José Homsi Goulart, Victor Lazzarini, and Joseph Timoney (DAFx-15 Paper 30, Sections 2, 3.1, 3.2 & 3.4, Eq. 3–10, Listings 1–2, Fig. 2, 3, 6). Traditional delay-line choruses smear fast tuba tongue attacks over 10–30 ms and introduce hollow comb-filter notches when summed to mono. The ChorIFer instead decomposes the input in real time via a 4-stage Hilbert transform into its Instantaneous Amplitude `a(t)` and Instantaneous Frequency `f(t)` (Listing 1), integrates multiple detuned and interval-scaled phase trajectories `theta_v(t) = integral(2*pi * r_v(t) * f(tau) dtau)`, and multiplies the resynthesized oscillator choir by the exact, zero-latency amplitude envelope `a(t)` (Listing 2, Eq. 8 & 10)! As explained in Section 3.1, because `a(t)` still carries the original harmonic envelope modulations of the tuba, ring-modulating `a(t)` against the detuned/transposed FM carriers convolves their spectra into a lush, transient-locked brass choir.
+A standalone stereo AM/FM Analytic Chorus ("ChorIFer", "OctIFer", and "TransColorIFer") from Antonio José Homsi Goulart, Victor Lazzarini, and Joseph Timoney (DAFx-15 Paper 30, Sections 2, 3.1, 3.2 & 3.4, Eq. 3–10, Listings 1–2, Fig. 2, 3, 6), with the IF gating from Goulart, Timoney, Queiroz & Lazzarini (DAFx-18 Paper 28, Sections 2.3 & 3.1–3.3). Traditional delay-line choruses smear fast tuba tongue attacks over 10–30 ms and introduce hollow comb-filter notches when summed to mono. The ChorIFer instead decomposes the input in real time via a 4-stage Hilbert transform into its Instantaneous Amplitude `a(t)` and Instantaneous Frequency `f(t)` (Listing 1), integrates multiple detuned and interval-scaled phase trajectories `theta_v(t) = integral(2*pi * r_v(t) * f(tau) dtau)`, and multiplies the resynthesized oscillator choir by the exact, zero-latency amplitude envelope `a(t)` (Listing 2, Eq. 8 & 10)! As explained in Section 3.1, because `a(t)` still carries the original harmonic envelope modulations of the tuba, ring-modulating `a(t)` against the detuned/transposed FM carriers convolves their spectra into a lush, transient-locked brass choir.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
-- in3: Optional Envelope Modulator [0..1] (widens `chorifer_detune_pct` dynamically on loud notes)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs shimmer LFO when patched)
+- in1 / in2: Stereo Audio Input (Tuba). If in2 stays silent for 250 ms, in1 is used for both sides.
+- in3: Dual-mode. A value between 20 and 1200 is read as the tracked pitch in Hz and anchors the IF analysis (otherwise an internal zero-crossing estimate is used). A value in 0..1 is read as an envelope/macro and adds up to +1 % to `chorifer_detune_pct` (total still capped at 3.5 %).
+- in4: Optional 1-Bar Phasor [0..1] (an exception to the repo's in4-in-Hz convention). While it is moving, shimmer LFO 1 is locked to 2 cycles per bar; LFO 2 keeps running freely at 1.27 × `shimmer_rate_hz`. 100 ms after it stops, LFO 1 returns to `shimmer_rate_hz`.
 - out1 / out2: Stereo AM/FM ChorIFer Output
 
 PARAMETERS (6)
@@ -42,3 +42,8 @@ PARAMETERS (6)
    - Range: 0.0 to 1.0 (0% Dry to 100% Wet ChorIFer Choir; Default: 0.55)
    - Taper: Constant-power cosine/sine crossfade.
    - Function: Blends the dry acoustic tuba with the zero-latency AM/FM ChorIFer ensemble.
+
+PORT / IMPLEMENTATION NOTES
+- The dry path is the unprocessed input (no Hilbert allpass smear). The wet voices are resynthesized with free-running phase, so dry and wet are not phase-locked; expect a true ensemble blend rather than comb filtering.
+- The output passes through a `tanh` soft clipper (dry included), which gently compresses peaks near 0 dBFS.
+- The 4-stage Hilbert pair keeps ±4° quadrature from about 40 Hz to 1.5 kHz at 48 kHz; the error grows below 30 Hz and above 5 kHz, so very low pedal tones track less cleanly.

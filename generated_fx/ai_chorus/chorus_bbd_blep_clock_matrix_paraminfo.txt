@@ -6,9 +6,9 @@ OVERVIEW
 A standalone stereo BBD Chorus/Flanger Matrix combining Leonardo Gabrielli, Stefano D'Angelo, and Stefano Squartini's "Antialiasing in BBD Chips Using BLEP" (DAFx-25 Paper 29, Sections 2.1, 3 & 4.3, Algorithm 1, Eq. 1–2) with Jaromír Mačák's Electro-Harmonix Deluxe Electric Mistress nonlinear RC astable clock generator (DAFx-16 Paper 59, Sections 2.1–2.2, Eq. 8–11). Instead of approximating a BBD with a smooth digital delay line, this effect clocks a true 256-bucket discrete-time shift register at F_CLK(t). When F_CLK is lowered into the audio range (4–15 kHz), it produces authentic BBD-Generated Aliasing (BGA: musical foldback sidebands at k*F_CLK +/- f0), while a continuous-time PolyBLEP step residual eliminates harsh digital Simulation-Generated Aliasing (SGA) at every sample-and-hold transition!
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in1 / in2: Stereo Audio Input (Tuba). If in2 stays silent for 250 ms, in1 is used for both sides.
 - in3: Optional Envelope Modulator [0..1] (shifts the astable comparator threshold U_THD on loud attacks)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs LFO to host tempo when patched)
+- in4: Optional 1-Bar Phasor [0..1] (an exception to the repo's in4-in-Hz convention). While it is moving, the sweep runs at exactly 1 cycle per bar and `lfo_rate_hz` is ignored; 100 ms after it stops moving, `lfo_rate_hz` takes over again.
 - out1 / out2: Stereo PolyBLEP Clock-Stepped BBD Chorus Output
 
 PARAMETERS (7)
@@ -21,7 +21,7 @@ PARAMETERS (7)
 2. sweep_depth
    - Range: 0.0 to 1.0 (Clock Excursion Depth, Default: 0.55)
    - Taper: Linear modulation depth.
-   - Function: Controls how wide the BBD clock frequency swings around bbd_clock_khz. At 0.0, engages the static "Filter Matrix" metallic comb resonator mode (DAFx-16 Section 3).
+   - Function: Controls how wide the BBD clock frequency swings around bbd_clock_khz. Also scales the in3 envelope push. At 0.0 the clock (and so the delay) is static, which with `matrix_feedback` gives the Electric Mistress "Filter Matrix" style fixed metallic comb (DAFx-16 Section 3).
 
 3. bbd_clock_khz
    - Range: 4.0 to 48.0 kHz (Nominal BBD Clock Frequency F_CLK, Default: 18.0 kHz -> ~14.2 ms chorus delay across 256 buckets)
@@ -47,3 +47,7 @@ PARAMETERS (7)
    - Range: 0.0 to 1.0 (0% Dry to 100% Wet; Default: 0.50 = 50/50 Chorus)
    - Taper: Constant-power cosine/sine crossfade.
    - Function: Balances the dry tuba against the PolyBLEP BBD chorus.
+
+IMPLEMENTATION NOTES
+- The BBD input is always driven through `tanh(input + feedback)`, so hot input saturates the bucket chain even with feedback at 0, like a real BBD input stage.
+- The PolyBLEP correction is the two-sided (2-sample) residual, applied with a one-sample output delay so the sample before each clock step is corrected too. The wet path therefore has one extra sample of latency (about 0.02 ms).

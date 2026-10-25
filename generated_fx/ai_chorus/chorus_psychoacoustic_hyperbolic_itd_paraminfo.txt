@@ -4,23 +4,23 @@ chorus_psychoacoustic_hyperbolic_itd — Parameter Information
 
 OVERVIEW
 A standalone stereo Psychoacoustic ITD Chorus implementing William L. Martens and Atsushi Marui's "Categories of Perception for Vibrato, Flange, and Stereo Chorus: Mapping out the Musically Useful Ranges of Modulation Rate and Depth for Delay-based Effects" (DAFx-06 Paper p_149, Sections 1, 2.1 & 3, Eq. 1–3, Fig. 1–2). Built around two perceptual findings from the paper:
-1. Constant Pitch-Excursion Hyperbola (Section 3, Fig. 2): Through logistic regression on listening tests, Martens and Marui proved that the lower and upper boundaries of the "musically useful" chorus region follow a hyperbola where modulation depth (in microseconds) scales linearly with modulation period `1 / Rate_Hz`:
+1. Constant Pitch-Excursion Hyperbola (Section 3, Fig. 2): In listening tests with guitar stimuli at 2–9 Hz, Martens and Marui found that the lower and upper boundaries of the "musically useful" chorus region follow a hyperbola where modulation depth (in microseconds) scales linearly with modulation period `1 / Rate_Hz`:
    `Depth_lower(us) = 814 / Rate_Hz - 66` and `Depth_upper(us) = 4800 / Rate_Hz - 350`.
-   By automatically sliding modulation depth along this hyperbola as you turn `mod_rate_hz`, the peak Doppler pitch deviation `alpha(t) = 1 +/- 2*pi*DEPTH*RATE` (Eq. 2) stays locked in the musical sweet spot at any speed from 0.4 Hz to 9.0 Hz!
-2. ITD Lead/Lag Spatial Orbit (Section 2.1): By delaying the unmodulated dry signal by ~0.55 ms, the modulated chorus signal fluctuates symmetrically between LEADING (arriving earlier than) and LAGGING (arriving later than) the dry reference within the +/- 0.65 ms human Interaural Time Delay (ITD) window, causing the tuba to orbit smoothly around the listener's head.
+   By automatically sliding modulation depth along this hyperbola as you turn `mod_rate_hz`, the peak Doppler pitch deviation `alpha(t) = 1 +/- 2*pi*DEPTH*RATE` (Eq. 2) stays in the same perceptual region from 1.2 Hz to 9 Hz. Below 1.2 Hz the depth is held at its 1.2 Hz value (the paper tested 2–9 Hz only), so the pitch deviation gets smaller.
+2. ITD Lead/Lag Spatial Chorus (Section 2.1): By delaying the unmodulated dry signal by ~0.5 ms, the modulated voice fluctuates between LEADING (arriving earlier than) and LAGGING (arriving later than) the dry reference, similar to the Interaural Time Delay (ITD) of a source circling the head. In the paper the reference and the modulated voice play from DIFFERENT speakers; set `itd_spatial_routing` to 1.0 for that. At 0.0 (default) both are summed in each channel, which gives a chorus/flange comb colour rather than the spatial effect.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
-- in3: Optional Envelope Modulator [0..1] (pushes `perceptual_zone` toward the upper boundary on loud notes)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs primary LFO when patched)
+- in1 / in2: Stereo Audio Input (Tuba). If in2 stays silent for 250 ms, in1 is used for both sides.
+- in3: Optional Envelope Modulator [0..1] (adds up to +0.25 to `perceptual_zone` on loud notes). This is an exception to the repo's in3-pitch convention: values above 20 (a tracked pitch in Hz) are ignored.
+- in4: Optional 1-Bar Phasor [0..1] (an exception to the repo's in4-in-Hz convention). While it is moving, the primary LFO runs at 2 cycles per bar (the depth still follows `mod_rate_hz`, and the secondary voice stays free at 1.19 × `mod_rate_hz`); 100 ms after it stops, `mod_rate_hz` takes over again.
 - out1 / out2: Stereo ITD Lead/Lag Hyperbolic Chorus Output
 
-PARAMETERS (6)
+PARAMETERS (7)
 
 1. mod_rate_hz
    - Range: 0.40 to 9.00 Hz (Delay Modulation Rate, Default: 3.20 Hz, spanning the DAFx-06 2–9 Hz factorial test range)
    - Taper: Direct frequency in Hz.
-   - Function: Controls the modulation speed while automatically adjusting modulation depth along the Fig. 2 regression curve when `rate_depth_coupling > 0`.
+   - Function: Controls the modulation speed while automatically adjusting modulation depth along the Fig. 2 regression curve when `rate_depth_coupling > 0` (the regression is applied from 1.2 Hz to 9 Hz).
 
 2. perceptual_zone
    - Range: 0.0 to 1.0 (Position Between "Sub-Useful" Lower Boundary 0.0, Optimal Musical Center 0.5, and "Supra-Useful" Upper Boundary 1.0; Default: 0.55)
@@ -35,7 +35,7 @@ PARAMETERS (6)
 4. itd_center_ms
    - Range: 0.20 to 2.50 ms (Unmodulated Reference Delay for ITD Lead/Lag Orbit, Default: 0.55 ms matching DAFx-06 Section 2.1's 0.5 ms ITD center)
    - Taper: Direct delay time in milliseconds.
-   - Function: Sets the baseline reference delay about which the modulated chorus voices lead (arrive early) and lag (arrive late).
+   - Function: Sets the baseline reference delay about which the modulated chorus voices lead (arrive early) and lag (arrive late). It is automatically raised to (current depth + 0.06 ms) when the depth is larger, so the modulated tap never reaches zero delay; at the default rate and zone this puts the actual reference delay near 0.8 ms.
 
 5. voice_quadrature
    - Range: 0.0 to 1.0 (Stereo Quadrature Phase & Secondary Voice Blend, Default: 0.65)
@@ -45,4 +45,9 @@ PARAMETERS (6)
 6. dry_wet_mix
    - Range: 0.0 to 1.0 (Reference Dry vs. Leading/Lagging Modulated Voices; Default: 0.50 = Maximum ITD Stereo Chorus)
    - Taper: Constant-power cosine/sine crossfade.
-   - Function: At 0.50, equalizes the time-delayed dry reference and the leading/lagging modulated voices for maximum binaural precedence-effect width.
+   - Function: At 0.50, equalizes the time-delayed dry reference and the leading/lagging modulated voices. Only affects the summed routing; at `itd_spatial_routing` = 1.0 it has no effect.
+
+7. itd_spatial_routing
+   - Range: 0.0 to 1.0 (0.0 = Summed in Each Channel, 1.0 = DAFx-06 Split Routing; Default: 0.0)
+   - Taper: Linear crossfade between the two routings.
+   - Function: At 0.0, each channel carries the delayed reference plus the modulated voices (classic chorus/flange colour, the original behaviour of this effect). At 1.0, the left output is only the delayed reference and the right output only the modulated voices, which is how DAFx-06 Section 2.1 built its stereo chorus. There is no comb filtering within a channel; the effect is the moving time-of-arrival difference between the two speakers. In-between settings mix the two.

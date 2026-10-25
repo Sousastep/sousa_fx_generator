@@ -24,18 +24,19 @@
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Envelope Modulator [0..1] (dynamically boosts roughness impact p)
-//   in4: Optional 1-Bar Phasor [0..1]
+//   in3: Optional Envelope Modulator [0..1] (dynamically boosts roughness impact p).
+//        Exception to the in3-pitch contract: values above 20 (a pitch in Hz) are ignored.
+//   in4: unused
 // Outlets:
 //   out1: Left Critical-Band Roughness / Smooth Chorus Output
 //   out2: Right Critical-Band Roughness / Smooth Chorus Output
 
-@param({ min: 0.0, max: 1.0 }) impact_depth_p = 0.65;
-@param({ min: 0.08, max: 1.25 }) roughness_scale_g = 0.32;
-@param({ min: 0.0, max: 1.0 }) noise_smear_chorus = 0.40;
-@param({ min: 0.0, max: 1.0 }) bass_clean_protect = 0.70;
-@param({ min: 0.0, max: 1.0 }) subband_am_expand = 0.30;
-@param({ min: 0.0, max: 1.0 }) stereo_phase_spread = 0.75;
+@param({ min: 0.0, max: 1.0 }) impact_depth_p = 0.65;           // modulation impact p
+@param({ min: 0.08, max: 1.25 }) roughness_scale_g = 0.32;      // beat rate (x g(f)/2)
+@param({ min: 0.0, max: 1.0 }) noise_smear_chorus = 0.40;       // sine -> noise modulator
+@param({ min: 0.0, max: 1.0 }) bass_clean_protect = 0.70;       // keep the bass clean
+@param({ min: 0.0, max: 1.0 }) subband_am_expand = 0.30;        // beat expansion
+@param({ min: 0.0, max: 1.0 }) stereo_phase_spread = 0.75;      // stereo spread
 
 // 4-Band Crossover Filters (Band 0: <160 Hz, Band 1: 160..500 Hz, Band 2: 500..1500 Hz, Band 3: >1500 Hz)
 @state lp0L = new onepole(); @state lp0R = new onepole();
@@ -57,13 +58,30 @@
 @state nLp3L = new onepole(); @state nLp3R = new onepole();
 
 // Fast & Slow Envelope Followers for Section 3 Spectral Dynamics Expansion (Fig. 4, Eq. 3-4)
+// slowEnv = Slow Envelope Follower I (input band), slowEnv2 = Slow Envelope Follower II (expanded band)
 @state fastEnv = new FixedSampleArray(4);
 @state slowEnv = new FixedSampleArray(4);
+@state slowEnv2 = new FixedSampleArray(4);
+
+// Sample-rate-scaled follower coefficients and noise normalisers, recomputed only on change
+@state lastSr = 0.0;
+@state lastG = -1.0;
+@state cFast = new FixedSampleArray(4);
+@state cSlow = new FixedSampleArray(4);
+@state nGain = new FixedSampleArray(4);
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
-let envIn = clamp(in3, 0.0, 1.0);
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
+let envIn = (in3 > 20.0) ? 0.0 : clamp(in3, 0.0, 1.0);
 
 // --- 1. Split Stereo Signal into 4 Critical-Band Regions (DAFx-08 Sec 2 & 3.1) ---
 let b0L = lp0L.next(xL, 160.0);
@@ -95,6 +113,32 @@ let m1 = 16.97 * gScale;
 let m2 = 28.85 * gScale;
 let m3 = 48.33 * gScale;
 
+// Eq. 4 gives the per-sample decay at 44.1 kHz: cf = 1 - 0.00083734 * sqrt(b_i).
+// Convert (1 - cf) and the slow follower rate to this sample rate.
+// Lowpassed uniform noise has std 0.577 * sqrt(a / (2 - a)) for a onepole with coefficient a;
+// nGain brings each band's noise modulator to unit std before the tanh.
+if (sr != lastSr || gScale != lastG) {
+	let srK = 44100.0 / sr;
+	cFast[0] = 1.0 - pow(1.0 - 0.008, srK);
+	cFast[1] = 1.0 - pow(1.0 - 0.014, srK);
+	cFast[2] = 1.0 - pow(1.0 - 0.025, srK);
+	cFast[3] = 1.0 - pow(1.0 - 0.042, srK);
+	cSlow[0] = 1.0 - pow(1.0 - 0.0004, srK);
+	cSlow[1] = 1.0 - pow(1.0 - 0.0007, srK);
+	cSlow[2] = 1.0 - pow(1.0 - 0.0012, srK);
+	cSlow[3] = 1.0 - pow(1.0 - 0.0020, srK);
+	let a0n = clamp(1.0 - exp(-2.0 * pi * m0 * 1.5 / sr), 0.00001, 0.99999);
+	let a1n = clamp(1.0 - exp(-2.0 * pi * m1 * 1.5 / sr), 0.00001, 0.99999);
+	let a2n = clamp(1.0 - exp(-2.0 * pi * m2 * 1.5 / sr), 0.00001, 0.99999);
+	let a3n = clamp(1.0 - exp(-2.0 * pi * m3 * 1.5 / sr), 0.00001, 0.99999);
+	nGain[0] = 1.0 / (0.57735 * sqrt(a0n / (2.0 - a0n)));
+	nGain[1] = 1.0 / (0.57735 * sqrt(a1n / (2.0 - a1n)));
+	nGain[2] = 1.0 / (0.57735 * sqrt(a2n / (2.0 - a2n)));
+	nGain[3] = 1.0 / (0.57735 * sqrt(a3n / (2.0 - a3n)));
+	lastSr = sr;
+	lastG = gScale;
+}
+
 let ph0 = modPh0.next(m0);
 let ph1 = modPh1.next(m1);
 let ph2 = modPh2.next(m2);
@@ -103,10 +147,10 @@ let ph3 = modPh3.next(m3);
 // --- 3. Lowpass-Filtered Subband Noise Modulators (DAFx-08 Sec 4 Chorus Mode) ---
 let rawNL = noiseGenL.next();
 let rawNR = noiseGenR.next();
-let n0L = nLp0L.next(rawNL, m0 * 1.5) * 3.5; let n0R = nLp0R.next(rawNR, m0 * 1.5) * 3.5;
-let n1L = nLp1L.next(rawNL, m1 * 1.5) * 3.0; let n1R = nLp1R.next(rawNR, m1 * 1.5) * 3.0;
-let n2L = nLp2L.next(rawNL, m2 * 1.5) * 2.5; let n2R = nLp2R.next(rawNR, m2 * 1.5) * 2.5;
-let n3L = nLp3L.next(rawNL, m3 * 1.5) * 2.2; let n3R = nLp3R.next(rawNR, m3 * 1.5) * 2.2;
+let n0L = nLp0L.next(rawNL, m0 * 1.5) * nGain[0]; let n0R = nLp0R.next(rawNR, m0 * 1.5) * nGain[0];
+let n1L = nLp1L.next(rawNL, m1 * 1.5) * nGain[1]; let n1R = nLp1R.next(rawNR, m1 * 1.5) * nGain[1];
+let n2L = nLp2L.next(rawNL, m2 * 1.5) * nGain[2]; let n2R = nLp2R.next(rawNR, m2 * 1.5) * nGain[2];
+let n3L = nLp3L.next(rawNL, m3 * 1.5) * nGain[3]; let n3R = nLp3R.next(rawNR, m3 * 1.5) * nGain[3];
 
 let nBlend = clamp(noise_smear_chorus, 0.0, 1.0);
 let stPhase = clamp(stereo_phase_spread, 0.0, 1.0) * 0.5 * pi;
@@ -127,21 +171,32 @@ let mag1 = 0.5 * (abs(b1L) + abs(b1R));
 let mag2 = 0.5 * (abs(b2L) + abs(b2R));
 let mag3 = 0.5 * (abs(b3L) + abs(b3R));
 
-// Optimal fast decay cf = 1 - 0.00083734 * sqrt(b_i) (Eq. 4)
-fastEnv[0] = (mag0 > fastEnv[0]) ? mag0 : (fastEnv[0] + (mag0 - fastEnv[0]) * 0.008);
-fastEnv[1] = (mag1 > fastEnv[1]) ? mag1 : (fastEnv[1] + (mag1 - fastEnv[1]) * 0.014);
-fastEnv[2] = (mag2 > fastEnv[2]) ? mag2 : (fastEnv[2] + (mag2 - fastEnv[2]) * 0.025);
-fastEnv[3] = (mag3 > fastEnv[3]) ? mag3 : (fastEnv[3] + (mag3 - fastEnv[3]) * 0.042);
+// Optimal fast decay cf = 1 - 0.00083734 * sqrt(b_i) (Eq. 3-4)
+fastEnv[0] = (mag0 > fastEnv[0]) ? mag0 : (fastEnv[0] + (mag0 - fastEnv[0]) * cFast[0]);
+fastEnv[1] = (mag1 > fastEnv[1]) ? mag1 : (fastEnv[1] + (mag1 - fastEnv[1]) * cFast[1]);
+fastEnv[2] = (mag2 > fastEnv[2]) ? mag2 : (fastEnv[2] + (mag2 - fastEnv[2]) * cFast[2]);
+fastEnv[3] = (mag3 > fastEnv[3]) ? mag3 : (fastEnv[3] + (mag3 - fastEnv[3]) * cFast[3]);
 
-slowEnv[0] += (mag0 - slowEnv[0]) * 0.0004;
-slowEnv[1] += (mag1 - slowEnv[1]) * 0.0007;
-slowEnv[2] += (mag2 - slowEnv[2]) * 0.0012;
-slowEnv[3] += (mag3 - slowEnv[3]) * 0.0020;
+// Fig. 4: band * fast^p, normalised by Slow Follower I (input) / Slow Follower II (expanded),
+// so the beats are exaggerated while the longer-scale band level is unchanged
+let fp0 = pow(fastEnv[0] + 0.001, expPow);
+let fp1 = pow(fastEnv[1] + 0.001, expPow);
+let fp2 = pow(fastEnv[2] + 0.001, expPow);
+let fp3 = pow(fastEnv[3] + 0.001, expPow);
 
-let gainExp0 = clamp(pow((fastEnv[0] + 0.001) / (slowEnv[0] + 0.001), expPow), 0.4, 2.2);
-let gainExp1 = clamp(pow((fastEnv[1] + 0.001) / (slowEnv[1] + 0.001), expPow), 0.4, 2.2);
-let gainExp2 = clamp(pow((fastEnv[2] + 0.001) / (slowEnv[2] + 0.001), expPow), 0.4, 2.2);
-let gainExp3 = clamp(pow((fastEnv[3] + 0.001) / (slowEnv[3] + 0.001), expPow), 0.4, 2.2);
+slowEnv[0] += (mag0 - slowEnv[0]) * cSlow[0];
+slowEnv[1] += (mag1 - slowEnv[1]) * cSlow[1];
+slowEnv[2] += (mag2 - slowEnv[2]) * cSlow[2];
+slowEnv[3] += (mag3 - slowEnv[3]) * cSlow[3];
+slowEnv2[0] += (mag0 * fp0 - slowEnv2[0]) * cSlow[0];
+slowEnv2[1] += (mag1 * fp1 - slowEnv2[1]) * cSlow[1];
+slowEnv2[2] += (mag2 * fp2 - slowEnv2[2]) * cSlow[2];
+slowEnv2[3] += (mag3 * fp3 - slowEnv2[3]) * cSlow[3];
+
+let gainExp0 = clamp(fp0 * (slowEnv[0] + 0.000001) / (slowEnv2[0] + 0.000001), 0.4, 2.2);
+let gainExp1 = clamp(fp1 * (slowEnv[1] + 0.000001) / (slowEnv2[1] + 0.000001), 0.4, 2.2);
+let gainExp2 = clamp(fp2 * (slowEnv[2] + 0.000001) / (slowEnv2[2] + 0.000001), 0.4, 2.2);
+let gainExp3 = clamp(fp3 * (slowEnv[3] + 0.000001) / (slowEnv2[3] + 0.000001), 0.4, 2.2);
 
 // --- 5. Apply Section 2.1 Modulator Law a_i = (1 - p_i) + p_i * osc_i ---
 let pBase = clamp(impact_depth_p + 0.35 * envIn, 0.0, 1.0);

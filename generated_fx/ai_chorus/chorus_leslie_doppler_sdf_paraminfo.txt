@@ -5,19 +5,19 @@ chorus_leslie_doppler_sdf — Parameter Information
 OVERVIEW
 A standalone stereo Rotary Leslie Cabinet Chorus uniting three DAFx papers:
 1. Julius O. Smith, Stefania Serafin, Jonathan Abel, and David Berners (DAFx-02: "Doppler Simulation and the Leslie", Sections 3.2 & 4.1, Eq. 10–20) + Sascha Disch and Udo Zölzer (DAFx-99 Section 4, Fig. 8–9): Simulates the 180-degree opposite dual horns with circular Doppler delay modulation (~0.5 ms excursion), synchronous directional radiation amplitude modulation, tube amplifier soft overdrive ("growl"), and wooden cabinet cross-reflections.
-2. Jussi Pekonen, Tapani Pihlajamäki, and Vesa Välimäki (DAFx-11 Paper 49, Sections 3.1 & 3.2, Eq. 1–5, Fig. 2, Table 1): Splits the signal at an 800 Hz crossover into Treble Horn and Bass Drum pathways, applying the exact Table 1 time-varying Spectral Delay Filter (SDF) allpass cascades (Treble: N = 4 stages, Mb = -0.75, Ms = 0.20; Bass: N = 3 stages, Mb = -0.92, Ms = 0.04) with decoupled physical motor acceleration inertia and 0.1–0.3 Hz treble/bass motor mistuning!
+2. Jussi Pekonen, Tapani Pihlajamäki, and Vesa Välimäki (DAFx-11 Paper 49, Sections 3.1 & 3.2, Eq. 1–5, Fig. 2, Table 1): Splits the signal at an 800 Hz crossover into Treble Horn and Bass Drum pathways, applying the exact Table 1 time-varying Spectral Delay Filter (SDF) allpass cascades (Treble: N = 4 stages, Mb = -0.75, Ms = 0.20; Bass: N = 3 stages, Mb = -0.92, Ms = 0.04) with decoupled physical motor acceleration inertia and the paper's 0.1 Hz treble/bass motor mistuning.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
-- in3: Optional Chorale/Tremolo Speed Throw Input [0..1] (patch a footswitch, gate, or envelope to ramp the horn and drum motors up to Tremolo with realistic mechanical inertia!)
+- in1 / in2: Stereo Audio Input (Tuba). If in2 stays silent for 250 ms, in1 is used for both sides.
+- in3: Optional Chorale/Tremolo Speed Throw Input [0..1], added to `speed_chorale_tremolo` (patch a footswitch, gate, or envelope to ramp the horn and drum motors up to Tremolo with realistic mechanical inertia). This is an exception to the repo's in3-pitch convention: values above 20 (a tracked pitch in Hz) are ignored.
 - in4: Unused / Thru
 - out1 / out2: Stereo Rotary Leslie Cabinet Output
 
 PARAMETERS (7)
 
 1. speed_chorale_tremolo
-   - Range: 0.0 to 1.0 (0.0 = Slow Chorale ~0.8 Hz, 1.0 = Fast Tremolo ~6.2 Hz; Default: 0.25)
-   - Taper: Linear speed control with decoupled physical motor inertia slews (the light treble horn accelerates 3x faster than the heavy wooden bass drum, DAFx-11 Section 3.2).
+   - Range: 0.0 to 1.0 (0.0 = Slow Chorale 0.85 Hz, 1.0 = Fast Tremolo 6.2 Hz for the horn; the bass drum always runs 0.1 Hz slower; Default: 0.25)
+   - Taper: Linear speed control with decoupled physical motor inertia slews (the light treble horn settles in ~0.8 s, the heavy wooden bass drum in ~2.5 s, DAFx-11 Section 3.2).
    - Function: Controls the rotational speed of the dual-motor Leslie cabinet.
 
 2. doppler_horn_depth
@@ -27,23 +27,23 @@ PARAMETERS (7)
 
 3. sdf_dispersion_depth
    - Range: 0.0 to 1.0 (Spectral Delay Filter Allpass Dispersion Depth, Default: 0.70)
-   - Taper: Linear scaler on Table 1 modulator depths Ms (DAFx-11 Eq. 5).
+   - Taper: Linear scaler on Table 1 modulator depths Ms (treble 0.20, bass 0.04 at 1.0; DAFx-11 Eq. 5).
    - Function: Modulates the 4-stage Treble SDF around bias Mb = -0.75 and the 3-stage Bass SDF around bias Mb = -0.92, adding rich frequency-dependent phase chorus to both the sub-800 Hz tuba fundamental and upper harmonics.
 
 4. directional_am_depth
    - Range: 0.0 to 1.0 (Synchronous Horn/Drum Directional Radiation AM, Default: 0.55)
    - Taper: Linear AM depth (DAFx-99 Fig. 8, DAFx-11 Section 3.2).
-   - Function: Synchronizes amplitude maxima with the stationary zero-Doppler points as the horn mouth sweeps past each virtual stereo microphone.
+   - Function: Each horn is loudest when its mouth points at its virtual microphone, which is also its closest, zero-Doppler point of the rotation; the drum's AM runs 90° apart between left and right.
 
 5. tube_amp_growl_db
    - Range: 0.0 to 18.0 dB (Leslie Tube Amplifier Overdrive "Growl", Default: 4.5 dB)
-   - Taper: Logarithmic dB-to-linear gain into level-compensated tanh saturation before the 800 Hz crossover (DAFx-02 Section 1).
+   - Taper: Logarithmic dB-to-linear gain into a tanh saturator before the 800 Hz crossover (DAFx-02 Section 1). The output is level-matched at −12 dBFS input, so raising the drive adds saturation on peaks rather than loudness (loud peaks come out quieter at high drive).
    - Function: Adds warm tube harmonic growl before the rotating crossover.
 
 6. cabinet_stereo_width
-   - Range: 0.0 to 1.0 (Stereo Microphone Separation vs. 0.7 Cabinet Cross-Reflection, Default: 0.80)
-   - Taper: Linear stereo width (DAFx-99 Fig. 9).
-   - Function: Blends between the natural 0.7 acoustic cross-bleed inside the wooden cabinet and wide stereo isolation of the two opposing horns/rotors.
+   - Range: 0.0 to 1.0 (Stereo Microphone Separation vs. Cabinet Cross-Reflection, Default: 0.80)
+   - Taper: Linear in the cross-bleed gain: 1.0 (mono) at 0.0 down to 0.35 at 1.0; DAFx-99 Fig. 9's 0.7 cross-bleed is at about 0.46. The overall level of coherent (bass) content is held constant across the range.
+   - Function: Blends from a mono cabinet through the natural acoustic cross-bleed inside the wooden cabinet to wide stereo isolation of the two opposing horns/rotors.
 
 7. dry_wet_mix
    - Range: 0.0 to 1.0 (0% Dry to 100% Rotary Cabinet; Default: 1.00)

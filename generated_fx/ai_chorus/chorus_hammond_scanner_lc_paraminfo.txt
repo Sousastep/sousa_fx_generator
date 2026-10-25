@@ -6,9 +6,9 @@ OVERVIEW
 A standalone stereo model of the Hammond B-3 Organ Vibrato/Chorus Line Box and Electromechanical Scanner from Kurt James Werner, W. Ross Dunkel, and François G. Germain (DAFx-16 Paper 54, Sections 2.1, 2.2 & 3, Tables 1–2, Fig. 1–3). Unlike a standard digital delay-line chorus, the Hammond Vibrato/Chorus propagates the audio signal down an 18-stage dispersive inductor-capacitor (LC) ladder (`v1..v19`) with bidirectional passband ripple and a progressive lowpass rolloff, while a 16-plate motorized capacitive rotor scans "there-and-back-again" across 9 non-uniformly wired tap terminals (`t1..t9` per Table 2 for V1/C1, V2/C2, and V3/C3). As noted in DAFx-16 Section 2, the overlapping keystone capacitor plates perform physical linear crossfading (`v_out = eta*v_a + (1-eta)*v_b`), producing a uniquely warm, frequency-dependent phase/pitch chorus that makes low brass sound colossal.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
-- in3: Optional Envelope Modulator [0..1] (dynamically pushes scanner tap wiring from C1 toward C3 on loud attacks)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (locks scanner motor to 4x bar tempo when patched)
+- in1 / in2: Stereo Audio Input (Tuba). If in2 stays silent for 250 ms, in1 is used for both sides.
+- in3: Optional Envelope Modulator [0..1] (adds up to +1.2 to `scanner_depth_c1_c3` on loud attacks, capped at 3.0). This is an exception to the repo's in3-pitch convention: values above 20 (a tracked pitch in Hz) are ignored.
+- in4: Optional 1-Bar Phasor [0..1] (an exception to the repo's in4-in-Hz convention). While it is moving, the scanner makes 4 there-and-back sweeps per bar and `scanner_rate_hz` is ignored; 100 ms after it stops, `scanner_rate_hz` takes over again.
 - out1 / out2: Stereo Hammond LC Scanner Chorus/Vibrato Output
 
 PARAMETERS (6)
@@ -22,14 +22,14 @@ PARAMETERS (6)
    - Function: Controls how far down the 18-stage LC ladder the capacitive scanner reaches.
 
 2. scanner_rate_hz
-   - Range: 0.50 to 12.00 Hz (Scanner Synchronous Motor Rotation Rate, Default: 6.12 Hz matching the physical B-3 run motor)
-   - Taper: Direct frequency in Hz (DAFx-16 Section 3).
-   - Function: Sets the speed of the "there-and-back-again" capacitive rotor scan.
+   - Range: 0.50 to 12.00 Hz (Scanner Rate, Default: 6.87 Hz, the commonly cited B-3 scanner vibrato rate; the DAFx-16 paper does not specify one)
+   - Taper: Direct frequency in Hz.
+   - Function: Sets the speed of the "there-and-back-again" capacitive rotor scan (one t1 → t9 → t1 sweep per cycle).
 
 3. lc_cutoff_hz
    - Range: 1800.0 to 12000.0 Hz (LC Ladder Line-Box Cutoff & Dispersion Frequency, Default: 4800.0 Hz)
    - Taper: Direct frequency in Hz.
-   - Function: Sets the per-stage LC phase dispersion and high-frequency rolloff across the 18 ladder sections (`L = 500 mH`, `C = 0.004 uF`).
+   - Function: Sets the line box's passband edge and, with it, its total delay. DAFx-16 Section 5.1 measures the real B-3 ladder at ≈ 0.85 ms total delay with a ≈ 7075 Hz passband edge; this model scales that, so the full 18-stage delay is 0.85 ms × 7075 / `lc_cutoff_hz` (≈ 1.25 ms at the 4800 Hz default, ≈ 3.3 ms at 1800 Hz, 0.5 ms at 12 kHz). Lower settings therefore give deeper pitch vibrato and a darker, more dispersive top end; set 7075 Hz for the paper's measured B-3 ladder. Every tap is flat in the passband (within ~1 dB below `lc_cutoff_hz` at the default); deeper taps roll off faster above it, as in the paper's Fig. 8–9.
 
 4. lc_passband_ripple
    - Range: 0.0 to 0.75 (Bidirectional LC Ladder Passband Ripple, Default: 0.35)

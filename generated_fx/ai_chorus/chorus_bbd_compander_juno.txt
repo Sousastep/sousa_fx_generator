@@ -6,31 +6,35 @@
 //      - Fixed N-stage capacitor delay line driven by a variable clock f_clock, producing
 //        the characteristic hyperbolic 1/f_clock BBD delay-time warp (Fig. 9) and moving-
 //        average clock-history smoothing t_d = avg(N * fs / (2 * f_clock), M) (Eq. 25).
-//      - Matched NE570 2:1 Feedback Compressor y = x / avg(|y|) before the BBD and 1:2
-//        Feedforward Expander y = avg(|x|) * x after the BBD (Eq. 26-27).
+//      - Matched NE570-style compander after Eq. 26-27, implemented with a square-root
+//        detector law: feedback compressor y = x / sqrt(avg|y|) (1.5:1) before the BBD and
+//        feedforward expander y = x * sqrt(avg|x|) (1:1.5) after it (gentler than the 2:1 IC).
 //   2. Colin Raffel & Julius O. Smith (DAFx-10, Paper P42, Sec 2.2, 3.3 & 4.4):
-//      - Clock-tracking Sallen-Key anti-aliasing & reconstruction lowpass filtering and
-//        stage-accumulated charge-transfer quadratic/cubic THD = 1.01^(N/1024) - 1.
+//      - Clock-tracking anti-aliasing & reconstruction lowpass filtering (2 one-poles each,
+//        standing in for the Sallen-Key stages) and an asymmetric tanh bucket saturation
+//        standing in for the stage-accumulated charge-transfer THD.
 //   3. Martin Holters & Julian D. Parker (DAFx-18, Paper 12, Sec 2 & 4, Eq. 1, 34):
-//      - Roland Juno-60 / Dimension-D push-pull dual BBD stereo architecture (Modes I, II,
-//        and Dual I+II) with sinc(f / f_BBD) sample-and-hold aperture rolloff.
+//      - Roland Juno-60 / Dimension-D push-pull dual BBD stereo architecture (Mode I and a
+//        dual-LFO I+II ensemble). The sinc(f / f_BBD) sample-and-hold rolloff is below
+//        -1.5 dB in the audio band at these clock rates and is left to the reconstruction lowpass.
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Tracked Pitch f0 in Hz or Envelope [0..1]
-//   in4: Optional 1-Bar Phasor [0..1] (syncs BBD triangle LFO when patched)
+//   in3: unused (bound to a dummy local so the port stays present)
+//   in4: Optional 1-Bar Phasor [0..1] (exception to the in4-in-Hz contract): while it
+//        moves, the primary triangle LFO runs at 1 cycle per bar
 // Outlets:
 //   out1: Left Stereo BBD Chorus Output
 //   out2: Right Stereo BBD Chorus Output
 
-@param({ min: 0.1, max: 5.0 }) lfo_rate_hz = 0.55;
-@param({ min: 0.0, max: 1.0 }) clock_mod_depth = 0.60;
-@param({ min: 1.5, max: 15.0 }) center_delay_ms = 3.6;
-@param({ min: 0.0, max: 1.0 }) juno_mode_morph = 0.35;
-@param({ min: 0.0, max: 1.0 }) ne570_compand = 0.55;
-@param({ min: 0.0, max: 1.0 }) bbd_warmth_thd = 0.45;
-@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.50;
+@param({ min: 0.1, max: 5.0 }) lfo_rate_hz = 0.55;              // LFO rate
+@param({ min: 0.0, max: 1.0 }) clock_mod_depth = 0.60;          // clock sweep depth
+@param({ min: 1.5, max: 15.0 }) center_delay_ms = 3.6;          // centre delay
+@param({ min: 0.0, max: 1.0 }) juno_mode_morph = 0.35;          // Mode I -> I+II morph
+@param({ min: 0.0, max: 1.0 }) ne570_compand = 0.55;            // compander depth
+@param({ min: 0.0, max: 1.0 }) bbd_warmth_thd = 0.45;           // darkness + saturation
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.50;              // dry/wet
 
 // Dual stereo BBD circular delay buffers (4096 samples per channel)
 @state bbdBufL = new FixedSampleArray(4096);
@@ -58,14 +62,23 @@
 @state lfoPh1 = new phasor();
 @state lfoPh2 = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let unused_in3 = in3;
 let barIn = in4;
 
-// --- 1. NE570 2:1 Feedback Compressor Before BBD (DAFx-05 Sec 5.2 Eq. 27, DAFx-10 Sec 3.4) ---
+// --- 1. NE570-style 1.5:1 Feedback Compressor Before BBD (DAFx-05 Sec 5.2 Eq. 27, DAFx-10 Sec 3.4) ---
 // Rectifier RC time constant tau ~ 25 ms (R2 = 10 kOhm, C = 2.2 uF)
 let rectAlpha = 1.0 - exp(-1.0 / (0.025 * sr));
 compEnvL += (abs(compOutPrevL) - compEnvL) * rectAlpha;
@@ -82,17 +95,23 @@ compOutPrevR = compInR;
 
 // --- 2. Juno-60 / Dimension-D Triangle LFOs & Variable BBD Clock Rate f_clock ---
 let baseRate = clamp(lfo_rate_hz, 0.1, 5.0);
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// Bar phasor counts as active for 100 ms after it last moved (a constant in4 must not freeze the LFO)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
 
-let p1 = barActive ? wrap(barIn, 0.0, 1.0) : lfoPh1.next(baseRate);
+let freeP1 = lfoPh1.next(baseRate);
+let p1 = (barHold > 0.0) ? wrap(barIn, 0.0, 1.0) : freeP1;
 let p2 = lfoPh2.next(baseRate * 1.618 + 0.45); // Secondary rich ensemble LFO (Juno I+II mode)
 
 // Bipolar triangle LFOs in [-1, 1]
 let tri1 = 2.0 * triangle(p1, 0.5) - 1.0;
 let tri2 = 2.0 * triangle(p2, 0.5) - 1.0;
 
-// Juno Mode Morph: 0.0 = Push-Pull Stereo Mode I (0.5 Hz), 0.5 = Faster Mode II, 1.0 = Dual I+II Ensemble
+// Juno Mode Morph: 0.0 = single-LFO push-pull (Mode I style), 1.0 = 65/35 sum of both LFOs (I+II ensemble)
 let jMode = clamp(juno_mode_morph, 0.0, 1.0);
 let lfoL = linearinterp(jMode, tri1, 0.65 * tri1 + 0.35 * tri2);
 // Push-pull anti-phase LFO on Right in Mode I/II, quadrature offset in Mode I+II
@@ -140,11 +159,11 @@ let iOutR: Int = floor(rpOutR);
 let delOutR = cubicinterp(rpOutR - iOutR, bbdBufR[(iOutR - 1 + 4096) & 4095], bbdBufR[iOutR & 4095], bbdBufR[(iOutR + 1) & 4095], bbdBufR[(iOutR + 2) & 4095]);
 writeIdx = (writeIdx + 1) & 4095;
 
-// --- 4. Post-BBD Reconstruction Filter + sinc(f/f_BBD) Sample-Hold Roll-Off (DAFx-18 Eq. 34) ---
+// --- 4. Post-BBD Reconstruction Filter (also covers the small sinc(f/f_BBD) S&H roll-off, DAFx-18 Eq. 34) ---
 let recL = recLp2L.next(recLp1L.next(delOutL, aaCutoffL * 0.9), aaCutoffL * 0.9);
 let recR = recLp2R.next(recLp1R.next(delOutR, aaCutoffR * 0.9), aaCutoffR * 0.9);
 
-// --- 5. NE570 1:2 Feedforward Expander After BBD (DAFx-05 Sec 5.2 Eq. 26, DAFx-10 Sec 3.4) ---
+// --- 5. NE570-style 1:1.5 Feedforward Expander After BBD (DAFx-05 Sec 5.2 Eq. 26, DAFx-10 Sec 3.4) ---
 expEnvL += (abs(recL) - expEnvL) * rectAlpha;
 expEnvR += (abs(recR) - expEnvR) * rectAlpha;
 

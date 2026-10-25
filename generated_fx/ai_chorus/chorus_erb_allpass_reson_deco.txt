@@ -13,51 +13,96 @@
 //   2. Jon Fagerstrom, Nils Meyer-Kahlen, Sebastian J. Schlecht & Vesa Valimaki
 //      (DAFx-25, Paper 80): "Perceptual Decorrelator Based on Resonators"
 //      (Sections 3 & 4, Table 1, Eq. 4-14, Fig. 2-4):
-//      Shapes the inter-channel group-delay difference ICTD(w) = tau_R(w) - tau_L(w)
-//      according to the listening-test-derived 75th-percentile ERB profile
-//      (Table 1: 13-19 ms group delay across the 100-800 Hz tuba fundamental/warmth
-//      bands, tapering to 4-6 ms above 4 kHz to avoid high-frequency transient smearing!).
+//      Borrows the idea of the listening-test-derived ERB profile (Table 1: most group
+//      delay in the low/mid bands, much less at high frequencies so transients stay tight).
+//      Measured on this cascade at 48 kHz, defaults: mean group delay ~9 ms at 60-200 Hz,
+//      ~3 ms at 200-800 Hz, ~1-1.5 ms above. The z^-P structure replicates every stage's
+//      poles across the whole band, so the HF taper is done with a crossover that routes
+//      the top band around the cascade (hf_transient_tightness).
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Envelope Modulator [0..1] (modulates allpass pole angles on attacks)
-//   in4: Optional 1-Bar Phasor [0..1]
+//   in3: Optional Envelope Modulator [0..1] (modulates allpass pole angles on attacks).
+//        Exception to the in3-pitch contract: values above 20 (a pitch in Hz) are ignored.
+//   in4: Optional 1-Bar Phasor [0..1] (exception to the in4-in-Hz contract): while it
+//        moves, drift LFO 1 runs at 1 cycle per bar
 // Outlets:
 //   out1: Left ERB Perceptual Allpass Chorus Output
 //   out2: Right ERB Perceptual Allpass Chorus Output
 
-@param({ min: 0.1, max: 1.0 }) erb_group_delay_scale = 0.70;
-@param({ min: 0.0, max: 1.0 }) pole_radius_resonance = 0.72;
-@param({ min: 0.0, max: 1.0 }) pole_drift_depth = 0.45;
-@param({ min: 0.08, max: 3.5 }) drift_rate_hz = 0.42;
-@param({ min: 0.0, max: 1.0 }) hf_transient_tightness = 0.75;
-@param({ min: 0.0, max: 1.0 }) dry_wet_chorus_mix = 0.50;
+@param({ min: 0.1, max: 1.0 }) erb_group_delay_scale = 0.70;    // prime delay scale
+@param({ min: 0.0, max: 1.0 }) pole_radius_resonance = 0.72;    // pole radius
+@param({ min: 0.0, max: 1.0 }) pole_drift_depth = 0.45;         // drift depth
+@param({ min: 0.08, max: 3.5 }) drift_rate_hz = 0.42;           // drift rate
+@param({ min: 0.0, max: 1.0 }) hf_transient_tightness = 0.75;   // keep highs undelayed
+@param({ min: 0.0, max: 1.0 }) dry_wet_chorus_mix = 0.50;       // dry/wet
 
 // 6-Stage Prime-Delay Biquad Allpass Cascade Buffers per Channel (DAFx-16 Sec 3.3)
-// Prime delay lengths (in samples):
+// Prime delay lengths (in samples at 48 kHz, erb_group_delay_scale = 1):
 //   Left:  P_L = [19, 13, 11, 7, 5, 3]
 //   Right: P_R = [23, 17, 7, 11, 3, 5]
-// Each stage uses a 64-sample circular buffer to store x[n - P], x[n - 2P], y[n - P], y[n - 2P]
-@state apXBufL = new FixedSampleArray(384); @state apYBufL = new FixedSampleArray(384);
-@state apXBufR = new FixedSampleArray(384); @state apYBufR = new FixedSampleArray(384);
+// Each stage uses a 128-sample circular buffer to store x[n - P], x[n - 2P], y[n - P], y[n - 2P]
+@state apXBufL = new FixedSampleArray(768); @state apYBufL = new FixedSampleArray(768);
+@state apXBufR = new FixedSampleArray(768); @state apYBufR = new FixedSampleArray(768);
 @state wIdx: Int = 0;
 
 @state lfoPh1 = new phasor();
 @state lfoPh2 = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
+
+// HF bypass crossover (complementary: lo + hi = input)
+@state xoLp1L = new onepole(); @state xoLp2L = new onepole();
+@state xoLp1R = new onepole(); @state xoLp2R = new onepole();
+
+// Nearest prime in [2, 61], so scaled delays stay mutually prime (DAFx-16 Sec 3.3)
+function snapPrime(n: number): number {
+	if (n < 2.5) return 2.0;
+	if (n < 4.0) return 3.0;
+	if (n < 6.0) return 5.0;
+	if (n < 9.0) return 7.0;
+	if (n < 12.0) return 11.0;
+	if (n < 15.0) return 13.0;
+	if (n < 18.0) return 17.0;
+	if (n < 21.0) return 19.0;
+	if (n < 26.0) return 23.0;
+	if (n < 30.0) return 29.0;
+	if (n < 34.0) return 31.0;
+	if (n < 39.0) return 37.0;
+	if (n < 42.0) return 41.0;
+	if (n < 45.0) return 43.0;
+	if (n < 50.0) return 47.0;
+	if (n < 56.0) return 53.0;
+	if (n < 60.0) return 59.0;
+	return 61.0;
+}
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
-let envMod = clamp(in3, 0.0, 1.0);
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
+let envMod = (in3 > 20.0) ? 0.0 : clamp(in3, 0.0, 1.0);
 let barIn = in4;
 
 let rate = clamp(drift_rate_hz, 0.08, 3.5);
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// Bar phasor counts as active for 100 ms after it last moved (a constant in4 must not freeze the LFO)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
 
-let ph1 = barActive ? wrap(barIn, 0.0, 1.0) : lfoPh1.next(rate);
+let freePh1 = lfoPh1.next(rate);
+let ph1 = (barHold > 0.0) ? wrap(barIn, 0.0, 1.0) : freePh1;
 let ph2 = lfoPh2.next(rate * 1.23);
 
 let driftAmt = clamp(pole_drift_depth, 0.0, 1.0) * 0.28;
@@ -65,17 +110,24 @@ let gdScale = clamp(erb_group_delay_scale, 0.1, 1.0);
 let baseRad = 0.52 + 0.40 * clamp(pole_radius_resonance, 0.0, 1.0);
 let hfTight = clamp(hf_transient_tightness, 0.0, 1.0);
 
-let sigL = xL;
-let sigR = xR;
+// hf_transient_tightness: crossover from 12 kHz (tightness 0) down to 1.5 kHz (tightness 1);
+// the band above it is blended around the cascade by the same amount, so at 0 the whole
+// signal is allpassed and at 1 everything above ~1.5 kHz stays undelayed
+let xoHz = clamp(1500.0 * exp2(3.0 * (1.0 - hfTight)), 200.0, sr * 0.45);
+let hiL = xL - xoLp2L.next(xoLp1L.next(xL, xoHz), xoHz);
+let hiR = xR - xoLp2R.next(xoLp1R.next(xR, xoHz), xoHz);
+let sigL = xL - hfTight * hiL;
+let sigR = xR - hfTight * hiR;
+let srScale = sr / 48000.0;
 
 // --- Evaluate 6 ERB-Spaced Prime-Delay Biquad Allpass Stages (DAFx-16 Eq. 2-4 & DAFx-25 Table 1) ---
-// ERB Center Frequencies spanning the tuba spectrum:
-// Stage 0: 120 Hz  (DAFx-25 Table 1 ICTD ~ 13-19 ms -> longest prime delays 19 / 23)
-// Stage 1: 260 Hz  (ICTD ~ 16-19 ms -> prime delays 13 / 17)
-// Stage 2: 520 Hz  (ICTD ~ 17.9 ms  -> prime delays 11 / 7)
-// Stage 3: 1050 Hz (ICTD ~ 15.2 ms  -> prime delays 7 / 11)
-// Stage 4: 2200 Hz (ICTD ~ 7.3 ms   -> prime delays 5 / 3)
-// Stage 5: 4800 Hz (ICTD ~ 4.7 ms   -> prime delays 3 / 5, tightened by hf_transient_tightness)
+// Pole-angle frequencies (before the z^-P substitution, which maps each to (f + k*sr) / P):
+// Stage 0: 120 Hz  -> prime delays 19 / 23
+// Stage 1: 260 Hz  -> prime delays 13 / 17
+// Stage 2: 520 Hz  -> prime delays 11 / 7
+// Stage 3: 1050 Hz -> prime delays 7 / 11
+// Stage 4: 2200 Hz -> prime delays 5 / 3
+// Stage 5: 4800 Hz -> prime delays 3 / 5 (stages 3-5 radii also reduced by hf_transient_tightness)
 for (let s: Int = 0; s < 6; s++) {
 	let baseFreq = 120.0;
 	let pBaseL: Int = 19;
@@ -94,9 +146,10 @@ for (let s: Int = 0; s < 6; s++) {
 		baseFreq = 4800.0; pBaseL = 3;  pBaseR = 5;  rWeight = 0.80 - 0.35 * hfTight;
 	}
 
-	// Scale prime delays by erb_group_delay_scale (clamped to [1 .. 29] samples so 2*P <= 58 < 64)
-	let pL: Int = clamp(floor(pBaseL * gdScale + 0.5), 1, 29);
-	let pR: Int = clamp(floor(pBaseR * gdScale + 0.5), 1, 29);
+	// Scale prime delays by erb_group_delay_scale and sample rate, then snap back to a prime
+	// in [2 .. 61] samples so 2*P <= 122 < 128
+	let pL: Int = snapPrime(pBaseL * gdScale * srScale);
+	let pR: Int = snapPrime(pBaseR * gdScale * srScale);
 
 	// Modulate pole angles in counter-quadrature between Left and Right
 	let lfoL = sin(2.0 * pi * ph1 + s * 1.0472) * driftAmt + 0.2 * envMod;
@@ -115,12 +168,12 @@ for (let s: Int = 0; s < 6; s++) {
 	let c1R = -2.0 * rR * cos(2.0 * pi * fR / sr);
 	let c2R = rR * rR;
 
-	let baseOffset: Int = s * 64;
-	let idx0: Int   = baseOffset + (wIdx & 63);
-	let idx1L: Int  = baseOffset + ((wIdx - pL + 64) & 63);
-	let idx2L: Int  = baseOffset + ((wIdx - 2 * pL + 64) & 63);
-	let idx1R: Int  = baseOffset + ((wIdx - pR + 64) & 63);
-	let idx2R: Int  = baseOffset + ((wIdx - 2 * pR + 64) & 63);
+	let baseOffset: Int = s * 128;
+	let idx0: Int   = baseOffset + (wIdx & 127);
+	let idx1L: Int  = baseOffset + ((wIdx - pL + 128) & 127);
+	let idx2L: Int  = baseOffset + ((wIdx - 2 * pL + 128) & 127);
+	let idx1R: Int  = baseOffset + ((wIdx - pR + 128) & 127);
+	let idx2R: Int  = baseOffset + ((wIdx - 2 * pR + 128) & 127);
 
 	let yL = c2L * sigL + c1L * apXBufL[idx1L] + apXBufL[idx2L] - c1L * apYBufL[idx1L] - c2L * apYBufL[idx2L];
 	apXBufL[idx0] = sigL;
@@ -133,10 +186,15 @@ for (let s: Int = 0; s < 6; s++) {
 	sigR = yR;
 }
 
-wIdx = (wIdx + 1) & 63;
+wIdx = (wIdx + 1) & 127;
+
+// Add back the bypassed top band
+sigL = sigL + hfTight * hiL;
+sigR = sigR + hfTight * hiR;
 
 // Mix dry + decorrelated allpass outputs:
-// At dry_wet_chorus_mix = 1.0, outputs pure flat-magnitude stereo decorrelation (0 dB magnitude change!);
+// At dry_wet_chorus_mix = 1.0 and hf_transient_tightness = 0, the wet path is a pure allpass
+// (flat magnitude); with tightness > 0 the crossover region picks up some coloration.
 // At dry_wet_chorus_mix = 0.5, sums dry + time-varying prime-delay allpass for dense multi-notch chorus!
 let mix = clamp(dry_wet_chorus_mix, 0.0, 1.0);
 out1 = cos(mix * 0.5 * pi) * xL + sin(mix * 0.5 * pi) * sigL;

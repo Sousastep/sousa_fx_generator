@@ -4,14 +4,14 @@ chorus_bbd_compander_juno — Parameter Information
 
 OVERVIEW
 A standalone stereo analog Bucket-Brigade Device (BBD) Chorus uniting three DAFx virtual-analog papers:
-1. Antti Huovilainen (DAFx-05 Paper P_155, Sections 5.1 & 5.2, Eq. 25–31, Fig. 8–11): Models the fixed-bucket-count variable-clock delay law (where a linear triangle LFO warps into an asymmetric 1/f_clock hyperbola smoothed by the bucket transit time, Eq. 25) and the matched NE570 2:1 feedback compressor / 1:2 feedforward expander.
-2. Colin Raffel and Julius O. Smith (DAFx-10 Paper P42, Sections 2.2, 3.3 & 4.4): Models clock-tracking Sallen-Key anti-aliasing and reconstruction lowpass filters plus stage-accumulated MOSFET charge-transfer harmonic warmth.
-3. Martin Holters and Julian D. Parker (DAFx-18 Paper 12, Sections 2 & 4): Models the classic Roland Juno-60 / Dimension-D push-pull stereo BBD chorus architecture (Mode I, Mode II, and Dual I+II).
+1. Antti Huovilainen (DAFx-05 Paper P_155, Sections 5.1 & 5.2, Eq. 25–31, Fig. 8–11): Models the fixed-bucket-count variable-clock delay law (where a linear triangle LFO warps into an asymmetric 1/f_clock hyperbola smoothed by the bucket transit time, Eq. 25) and a matched NE570-style feedback compressor / feedforward expander pair (implemented as a gentler 1.5:1 / 1:1.5 square-root law).
+2. Colin Raffel and Julius O. Smith (DAFx-10 Paper P42, Sections 2.2, 3.3 & 4.4): Models clock-tracking Sallen-Key anti-aliasing and reconstruction lowpass filters plus stage-accumulated MOSFET charge-transfer harmonic warmth (approximated by an asymmetric tanh).
+3. Martin Holters and Julian D. Parker (DAFx-18 Paper 12, Sections 2 & 4): Models the classic Roland Juno-60 / Dimension-D push-pull stereo BBD chorus architecture (single-LFO Mode I push-pull and a dual-LFO I+II ensemble).
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in1 / in2: Stereo Audio Input (Tuba). If in2 stays silent for 250 ms, in1 is used for both sides.
 - in3: Unused / Thru (standalone chorus requires no external pitch tracker)
-- in4: Optional 1-Bar Audio-Rate Phasor [0..1] (syncs primary BBD triangle LFO to host tempo when patched)
+- in4: Optional 1-Bar Phasor [0..1] (an exception to the repo's in4-in-Hz convention). While it is moving, the primary triangle LFO runs at 1 cycle per bar and `lfo_rate_hz` only sets the secondary LFO (1.618 × rate + 0.45 Hz); 100 ms after it stops, the free LFO takes over.
 - out1 / out2: Stereo Analog BBD Chorus Output
 
 PARAMETERS (7)
@@ -35,12 +35,13 @@ PARAMETERS (7)
    - Range: 0.0 to 1.0 (Default: 0.35)
    - Taper: Continuous morph between:
      * 0.0: Pure Push-Pull Anti-Phase Triangle LFO (Juno Mode I / Dimension-D spatial widening with zero mono pitch wobble)
-     * 1.0: Dual-Rate Incommensurate LFO Sum (Juno I+II multi-voice ensemble swirl)
+     * 1.0: Dual-Rate Incommensurate LFO Sum (65 % primary + 35 % secondary at 1.618 × rate + 0.45 Hz; Juno I+II style ensemble swirl)
+     * In between: a linear blend of the two (there is no separate Mode II speed setting; use `lfo_rate_hz` ≈ 0.86 Hz for Mode II)
    - Function: Morphs the modulation law from single-LFO push-pull stereo to dual-LFO ensemble movement.
 
 5. ne570_compand
    - Range: 0.0 to 1.0 (NE570 Compander Depth, Default: 0.55)
-   - Taper: Linear wet/dry blend of the 2:1 feedback compressor before the BBD and 1:2 feedforward expander after the BBD (DAFx-05 Eq. 26–27).
+   - Taper: Linear wet/dry blend of the 1.5:1 feedback compressor before the BBD and 1:1.5 feedforward expander after the BBD (a square-root version of DAFx-05 Eq. 26–27's 2:1 law). At 1.0 the pair is level-matched for normal playing levels; very quiet tails are expanded slightly below their input level.
    - Function: Reproduces the dynamic "breathing" and transient punch of analog BBD pedals equipped with Philips NE570/SA571 compander ICs.
 
 6. bbd_warmth_thd

@@ -5,8 +5,8 @@
 // Implements P. Fernandez-Cid & F.J. Casajus-Quiros (DAFx-98, Paper FER09):
 // "Enhanced Quality and Variety for Chorus/Flange Units" (Sections 5, 6, 7 & 8).
 // Combines all three innovations from the paper:
-//   1. Section 5 (Laws for Delay Modulation): Generates a click-free, infinitely
-//      differentiable narrowband random process at sub-audio rate f_sm using
+//   1. Section 5 (Laws for Delay Modulation): Generates a click-free narrowband random
+//      process (continuous value and slope) at sub-audio rate f_sm using
 //      raised-cosine (Hann) interpolation between random targets multiplied by a
 //      central cosine LFO, blending smoothly from periodic sine to organic random drift!
 //   2. Section 7 (Multiscale vs. Multivoice Chorus): Splits the stereo signal into
@@ -20,55 +20,61 @@
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional External Envelope Override [0..1]
-//   in4: Optional 1-Bar Phasor [0..1] (syncs central LFO carrier when patched)
+//   in3: unused (bound to a dummy local so the port stays present)
+//   in4: Optional 1-Bar Phasor [0..1] (exception to the in4-in-Hz contract): while it
+//        moves, the low-scale carrier runs at 1 cycle per bar
 // Outlets:
 //   out1: Left Multiscale Envelope-Adaptive Chorus Output
 //   out2: Right Multiscale Envelope-Adaptive Chorus Output
 
-@param({ min: 0.15, max: 5.0 }) central_rate_hz = 0.85;
-@param({ min: 0.0, max: 1.0 }) randomness_bw = 0.55;
-@param({ min: 2.0, max: 25.0 }) delay_depth_ms = 8.5;
-@param({ min: 0.0, max: 1.0 }) scale_independence = 0.75;
-@param({ min: 0.0, max: 1.0 }) env_mix_duck_noise = 0.45;
-@param({ min: 0.0, max: 1.0 }) env_color_shift = 0.35;
-@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.55;
+@param({ min: 0.15, max: 5.0 }) central_rate_hz = 0.85;         // modulation rate
+@param({ min: 0.0, max: 1.0 }) randomness_bw = 0.55;            // sine -> random
+@param({ min: 2.0, max: 25.0 }) delay_depth_ms = 8.5;           // delay + depth
+@param({ min: 0.0, max: 1.0 }) scale_independence = 0.75;      // shared -> per-band laws
+@param({ min: 0.0, max: 1.0 }) env_mix_duck_noise = 0.45;      // keep quiet bands dry
+@param({ min: 0.0, max: 1.0 }) env_color_shift = 0.35;         // envelope delay shift
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.55;              // wet level
 
 // 3-Band Dyadic Crossover Filter States (Low < 250 Hz, Mid 250..1200 Hz, High > 1200 Hz)
 @state lpLowL = new onepole(); @state lpLowR = new onepole();
 @state lpMidL = new onepole(); @state lpMidR = new onepole();
 
-// 3 Multiscale Delay Buffers per stereo channel (2048 samples each)
-@state bufLowL = new FixedSampleArray(2048); @state bufLowR = new FixedSampleArray(2048);
-@state bufMidL = new FixedSampleArray(2048); @state bufMidR = new FixedSampleArray(2048);
-@state bufHiL  = new FixedSampleArray(2048); @state bufHiR  = new FixedSampleArray(2048);
+// 3 Multiscale Delay Buffers per stereo channel (8192 samples each: the longest
+// excursion is ~40 ms, which needs ~7700 samples at 192 kHz)
+@state bufLowL = new FixedSampleArray(8192); @state bufLowR = new FixedSampleArray(8192);
+@state bufMidL = new FixedSampleArray(8192); @state bufMidR = new FixedSampleArray(8192);
+@state bufHiL  = new FixedSampleArray(8192); @state bufHiR  = new FixedSampleArray(8192);
 @state writeIdx: Int = 0;
 
 // Raised-Cosine Interpolated Random Generators for the 3 scales (DAFx-98 Sec 5)
 @state rndPh = new FixedSampleArray(3);
 @state rndPrevL = new FixedSampleArray(3); @state rndNextL = new FixedSampleArray(3);
 @state rndPrevR = new FixedSampleArray(3); @state rndNextR = new FixedSampleArray(3);
-@state rngSeed: Int = 2463534242;
+@state rng = new noise();
 
 // Central cosine carrier phasors for the 3 scales
 @state lfoPh0 = new phasor();
 @state lfoPh1 = new phasor();
 @state lfoPh2 = new phasor();
 @state prevBarIn = 0.0;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
 
 // Per-Scale Envelope Followers (DAFx-98 Sec 6 & 7)
 @state envLow = 0.0;
 @state envMid = 0.0;
 @state envHi  = 0.0;
 
-function nextRandBipolar(seedIn: Int): number {
-	let s: Int = seedIn * 1664525 + 1013904223;
-	return ((s & 65535) / 32768.0) - 1.0;
-}
-
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let unused_in3 = in3;
 let barIn = in4;
 
@@ -109,17 +115,15 @@ for (let b: Int = 0; b < 3; b++) {
 	if (p >= 1.0) {
 		p -= 1.0;
 		rndPrevL[b] = rndNextL[b];
-		rngSeed = rngSeed * 1664525 + 1013904223;
-		rndNextL[b] = ((rngSeed & 65535) / 32768.0) - 1.0;
+		rndNextL[b] = rng.next();
 
 		rndPrevR[b] = rndNextR[b];
-		rngSeed = rngSeed * 1664525 + 1013904223;
-		rndNextR[b] = ((rngSeed & 65535) / 32768.0) - 1.0;
+		rndNextR[b] = rng.next();
 	}
 	rndPh[b] = p;
 }
 
-// Raised-cosine (Hann) C^infinity interpolation between random targets (DAFx-98 Sec 5)
+// Raised-cosine (Hann) interpolation between random targets: continuous value and slope (DAFx-98 Sec 5)
 let w0 = 0.5 * (1.0 - cos(pi * rndPh[0]));
 let w1 = 0.5 * (1.0 - cos(pi * rndPh[1]));
 let w2 = 0.5 * (1.0 - cos(pi * rndPh[2]));
@@ -132,9 +136,15 @@ let noise2L = linearinterp(w2, rndPrevL[2], rndNextL[2]);
 let noise2R = linearinterp(w2, rndPrevR[2], rndNextR[2]);
 
 // Central frequency cosine carriers
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// Bar phasor counts as active for 100 ms after it last moved (a constant in4 must not freeze the LFO)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
-let cPh0 = barActive ? wrap(barIn, 0.0, 1.0) : lfoPh0.next(baseRate * 0.75);
+let freePh0 = lfoPh0.next(baseRate * 0.75);
+let cPh0 = (barHold > 0.0) ? wrap(barIn, 0.0, 1.0) : freePh0;
 let cPh1 = lfoPh1.next(baseRate);
 let cPh2 = lfoPh2.next(baseRate * 1.33);
 
@@ -166,37 +176,37 @@ let mainHiSamps  = mstosamps(baseMs * 0.75 * (1.0 - 0.45 * colShift * clamp(envH
 
 let modSpan = mstosamps(baseMs * 0.42);
 
-let rpLowL = writeIdx - clamp(mainLowSamps + modSpan * 0.45 * lawLowL, 2.0, 2042.0);
-while (rpLowL < 0.0) { rpLowL += 2048.0; }
+let rpLowL = writeIdx - clamp(mainLowSamps + modSpan * 0.45 * lawLowL, 2.0, 8186.0);
+while (rpLowL < 0.0) { rpLowL += 8192.0; }
 let iLowL: Int = floor(rpLowL);
-let wetLowL = cubicinterp(rpLowL - iLowL, bufLowL[(iLowL - 1 + 2048) & 2047], bufLowL[iLowL & 2047], bufLowL[(iLowL + 1) & 2047], bufLowL[(iLowL + 2) & 2047]);
+let wetLowL = cubicinterp(rpLowL - iLowL, bufLowL[(iLowL - 1 + 8192) & 8191], bufLowL[iLowL & 8191], bufLowL[(iLowL + 1) & 8191], bufLowL[(iLowL + 2) & 8191]);
 
-let rpLowR = writeIdx - clamp(mainLowSamps + modSpan * 0.45 * lawLowR, 2.0, 2042.0);
-while (rpLowR < 0.0) { rpLowR += 2048.0; }
+let rpLowR = writeIdx - clamp(mainLowSamps + modSpan * 0.45 * lawLowR, 2.0, 8186.0);
+while (rpLowR < 0.0) { rpLowR += 8192.0; }
 let iLowR: Int = floor(rpLowR);
-let wetLowR = cubicinterp(rpLowR - iLowR, bufLowR[(iLowR - 1 + 2048) & 2047], bufLowR[iLowR & 2047], bufLowR[(iLowR + 1) & 2047], bufLowR[(iLowR + 2) & 2047]);
+let wetLowR = cubicinterp(rpLowR - iLowR, bufLowR[(iLowR - 1 + 8192) & 8191], bufLowR[iLowR & 8191], bufLowR[(iLowR + 1) & 8191], bufLowR[(iLowR + 2) & 8191]);
 
-let rpMidL = writeIdx - clamp(mainMidSamps + modSpan * lawMidL, 2.0, 2042.0);
-while (rpMidL < 0.0) { rpMidL += 2048.0; }
+let rpMidL = writeIdx - clamp(mainMidSamps + modSpan * lawMidL, 2.0, 8186.0);
+while (rpMidL < 0.0) { rpMidL += 8192.0; }
 let iMidL: Int = floor(rpMidL);
-let wetMidL = cubicinterp(rpMidL - iMidL, bufMidL[(iMidL - 1 + 2048) & 2047], bufMidL[iMidL & 2047], bufMidL[(iMidL + 1) & 2047], bufMidL[(iMidL + 2) & 2047]);
+let wetMidL = cubicinterp(rpMidL - iMidL, bufMidL[(iMidL - 1 + 8192) & 8191], bufMidL[iMidL & 8191], bufMidL[(iMidL + 1) & 8191], bufMidL[(iMidL + 2) & 8191]);
 
-let rpMidR = writeIdx - clamp(mainMidSamps + modSpan * lawMidR, 2.0, 2042.0);
-while (rpMidR < 0.0) { rpMidR += 2048.0; }
+let rpMidR = writeIdx - clamp(mainMidSamps + modSpan * lawMidR, 2.0, 8186.0);
+while (rpMidR < 0.0) { rpMidR += 8192.0; }
 let iMidR: Int = floor(rpMidR);
-let wetMidR = cubicinterp(rpMidR - iMidR, bufMidR[(iMidR - 1 + 2048) & 2047], bufMidR[iMidR & 2047], bufMidR[(iMidR + 1) & 2047], bufMidR[(iMidR + 2) & 2047]);
+let wetMidR = cubicinterp(rpMidR - iMidR, bufMidR[(iMidR - 1 + 8192) & 8191], bufMidR[iMidR & 8191], bufMidR[(iMidR + 1) & 8191], bufMidR[(iMidR + 2) & 8191]);
 
-let rpHiL = writeIdx - clamp(mainHiSamps + modSpan * 1.15 * lawHiL, 2.0, 2042.0);
-while (rpHiL < 0.0) { rpHiL += 2048.0; }
+let rpHiL = writeIdx - clamp(mainHiSamps + modSpan * 1.15 * lawHiL, 2.0, 8186.0);
+while (rpHiL < 0.0) { rpHiL += 8192.0; }
 let iHiL: Int = floor(rpHiL);
-let wetHiL = cubicinterp(rpHiL - iHiL, bufHiL[(iHiL - 1 + 2048) & 2047], bufHiL[iHiL & 2047], bufHiL[(iHiL + 1) & 2047], bufHiL[(iHiL + 2) & 2047]);
+let wetHiL = cubicinterp(rpHiL - iHiL, bufHiL[(iHiL - 1 + 8192) & 8191], bufHiL[iHiL & 8191], bufHiL[(iHiL + 1) & 8191], bufHiL[(iHiL + 2) & 8191]);
 
-let rpHiR = writeIdx - clamp(mainHiSamps + modSpan * 1.15 * lawHiR, 2.0, 2042.0);
-while (rpHiR < 0.0) { rpHiR += 2048.0; }
+let rpHiR = writeIdx - clamp(mainHiSamps + modSpan * 1.15 * lawHiR, 2.0, 8186.0);
+while (rpHiR < 0.0) { rpHiR += 8192.0; }
 let iHiR: Int = floor(rpHiR);
-let wetHiR = cubicinterp(rpHiR - iHiR, bufHiR[(iHiR - 1 + 2048) & 2047], bufHiR[iHiR & 2047], bufHiR[(iHiR + 1) & 2047], bufHiR[(iHiR + 2) & 2047]);
+let wetHiR = cubicinterp(rpHiR - iHiR, bufHiR[(iHiR - 1 + 8192) & 8191], bufHiR[iHiR & 8191], bufHiR[(iHiR + 1) & 8191], bufHiR[(iHiR + 2) & 8191]);
 
-writeIdx = (writeIdx + 1) & 2047;
+writeIdx = (writeIdx + 1) & 8191;
 
 // --- 5. Per-Scale Envelope-Automated Dry/Wet Ratio (DAFx-98 Sec 6 & 7) ---
 // Bands with little energy remain unprocessed (hiding modulated noise); active bands chorus!

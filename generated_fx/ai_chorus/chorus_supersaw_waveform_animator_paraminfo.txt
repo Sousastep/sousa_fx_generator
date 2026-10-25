@@ -5,10 +5,10 @@ chorus_supersaw_waveform_animator — Parameter Information
 OVERVIEW
 A standalone stereo 7-Voice Unison "Supersaw" & Waveform Animator Chorus implementing Joseph Timoney, Victor Lazzarini, Jari Kleimola, and Vesa Välimäki's "Examining the Oscillator Waveform Animation Effect" (DAFx-14, Sections 2, 3, 4 & 5, Eq. 1, 17–27, Fig. 1–7). Combines both unison animation architectures derived in the paper:
 1. 7-Voice Delay-Line Pitch-Shifter Unison Bank (Section 5, Eq. 24–27, Fig. 6–7): Uses four dual-head raised-cosine-windowed pitch-shifting delay lines at symmetric transposition ratios `s`, `s^3`, `1/s`, and `1/s^3` (where `s = 1 + df0/f0`) plus two slow triangle-modulated unison voices and the center voice. Unlike a standard LFO chorus whose pitch oscillates up and down, this produces true Risset/JP-8000 constant-interval harmonic cluster beating (`Bk(t)`, Eq. 1) on live acoustic tuba!
-2. Hutchins Comparator PWM Waveform Animator (Sections 3 & 4, Eq. 17–23, Fig. 1–5): Subtracts slow (<2 Hz) triangle LFOs scaled to the optimal 0.70 duty-cycle width (Fig. 5) and applies soft comparator pulse subtraction so upper harmonics receive progressively wider phase modulation (`J_o(k * I_1)`, Eq. 23).
+2. Hutchins Comparator PWM Waveform Animator (Sections 3 & 4, Eq. 17–23, Fig. 1–5): Subtracts slow (<2 Hz) triangle LFOs scaled to the optimal 0.70 duty-cycle width (Fig. 5) and applies soft comparator pulse subtraction so upper harmonics receive progressively wider phase modulation (`J_o(k * I_1)`, Eq. 23). The paper's animator expects a sawtooth of known amplitude; here the live input is normalized by its peak envelope (80 ms release) before the comparison, so the 0.70 width is relative to how loud you are playing, and the comparator pulse is scaled back by that envelope so it follows your dynamics and is silent in rests.
 
 INLETS & OUTLETS
-- in1 / in2: Stereo Audio Input (Tuba; mono in1 auto-normalizes to stereo)
+- in1 / in2: Stereo Audio Input (Tuba). If in2 stays silent for 250 ms, in1 is used for both sides.
 - in3: Unused / Thru
 - in4: Unused / Thru
 - out1 / out2: Stereo 7-Voice Unison Supersaw Chorus Output
@@ -23,12 +23,12 @@ PARAMETERS (6)
 2. grain_window_ms
    - Range: 12.0 to 45.0 ms (Raised-Cosine Pitch-Shifter Crossfade Window `tau`, Default: 24.0 ms)
    - Taper: Direct window duration in milliseconds (DAFx-14 Eq. 24–26).
-   - Function: Sets the overlap window of the dual-head delay-line pitch shifters.
+   - Function: Sets the overlap window of the dual-head delay-line pitch shifters. Shorter windows track tuba attacks more tightly but add a faster amplitude flutter; longer windows are smoother but smear attacks and add up to ~45 ms of extra delay on the side voices.
 
 3. hutchins_pwm_anim
    - Range: 0.0 to 1.0 (Hutchins Comparator PWM Waveform Animation Depth, Default: 0.25)
    - Taper: Linear comparator pulse subtraction depth (calibrated to the DAFx-14 Fig. 5 optimal 0.70 duty-cycle width).
-   - Function: Adds Bernard Hutchins's 1981 modular Waveform Animator phase-shifted PWM edge directly to the center voices for extra upper-harmonic sizzle.
+   - Function: Adds Bernard Hutchins's 1981 modular Waveform Animator phase-shifted PWM edge directly to the center voices for extra upper-harmonic sizzle. This is a comparator, so it behaves like a level-tracking square-wave fuzz blended under the tuba: keep it low for sheen, raise it for a buzzy synth edge.
 
 4. pwm_lfo_rate_hz
    - Range: 0.10 to 2.00 Hz (Triangle LFO Rate for Comparator & Auxiliary Unison Voices, Default: 0.65 Hz, matching DAFx-14 Section 3 recommendation of < 2 Hz)
@@ -41,6 +41,6 @@ PARAMETERS (6)
    - Function: Pans Voices `+s`, `-s^3`, and `LFO1` to the Left and Voices `-s`, `+s^3`, and `LFO2` to the Right for a massive wall-of-brass stereo image.
 
 6. center_to_side_mix
-   - Range: 0.0 to 1.0 (6 Detuned Side Voices Mix vs. Center Voice, Default: 0.65, matching the JP-8000 Supersaw Mix control cited in DAFx-14 Section 4)
-   - Taper: Linear unison side-voice balance.
+   - Range: 0.0 to 1.0 (6 Detuned Side Voices Mix vs. Center Voice, Default: 0.65; analogous to the commercial supersaw Mix control, e.g. the Roland JP-8000, that DAFx-14 Section 4 mentions)
+   - Taper: Linear unison side-voice balance (at 1.0 the center voice is at ~0.74 and the side cluster at 0.75).
    - Function: Balances the solid fundamental center voice against the 6 detuned/animated side voices.

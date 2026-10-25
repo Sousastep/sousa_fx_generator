@@ -20,17 +20,18 @@
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
 //   in3: Optional Tracked Pitch f0 in Hz (if >20 Hz) OR Envelope/Detune Boost [0..1]
-//   in4: Optional 1-Bar Phasor [0..1]
+//   in4: Optional 1-Bar Phasor [0..1] (exception to the in4-in-Hz contract): while it moves,
+//        shimmer LFO 1 runs at 2 cycles per bar; LFO 2 stays free at 1.27 x shimmer_rate_hz
 // Outlets:
 //   out1: Left AM/FM ChorIFer & TransColorIFer Output
 //   out2: Right AM/FM ChorIFer & TransColorIFer Output
 
-@param({ min: 0.0, max: 3.5 }) chorifer_detune_pct = 0.85;
-@param({ min: 0.15, max: 6.0 }) shimmer_rate_hz = 1.4;
-@param({ min: 0.0, max: 1.0 }) octifer_sub_up_blend = 0.30;
-@param({ min: 0.0, max: 1.0 }) transcolor_fifth = 0.15;
-@param({ min: 80.0, max: 3000.0 }) if_smoother_hz = 450.0;
-@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.55;
+@param({ min: 0.0, max: 3.5 }) chorifer_detune_pct = 0.85;      // voice detune (% of IF)
+@param({ min: 0.15, max: 6.0 }) shimmer_rate_hz = 1.4;          // shimmer LFO rate
+@param({ min: 0.0, max: 1.0 }) octifer_sub_up_blend = 0.30;     // sub/up octave level
+@param({ min: 0.0, max: 1.0 }) transcolor_fifth = 0.15;         // fifth voice level
+@param({ min: 80.0, max: 3000.0 }) if_smoother_hz = 450.0;      // IF smoother cutoff
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.55;              // dry/wet
 
 // 4-Stage Quadrature IIR Hilbert Transform Network for AM/FM Decomposition (Sec 2)
 @state hReX = new FixedSampleArray(4); @state hReY = new FixedSampleArray(4);
@@ -63,10 +64,18 @@
 @state lfo2 = new phasor();
 @state prevBarIn = 0.0;
 @state barHold = 0.0;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
 let in3Val = in3;
 let barIn = in4;
 
@@ -194,9 +203,8 @@ let wetR = ia * (choirR + octAmt * octWaveR + fifthAmt * sin(2.0 * pi * synPhFif
 let norm = 1.0 / (1.15 + 0.65 * (octAmt + fifthAmt));
 let mix = clamp(dry_wet_mix, 0.0, 1.0);
 
-// Use phase-aligned Hilbert real signal sigRe for the dry path so dry + wet blend has zero phase cancellation!
-let dryAlignedL = (abs(in2) > 0.0000001) ? xL : sigRe;
-let dryAlignedR = (abs(in2) > 0.0000001) ? xR : sigRe;
-
-out1 = tanh(cos(mix * 0.5 * pi) * dryAlignedL + sin(mix * 0.5 * pi) * wetL * norm * 1.35);
-out2 = tanh(cos(mix * 0.5 * pi) * dryAlignedR + sin(mix * 0.5 * pi) * wetR * norm * 1.35);
+// Dry path is the raw input. The resynthesized wet voices have free-running phase, so
+// they are never phase-coherent with any dry signal, and the Hilbert real branch sigRe
+// would smear the dry tuba (the 0.9975 allpass section alone is ~16 ms group delay near DC).
+out1 = tanh(cos(mix * 0.5 * pi) * xL + sin(mix * 0.5 * pi) * wetL * norm * 1.35);
+out2 = tanh(cos(mix * 0.5 * pi) * xR + sin(mix * 0.5 * pi) * wetR * norm * 1.35);

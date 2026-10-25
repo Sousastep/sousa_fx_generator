@@ -8,34 +8,39 @@
 // (Sections 1, 2.1 & 3, Eq. 1-3, Fig. 1-2).
 // Implements the two core psychoacoustic discoveries of the paper:
 //   1. Section 3 & Fig. 2 (Constant Pitch-Excursion Hyperbola):
-//      Listening tests proved that the musically useful chorus depth in microseconds
-//      is a linear function of modulation PERIOD (1 / Rate_Hz):
+//      In listening tests (guitar stimuli, 2-9 Hz), the boundaries of the musically
+//      useful peak depth in microseconds regressed linearly on modulation PERIOD (1 / Rate_Hz):
 //        Depth_lower(us) = 814 / Rate_Hz - 66
 //        Depth_upper(us) = 4800 / Rate_Hz - 350
-//      By coupling modulation depth inversely to modulation rate along this exact
-//      logistic-regression hyperbola, you can sweep Rate from 0.5 Hz to 9.0 Hz and
-//      the chorus NEVER becomes "supra-useful" (seasick/out-of-tune) or "sub-useful"!
+//      Coupling depth inversely to rate along these lines keeps the setting inside the
+//      same perceptual region as the rate changes (the regression is held at its 1.2 Hz
+//      value below 1.2 Hz, since the paper only tested 2-9 Hz).
 //   2. Section 2.1 (ITD Lead/Lag Spatial Stereo Chorus):
-//      Delays the unmodulated reference path by 0.5 ms (500 us) so the modulated
-//      chorus voices fluctuate symmetrically between LEADING and LAGGING the dry
-//      signal in time of arrival across the +/- 0.65 ms human Interaural Time Delay
-//      (ITD) horizon—making the tuba orbit circularly around the listener's head!
+//      Delays the unmodulated reference path by ~0.5 ms so the modulated voice
+//      fluctuates between LEADING and LAGGING it in time of arrival, like the ITD of a
+//      source circling the head. In the paper the reference and the modulated voice go
+//      to DIFFERENT speakers; itd_spatial_routing = 1 does that (reference left,
+//      modulated right). At 0 both are summed in each channel, which adds comb/flange
+//      colour instead of the spatial effect.
 // ============================================================================
 // Inlets:
 //   in1: Left Audio Input (Tuba)
 //   in2: Right Audio Input (if unpatched, mono in1 is used automatically)
-//   in3: Optional Envelope Modulator [0..1] (shifts position within the useful zone)
-//   in4: Optional 1-Bar Phasor [0..1]
+//   in3: Optional Envelope Modulator [0..1] (shifts position within the useful zone).
+//        Exception to the in3-pitch contract: values above 20 (a pitch in Hz) are ignored.
+//   in4: Optional 1-Bar Phasor [0..1] (exception to the in4-in-Hz contract): while it
+//        moves, the primary LFO runs at 2 cycles per bar
 // Outlets:
 //   out1: Left ITD Lead/Lag Hyperbolic Stereo Chorus Output
 //   out2: Right ITD Lead/Lag Hyperbolic Stereo Chorus Output
 
-@param({ min: 0.4, max: 9.0 }) mod_rate_hz = 3.2;
-@param({ min: 0.0, max: 1.0 }) perceptual_zone = 0.55;
-@param({ min: 0.0, max: 1.0 }) rate_depth_coupling = 0.85;
-@param({ min: 0.2, max: 2.5 }) itd_center_ms = 0.55;
-@param({ min: 0.0, max: 1.0 }) voice_quadrature = 0.65;
-@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.50;
+@param({ min: 0.4, max: 9.0 }) mod_rate_hz = 3.2;               // modulation rate
+@param({ min: 0.0, max: 1.0 }) perceptual_zone = 0.55;          // subtle -> extreme depth
+@param({ min: 0.0, max: 1.0 }) rate_depth_coupling = 0.85;      // depth follows rate
+@param({ min: 0.2, max: 2.5 }) itd_center_ms = 0.55;            // reference delay
+@param({ min: 0.0, max: 1.0 }) voice_quadrature = 0.65;         // L/R phase + 2nd voice
+@param({ min: 0.0, max: 1.0 }) dry_wet_mix = 0.50;              // dry/wet
+@param({ min: 0.0, max: 1.0 }) itd_spatial_routing = 0.0;       // summed -> split L/R
 
 // Stereo circular delay buffers (2048 samples per channel)
 @state itdBufL = new FixedSampleArray(2048);
@@ -47,11 +52,20 @@
 @state lfoPh2 = new phasor();
 @state prevBarIn = 0.0;
 @state smoothRate = 3.2;
+@state barHold = 0.0;
+@state in2Hold = 0.0;
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
-let xR = (abs(in2) > 0.0000001) ? in2 : xL;
-let envMod = clamp(in3, 0.0, 1.0);
+// in2 counts as patched for 250 ms after any non-zero sample (a per-sample test
+// would swap in xL for single samples at in2's zero crossings)
+if (abs(in2) > 0.0000001) {
+	in2Hold = 0.25 * sr;
+} else if (in2Hold > 0.0) {
+	in2Hold -= 1.0;
+}
+let xR = (in2Hold > 0.0) ? in2 : xL;
+let envMod = (in3 > 20.0) ? 0.0 : clamp(in3, 0.0, 1.0);
 let barIn = in4;
 
 itdBufL[writeIdx] = xL;
@@ -85,21 +99,27 @@ let centerSamps = mstosamps(centerMs);
 let modDepthSamps = mstosamps(depthMs);
 
 // Delayed unmodulated reference signals (at exactly centerSamps)
-let rpRefL = writeIdx - clamp(centerSamps, 1.0, 2042.0);
+let rpRefL = writeIdx - clamp(centerSamps, 2.0, 2042.0);
 while (rpRefL < 0.0) { rpRefL += 2048.0; }
 let iRefL: Int = floor(rpRefL);
 let refDryL = cubicinterp(rpRefL - iRefL, itdBufL[(iRefL - 1 + 2048) & 2047], itdBufL[iRefL & 2047], itdBufL[(iRefL + 1) & 2047], itdBufL[(iRefL + 2) & 2047]);
 
-let rpRefR = writeIdx - clamp(centerSamps, 1.0, 2042.0);
+let rpRefR = writeIdx - clamp(centerSamps, 2.0, 2042.0);
 while (rpRefR < 0.0) { rpRefR += 2048.0; }
 let iRefR: Int = floor(rpRefR);
 let refDryR = cubicinterp(rpRefR - iRefR, itdBufR[(iRefR - 1 + 2048) & 2047], itdBufR[iRefR & 2047], itdBufR[(iRefR + 1) & 2047], itdBufR[(iRefR + 2) & 2047]);
 
 // --- 3. Quadrature Circular Head-Orbit Delay Modulation (Sec 2.1) ---
-let barActive = (abs(barIn - prevBarIn) > 0.000001 || (barIn > 0.001 && barIn < 0.999)) ? 1.0 : 0.0;
+// Bar phasor counts as active for 100 ms after it last moved (a constant in4 must not freeze the LFO)
+if (abs(barIn - prevBarIn) > 0.000001) {
+	barHold = 0.1 * sr;
+} else if (barHold > 0.0) {
+	barHold -= 1.0;
+}
 prevBarIn = barIn;
 
-let ph1 = barActive ? wrap(barIn * 2.0, 0.0, 1.0) : lfoPh1.next(smoothRate);
+let freePh1 = lfoPh1.next(smoothRate);
+let ph1 = (barHold > 0.0) ? wrap(barIn * 2.0, 0.0, 1.0) : freePh1;
 let ph2 = lfoPh2.next(smoothRate * 1.19); // Secondary chorus voice
 
 let quadSpread = clamp(voice_quadrature, 0.0, 1.0);
@@ -109,22 +129,22 @@ let lfo2L = cos(2.0 * pi * ph2);
 let lfo2R = 0.0 - cos(2.0 * pi * ph2);
 
 // Modulated taps swing both AHEAD of (< centerSamps) and BEHIND (> centerSamps) refDry!
-let rpM1L = writeIdx - clamp(centerSamps + modDepthSamps * lfo1L, 1.0, 2042.0);
+let rpM1L = writeIdx - clamp(centerSamps + modDepthSamps * lfo1L, 2.0, 2042.0);
 while (rpM1L < 0.0) { rpM1L += 2048.0; }
 let iM1L: Int = floor(rpM1L);
 let mod1L = cubicinterp(rpM1L - iM1L, itdBufL[(iM1L - 1 + 2048) & 2047], itdBufL[iM1L & 2047], itdBufL[(iM1L + 1) & 2047], itdBufL[(iM1L + 2) & 2047]);
 
-let rpM1R = writeIdx - clamp(centerSamps + modDepthSamps * lfo1R, 1.0, 2042.0);
+let rpM1R = writeIdx - clamp(centerSamps + modDepthSamps * lfo1R, 2.0, 2042.0);
 while (rpM1R < 0.0) { rpM1R += 2048.0; }
 let iM1R: Int = floor(rpM1R);
 let mod1R = cubicinterp(rpM1R - iM1R, itdBufR[(iM1R - 1 + 2048) & 2047], itdBufR[iM1R & 2047], itdBufR[(iM1R + 1) & 2047], itdBufR[(iM1R + 2) & 2047]);
 
-let rpM2L = writeIdx - clamp(centerSamps * 1.35 + modDepthSamps * 0.7 * lfo2L, 1.0, 2042.0);
+let rpM2L = writeIdx - clamp(centerSamps * 1.35 + modDepthSamps * 0.7 * lfo2L, 2.0, 2042.0);
 while (rpM2L < 0.0) { rpM2L += 2048.0; }
 let iM2L: Int = floor(rpM2L);
 let mod2L = cubicinterp(rpM2L - iM2L, itdBufL[(iM2L - 1 + 2048) & 2047], itdBufL[iM2L & 2047], itdBufL[(iM2L + 1) & 2047], itdBufL[(iM2L + 2) & 2047]);
 
-let rpM2R = writeIdx - clamp(centerSamps * 1.35 + modDepthSamps * 0.7 * lfo2R, 1.0, 2042.0);
+let rpM2R = writeIdx - clamp(centerSamps * 1.35 + modDepthSamps * 0.7 * lfo2R, 2.0, 2042.0);
 while (rpM2R < 0.0) { rpM2R += 2048.0; }
 let iM2R: Int = floor(rpM2R);
 let mod2R = cubicinterp(rpM2R - iM2R, itdBufR[(iM2R - 1 + 2048) & 2047], itdBufR[iM2R & 2047], itdBufR[(iM2R + 1) & 2047], itdBufR[(iM2R + 2) & 2047]);
@@ -134,7 +154,11 @@ writeIdx = (writeIdx + 1) & 2047;
 let wetL = linearinterp(quadSpread * 0.45, mod1L, 0.7 * mod1L + 0.5 * mod2L);
 let wetR = linearinterp(quadSpread * 0.45, mod1R, 0.7 * mod1R + 0.5 * mod2R);
 
-// In ITD Stereo Chorus (Sec 1 & 2.1), reference dry and leading/lagging modulated voices combine
+// Summed routing: reference and modulated voices share each channel (chorus/flange colour).
+// Spatial routing (Sec 1 & 2.1): reference on the left, leading/lagging modulated voice on the right.
 let mix = clamp(dry_wet_mix, 0.0, 1.0);
-out1 = cos(mix * 0.5 * pi) * refDryL + sin(mix * 0.5 * pi) * wetL;
-out2 = cos(mix * 0.5 * pi) * refDryR + sin(mix * 0.5 * pi) * wetR;
+let route = clamp(itd_spatial_routing, 0.0, 1.0);
+let sumL = cos(mix * 0.5 * pi) * refDryL + sin(mix * 0.5 * pi) * wetL;
+let sumR = cos(mix * 0.5 * pi) * refDryR + sin(mix * 0.5 * pi) * wetR;
+out1 = linearinterp(route, sumL, refDryL);
+out2 = linearinterp(route, sumR, wetR);
