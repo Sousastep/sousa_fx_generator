@@ -1,0 +1,64 @@
+================================================================================
+dly_bbd_echo — Parameter Information
+================================================================================
+
+WHAT IT IS
+An analog bucket-brigade echo pedal. The signal is compressed 2:1 (NE570
+style), lowpassed, sampled by an artificial clock into 2048 "buckets", held,
+lowpassed again and expanded back. The clock is 2048 / delay time, so the echo
+gets darker and grittier the longer it is: ~6.8 kHz clock at 300 ms, ~3.4 kHz
+at 600 ms. Left and right have their own chip, with the clock wobble in
+opposite phase.
+
+Source: Raffel & Smith, "Practical Modeling of Bucket-Brigade Device
+Circuits", DAFx-10 §3.2–3.4 (compander) and §4.1 (clocked BBD with
+interpolation, anti-alias/reconstruction filters); Gabrielli, D'Angelo &
+Squartini, DAFx-25 Paper 29 §2, §2.1 (BBD operating principle, trivial
+discrete-time simulation).
+
+The point of this one is the warm, murky, wobbly trip-hop echo: repeats that
+lose their top end, breathe with the compander and smear into each other.
+100% wet, no dry/wet.
+
+PARAMETERS (7 + output gain)
+
+1. time_ms — 20…600 ms, default 300 ms
+   Echo time. Moving it glides (~150 ms) and bends pitch like the knob on a
+   real unit. Long = dark and lo-fi, short = bright slapback.
+
+2. feedback — 0…1.1, default 0.55
+   Repeats. Above ~1 the echo self-oscillates and builds up to the clipping of
+   the input node (around -20 dB RMS at drive 0).
+
+3. drive_db — 0…24 dB, default 6 dB
+   Lowers the clipping point of the input/feedback node. Higher = repeats
+   that saturate sooner and runaway feedback that stays lower and dirtier.
+   Small-signal level does not change.
+
+4. mod_rate_hz — 0.1…8 Hz, default 0.6 Hz
+   Clock LFO rate (L and R opposite phase).
+
+5. mod_depth — 0…1, default 0.2
+   Clock LFO depth, up to +/-3% of the delay time. Low = gentle wow, high =
+   seasick chorus on the repeats.
+
+6. hiss_db — -90…-40 dB, default -70 dB
+   Noise added in the buckets. It goes through the expander, so it pumps with
+   the signal and disappears in silence, like the real thing.
+
+7. lowcut_hz — 20…600 Hz, default 80 Hz
+   Highpass at the input node, so it also thins every repeat.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio (one BBD per side).
+- out1 / out2: stereo repeats, wet only.
+
+NOTES
+- The anti-alias and reconstruction filters are 4th-order and track 0.42 x
+  the clock; the zero-order-hold aliasing that leaks past them is the grit.
+- Compressor gain is capped at +26 dB and each bucket saturates softly at
+  ~12 dB over the companded level, so transients from silence cannot jump.
+- No limiter, no dry path.

@@ -1,0 +1,251 @@
+// ============================================================================
+// rev_sdn_room.txt
+// A small shoebox room as a scattering delay network (six wall nodes): punch and size without a wash.
+// From: Fontana, Presti, Fantini, Avanzini & Rey, "A Highly Parametrized
+//       Scattering Delay Network Implementation for Interactive Room
+//       Auralization", DAFx-24 Paper 34, §2.2-2.3 (one scattering node per
+//       wall at the first-order reflection point; nodes joined by
+//       bidirectional delay lines D = fs*|xk - xj|/c, Eq. 2; S = beta*A with
+//       beta = sqrt(1 - alpha) and the lossless A = (2/K)*1*1^T - I, Eq. 6;
+//       source-to-node lines with 1/r spreading; node-to-receiver lines with
+//       weights 2/K and gain 1/(1 + |xk - xR| / |xS - xk|), Eq. 3) and §3.2
+//       (frequency-dependent wall absorption as a filter H(z) in S = H(z)A).
+//       Mezza, Giampiccolo, De Sena & Bernardini, "Differentiable Scattering
+//       Delay Networks for Artificial Reverberation", DAFx-25 Paper 51, §2.2
+//       (the scattering junction, source pressure split 1/2 into each
+//       incoming wave).
+// First-order reflections land at their exact geometric times; higher orders
+// are approximated by the node network. The line-of-sight path is left out
+// (the dry sound lives outside this effect).
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio (summed: one source)
+// Outlets:
+//   out1 / out2: two spaced omni receivers, wet only
+// ============================================================================
+
+// predelay
+@param({ min: 0, max: 100 }) predelay_ms = 0;
+// room length (width 0.8x, height 0.45x)
+@param({ min: 2, max: 30, exponent: 2 }) room_m = 6;
+// wall absorption coefficient
+@param({ min: 0.05, max: 0.9 }) absorb = 0.3;
+// wall lowpass (frequency-dependent absorption)
+@param({ min: 500, max: 16000, exponent: 2 }) wall_hz = 5000;
+// source distance from the receivers (fraction of the room)
+@param({ min: 0.1, max: 0.9 }) source_pos = 0.5;
+// receiver spacing
+@param({ min: 0, max: 1 }) width = 0.8;
+// low cut
+@param({ min: 20, max: 600, exponent: 2 }) lowcut_hz = 120;
+// output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state pre = new FixedSampleArray(32768);
+@state preIdx: Int = 0;
+
+// 0-29 node->node (k*5 + slot), 30-35 source->node, 36-47 node->receiver
+@state lines = new FixedSampleArray(48, 16384);
+@state del = new FixedSampleArray(48);
+@state wIdx: Int = 0;
+
+@state gS = new FixedSampleArray(6);
+@state gR = new FixedSampleArray(12);
+@state nx = new FixedSampleArray(6);
+@state ny = new FixedSampleArray(6);
+@state nz = new FixedSampleArray(6);
+
+@state inc = new FixedSampleArray(30);
+@state wallLp = new FixedSampleArray(30);
+@state srcIn = new FixedSampleArray(6);
+
+@state roomS = -1.0;
+@state posS = -1.0;
+@state widS = -1.0;
+@state ctr: Int = 0;
+
+@state hx1 = 0.0;
+@state hy1 = 0.0;
+@state hx2 = 0.0;
+@state hy2 = 0.0;
+
+function dist(ax: number, ay: number, az: number, bx: number, by: number, bz: number) {
+	let dx = ax - bx;
+	let dy = ay - by;
+	let dz = az - bz;
+	return sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// node->node line index from k to j (j != k)
+function lineIdx(k: Int, j: Int) {
+	let slot: Int = j;
+	if (j > k) {
+		slot = j - 1;
+	}
+	return k * 5 + slot;
+}
+
+// geometry -> delay lengths and gains (§2.3.1-2.3.3)
+function geom(lx: number, pos: number, wid: number, sr: number) {
+	let ly = 0.8 * lx;
+	let lz = 0.45 * lx;
+	let rx = 0.5 * lx;
+	let ry = 0.3 * ly;
+	let rz = 0.4 * lz;
+	let sx = 0.6 * lx;
+	let sy = ry + pos * 0.65 * ly;
+	let sz = 0.45 * lz;
+	let k343 = sr / 343.0;
+
+	// node k: first-order reflection point on wall k (x0, xL, y0, yL, z0, zL)
+	for (let k: Int = 0; k < 6; k++) {
+		let ax: Int = k >> 1;
+		let w = 0.0;
+		if ((k & 1) == 1) {
+			if (ax == 0) {
+				w = lx;
+			} else if (ax == 1) {
+				w = ly;
+			} else {
+				w = lz;
+			}
+		}
+		let ix = sx;
+		let iy = sy;
+		let iz = sz;
+		let t = 0.0;
+		if (ax == 0) {
+			ix = 2.0 * w - sx;
+			t = (w - rx) / (ix - rx);
+		} else if (ax == 1) {
+			iy = 2.0 * w - sy;
+			t = (w - ry) / (iy - ry);
+		} else {
+			iz = 2.0 * w - sz;
+			t = (w - rz) / (iz - rz);
+		}
+		nx[k] = rx + t * (ix - rx);
+		ny[k] = ry + t * (iy - ry);
+		nz[k] = rz + t * (iz - rz);
+	}
+
+	for (let k: Int = 0; k < 6; k++) {
+		let dS = maximum(dist(sx, sy, sz, nx[k], ny[k], nz[k]), 0.1);
+		del[30 + k] = clamp(dS * k343, 2.0, 16000.0);
+		gS[k] = 1.0 / dS;
+		for (let j: Int = 0; j < 6; j++) {
+			if (j != k) {
+				let li: Int = lineIdx(k, j);
+				del[li] = clamp(dist(nx[k], ny[k], nz[k], nx[j], ny[j], nz[j]) * k343, 2.0, 16000.0);
+			}
+		}
+		// two receivers spaced along x around the listening point
+		let half = 0.5 * wid * minimum(2.5, 0.4 * lx);
+		for (let m: Int = 0; m < 2; m++) {
+			let mx = rx - half;
+			if (m == 1) {
+				mx = rx + half;
+			}
+			let dR = dist(mx, ry, rz, nx[k], ny[k], nz[k]);
+			del[36 + m * 6 + k] = clamp(dR * k343, 2.0, 16000.0);
+			gR[m * 6 + k] = 1.0 / (1.0 + dR / dS);
+		}
+	}
+}
+
+// fractional read of line i, d samples back
+function rd(i: Int, d: number) {
+	let p = wIdx - d + 16384.0;
+	let pi0: Int = floor(p);
+	return linearinterp(p - pi0, lines[i][pi0 & 16383], lines[i][(pi0 + 1) & 16383]);
+}
+
+let sr = maximum(samplerate(), 1.0);
+
+// --- Geometry: smoothed controls, recomputed every 32 samples -------------
+let smC = 1.0 - exp(0.0 - 32.0 / (0.15 * sr));
+if (roomS < 0.0) {
+	roomS = clamp(room_m, 2.0, 30.0);
+	posS = clamp(source_pos, 0.1, 0.9);
+	widS = clamp(width, 0.0, 1.0);
+	geom(roomS, posS, widS, sr);
+}
+ctr = ctr + 1;
+if (ctr >= 32) {
+	ctr = 0;
+	roomS = roomS + smC * (clamp(room_m, 2.0, 30.0) - roomS);
+	posS = posS + smC * (clamp(source_pos, 0.1, 0.9) - posS);
+	widS = widS + smC * (clamp(width, 0.0, 1.0) - widS);
+	geom(roomS, posS, widS, sr);
+}
+
+// --- Predelay + low cut on the mono source ---------------------------------
+pre[preIdx] = 0.5 * (in1 + in2);
+let preS: Int = clamp(floor(mstosamps(predelay_ms) + 0.5), 0, 32000);
+let xp = pre[(preIdx - preS + 32768) & 32767];
+preIdx = (preIdx + 1) & 32767;
+
+let cutR = exp(0.0 - 2.0 * pi * clamp(lowcut_hz, 10.0, sr * 0.45) / sr);
+let ha = xp - hx1 + cutR * hy1;
+hx1 = xp;
+hy1 = ha;
+let x = ha - hx2 + cutR * hy2;
+hx2 = ha;
+hy2 = x;
+
+// --- Read every line before writing any -----------------------------------
+let wallC = 1.0 - exp(0.0 - 2.0 * pi * clamp(wall_hz, 100.0, sr * 0.45) / sr);
+for (let i: Int = 0; i < 30; i++) {
+	let v = rd(i, del[i]);
+	// wall filter H(z): it is the same at every node, so it commutes with A
+	let l = wallLp[i] + wallC * (v - wallLp[i]);
+	wallLp[i] = l;
+	inc[i] = l;
+}
+for (let k: Int = 0; k < 6; k++) {
+	srcIn[k] = rd(30 + k, del[30 + k]);
+}
+let outL = 0.0;
+let outR = 0.0;
+for (let k: Int = 0; k < 12; k++) {
+	let v = rd(36 + k, del[36 + k]);
+	if (k < 6) {
+		outL += v;
+	} else {
+		outR += v;
+	}
+}
+
+// --- Scattering at each wall node: p- = beta * A * p+ ---------------------
+let beta = sqrt(1.0 - clamp(absorb, 0.05, 0.9));
+for (let k: Int = 0; k < 6; k++) {
+	// incoming waves from the five other nodes, plus half the source pressure
+	let half = 0.5 * srcIn[k];
+	let sum = 0.0;
+	for (let j: Int = 0; j < 6; j++) {
+		if (j != k) {
+			let li: Int = lineIdx(j, k);
+			sum += inc[li] + half;
+		}
+	}
+	let pe = 0.0;
+	for (let j: Int = 0; j < 6; j++) {
+		if (j != k) {
+			let li: Int = lineIdx(j, k);
+			let pm = beta * (0.4 * sum - (inc[li] + half));
+			pe += pm;
+			let lo: Int = lineIdx(k, j);
+			lines[lo][wIdx] = pm;
+		}
+	}
+	// to the receivers: weights 2/K
+	lines[36 + k][wIdx] = 0.4 * pe * gR[k];
+	lines[42 + k][wIdx] = 0.4 * pe * gR[6 + k];
+	// from the source
+	lines[30 + k][wIdx] = x * gS[k];
+}
+wIdx = (wIdx + 1) & 16383;
+
+let outG = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = 1.5 * outL * outG;
+out2 = 1.5 * outR * outG;

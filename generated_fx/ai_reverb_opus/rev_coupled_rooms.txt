@@ -1,0 +1,245 @@
+// ============================================================================
+// rev_coupled_rooms.txt
+// Two coupled rooms: a tight small room that spills into a huge dark hall (double-slope decay).
+// From: Das, Schlecht, Abel et al., "Grouped Feedback Delay Networks for
+//       Modeling of Coupled Spaces", DAFx-20 Paper 25, §2 Eq. 1-3 (two groups
+//       of delay lines, each with its own T60, mixing matrix built as the
+//       Kronecker product of 2x2 rotations R(theta)) and §3.1 Eq. 4-6 (the
+//       orthonormal coupled matrix: cos(phi)*M(theta1) on the diagonal blocks,
+//       +/- sin(phi)*M(theta1/2)M(theta2/2) off the diagonal; phi = 0 is two
+//       separate rooms, phi = pi/4 is maximum coupling).
+//       Cassidy, Coleman, Mason & De Sena, DAFx-24 Paper 73, §2 — the
+//       double-slope decay heard when a short space feeds a long one.
+// Source and listener sit in the small room by the aperture: the input feeds
+// the small room fully and the hall by sin(phi), and the listener hears both
+// groups. coupling = 0 is the small room alone; raising it brings in the
+// second, slower slope of the big hall.
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio
+// Outlets:
+//   out1 / out2: stereo reverb, wet only
+// ============================================================================
+
+// predelay
+@param({ min: 0, max: 200 }) predelay_ms = 5;
+// small room decay (first slope)
+@param({ min: 0.1, max: 2, exponent: 2 }) small_decay_s = 0.4;
+// big hall decay (second slope)
+@param({ min: 1, max: 20, exponent: 2 }) big_decay_s = 6;
+// coupling between the rooms (aperture)
+@param({ min: 0, max: 1 }) coupling = 0.35;
+// diffusion (mixing angle inside each room)
+@param({ min: 0, max: 1 }) diffuse = 1.0;
+// big hall damping
+@param({ min: 300, max: 12000, exponent: 2 }) damp_hz = 2000;
+// low cut
+@param({ min: 20, max: 600, exponent: 2 }) lowcut_hz = 100;
+// output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state preL = new FixedSampleArray(65536);
+@state preR = new FixedSampleArray(65536);
+@state preIdx: Int = 0;
+
+// 8 delay lines: 0-3 small room, 4-7 big hall
+@state lines = new FixedSampleArray(8, 32768);
+@state wIdx: Int = 0;
+@state lp = new FixedSampleArray(8);
+
+// one Schroeder allpass per big-hall line to thicken its echo density
+@state apBuf = new FixedSampleArray(4, 4096);
+@state apIdx: Int = 0;
+
+@state modPh = 0.0;
+
+@state hxL1 = 0.0;
+@state hyL1 = 0.0;
+@state hxL2 = 0.0;
+@state hyL2 = 0.0;
+@state hxR1 = 0.0;
+@state hyR1 = 0.0;
+@state hxR2 = 0.0;
+@state hyR2 = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+
+// --- Predelay (ms) ---------------------------------------------------------
+preL[preIdx] = in1;
+preR[preIdx] = in2;
+let preS: Int = clamp(floor(mstosamps(predelay_ms) + 0.5), 0, 65000);
+let pL = preL[(preIdx - preS + 65536) & 65535];
+let pR = preR[(preIdx - preS + 65536) & 65535];
+preIdx = (preIdx + 1) & 65535;
+
+// --- Low cut: two one-pole highpasses per side ----------------------------
+let cutF = clamp(lowcut_hz, 10.0, sr * 0.45);
+let cutR = exp(0.0 - 2.0 * pi * cutF / sr);
+let aL = pL - hxL1 + cutR * hyL1;
+hxL1 = pL;
+hyL1 = aL;
+let xL = aL - hxL2 + cutR * hyL2;
+hxL2 = aL;
+hyL2 = xL;
+let aR = pR - hxR1 + cutR * hyR1;
+hxR1 = pR;
+hyR1 = aR;
+let xR = aR - hxR2 + cutR * hyR2;
+hxR2 = aR;
+hyR2 = xR;
+
+// --- Line lengths (ms -> samples) -----------------------------------------
+let s0 = clamp(0.0113 * sr, 4.0, 32000.0);
+let s1 = clamp(0.0137 * sr, 4.0, 32000.0);
+let s2 = clamp(0.0171 * sr, 4.0, 32000.0);
+let s3 = clamp(0.0199 * sr, 4.0, 32000.0);
+let b0 = clamp(0.0613 * sr, 4.0, 32000.0);
+let b1 = clamp(0.0737 * sr, 4.0, 32000.0);
+let b2 = clamp(0.0887 * sr, 4.0, 32000.0);
+let b3 = clamp(0.1031 * sr, 4.0, 32000.0);
+
+// slow, small length wobble on the hall lines so the long tail never rings
+modPh = wrap(modPh + 0.23 / sr, 0.0, 1.0);
+let modS = 0.00008 * sr;
+let mb0 = b0 + modS * sin(2.0 * pi * modPh);
+let mb1 = b1 + modS * sin(2.0 * pi * modPh + 1.5707963);
+let mb2 = b2 + modS * sin(2.0 * pi * modPh + 3.1415927);
+let mb3 = b3 + modS * sin(2.0 * pi * modPh + 4.7123890);
+
+// --- Read: small room integer taps, hall lines linear-interpolated --------
+let y0 = lines[0][(wIdx - floor(s0) + 32768) & 32767];
+let y1 = lines[1][(wIdx - floor(s1) + 32768) & 32767];
+let y2 = lines[2][(wIdx - floor(s2) + 32768) & 32767];
+let y3 = lines[3][(wIdx - floor(s3) + 32768) & 32767];
+
+let rp4 = wIdx - mb0 + 32768.0;
+let i4: Int = floor(rp4);
+let y4 = linearinterp(rp4 - i4, lines[4][i4 & 32767], lines[4][(i4 + 1) & 32767]);
+let rp5 = wIdx - mb1 + 32768.0;
+let i5: Int = floor(rp5);
+let y5 = linearinterp(rp5 - i5, lines[5][i5 & 32767], lines[5][(i5 + 1) & 32767]);
+let rp6 = wIdx - mb2 + 32768.0;
+let i6: Int = floor(rp6);
+let y6 = linearinterp(rp6 - i6, lines[6][i6 & 32767], lines[6][(i6 + 1) & 32767]);
+let rp7 = wIdx - mb3 + 32768.0;
+let i7: Int = floor(rp7);
+let y7 = linearinterp(rp7 - i7, lines[7][i7 & 32767], lines[7][(i7 + 1) & 32767]);
+
+// --- Hall line allpasses (g = 0.5) ----------------------------------------
+let apG = 0.5;
+let ad0: Int = clamp(floor(0.0047 * sr), 1, 4095);
+let ad1: Int = clamp(floor(0.0061 * sr), 1, 4095);
+let ad2: Int = clamp(floor(0.0073 * sr), 1, 4095);
+let ad3: Int = clamp(floor(0.0089 * sr), 1, 4095);
+let v0 = apBuf[0][(apIdx - ad0 + 4096) & 4095];
+let u0 = y4 + apG * v0;
+apBuf[0][apIdx] = u0;
+let z4 = v0 - apG * u0;
+let v1 = apBuf[1][(apIdx - ad1 + 4096) & 4095];
+let u1 = y5 + apG * v1;
+apBuf[1][apIdx] = u1;
+let z5 = v1 - apG * u1;
+let v2 = apBuf[2][(apIdx - ad2 + 4096) & 4095];
+let u2 = y6 + apG * v2;
+apBuf[2][apIdx] = u2;
+let z6 = v2 - apG * u2;
+let v3 = apBuf[3][(apIdx - ad3 + 4096) & 4095];
+let u3 = y7 + apG * v3;
+apBuf[3][apIdx] = u3;
+let z7 = v3 - apG * u3;
+apIdx = (apIdx + 1) & 4095;
+
+// --- T60 filters: one-pole lowpass then Eq. 1 gain per line ---------------
+let smallC = 1.0 - exp(0.0 - 2.0 * pi * minimum(9000.0, sr * 0.45) / sr);
+let bigC = 1.0 - exp(0.0 - 2.0 * pi * clamp(damp_hz, 100.0, sr * 0.45) / sr);
+lp[0] = lp[0] + smallC * (y0 - lp[0]);
+lp[1] = lp[1] + smallC * (y1 - lp[1]);
+lp[2] = lp[2] + smallC * (y2 - lp[2]);
+lp[3] = lp[3] + smallC * (y3 - lp[3]);
+lp[4] = lp[4] + bigC * (z4 - lp[4]);
+lp[5] = lp[5] + bigC * (z5 - lp[5]);
+lp[6] = lp[6] + bigC * (z6 - lp[6]);
+lp[7] = lp[7] + bigC * (z7 - lp[7]);
+
+let t1 = clamp(small_decay_s, 0.1, 2.0);
+let t2 = clamp(big_decay_s, 1.0, 20.0);
+// the hall allpass adds its own delay to the loop, so count it in the gain
+let g0 = exp(0.0 - 6.907755 * (s0 / sr) / t1);
+let g1 = exp(0.0 - 6.907755 * (s1 / sr) / t1);
+let g2 = exp(0.0 - 6.907755 * (s2 / sr) / t1);
+let g3 = exp(0.0 - 6.907755 * (s3 / sr) / t1);
+let g4 = exp(0.0 - 6.907755 * ((b0 + ad0) / sr) / t2);
+let g5 = exp(0.0 - 6.907755 * ((b1 + ad1) / sr) / t2);
+let g6 = exp(0.0 - 6.907755 * ((b2 + ad2) / sr) / t2);
+let g7 = exp(0.0 - 6.907755 * ((b3 + ad3) / sr) / t2);
+
+let f0 = lp[0] * g0;
+let f1 = lp[1] * g1;
+let f2 = lp[2] * g2;
+let f3 = lp[3] * g3;
+let f4 = lp[4] * g4;
+let f5 = lp[5] * g5;
+let f6 = lp[6] * g6;
+let f7 = lp[7] * g7;
+
+// --- Coupled mixing matrix, Eq. 6 -----------------------------------------
+// With theta1 = theta2 = theta, M(theta/2)M(theta/2) = M(theta), so
+//   [ cos(phi) M   sin(phi) M ]
+//   [-sin(phi) M   cos(phi) M ]   with M = R(theta) (x) R(theta).
+// Apply the 2x2 coupling first, then M to each half (both are orthonormal).
+let theta = clamp(diffuse, 0.0, 1.0) * 0.7853982;
+let phiC = clamp(coupling, 0.0, 1.0) * 0.7853982;
+let cp = cos(phiC);
+let sp = sin(phiC);
+let ct = cos(theta);
+let st = sin(theta);
+
+let a0 = cp * f0 + sp * f4;
+let a1 = cp * f1 + sp * f5;
+let a2 = cp * f2 + sp * f6;
+let a3 = cp * f3 + sp * f7;
+let c0 = cp * f4 - sp * f0;
+let c1 = cp * f5 - sp * f1;
+let c2 = cp * f6 - sp * f2;
+let c3 = cp * f7 - sp * f3;
+
+// R (x) R on [v0 v1 v2 v3]: rotate pairs (0,1),(2,3) then (0,2),(1,3)
+let p0 = ct * a0 + st * a1;
+let p1 = ct * a1 - st * a0;
+let p2 = ct * a2 + st * a3;
+let p3 = ct * a3 - st * a2;
+let m0 = ct * p0 + st * p2;
+let m2 = ct * p2 - st * p0;
+let m1 = ct * p1 + st * p3;
+let m3 = ct * p3 - st * p1;
+
+let q0 = ct * c0 + st * c1;
+let q1 = ct * c1 - st * c0;
+let q2 = ct * c2 + st * c3;
+let q3 = ct * c3 - st * c2;
+let m4 = ct * q0 + st * q2;
+let m6 = ct * q2 - st * q0;
+let m5 = ct * q1 + st * q3;
+let m7 = ct * q3 - st * q1;
+
+// --- Inject: small room fully, hall through the aperture; advance --------
+lines[0][wIdx] = m0 + 0.5 * xL;
+lines[1][wIdx] = m1 + 0.5 * xR;
+lines[2][wIdx] = m2 + 0.5 * xL;
+lines[3][wIdx] = m3 + 0.5 * xR;
+lines[4][wIdx] = m4 + 0.5 * sp * xL;
+lines[5][wIdx] = m5 + 0.5 * sp * xR;
+lines[6][wIdx] = m6 + 0.5 * sp * xR;
+lines[7][wIdx] = m7 + 0.5 * sp * xL;
+wIdx = (wIdx + 1) & 32767;
+
+// --- Listen at the aperture: both rooms, even lines left, odd right ------
+let wetL = y0 + y2 + y4 + y6;
+let wetR = y1 + y3 + y5 + y7;
+
+let gS = 0.25 * (g0 + g1 + g2 + g3);
+let norm = 0.9 * sqrt(maximum(1.0 - gS * gS, 0.0001));
+
+let outG = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = wetL * norm * outG;
+out2 = wetR * norm * outG;

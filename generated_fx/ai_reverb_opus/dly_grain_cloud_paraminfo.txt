@@ -1,0 +1,66 @@
+================================================================================
+dly_grain_cloud — Parameter Information
+================================================================================
+
+WHAT IT IS
+A granular delay. The input (plus the fed-back cloud) is written into a
+buffer, and up to 16 grains at a time are read from random points in the last
+time_ms, each with a Hann envelope, its own random detune, a chance of
+playing backwards and a random pan. Onsets are jittered, so it is a cloud,
+not a rhythm. With feedback the grains re-granulate each other into a haze.
+
+Source: López, "Vocem: An Application for Real-Time Granular Synthesis",
+DAFx-98 §4.2 (density, winsize, offset, pitch shift, chorus detune, reverse
+grain, envelope, spatialisation); Sanganeria, "GrainProc", NIME-13 §4.3 (the
+same controls on a live input buffer).
+
+The point of this one is space-bass atmosphere: the tuba dissolved into a
+shimmering, smeared, slightly detuned fog; pitch_st -12/-24 for a sub cloud
+underneath, +12 for a sparkling one above. 100% wet, no dry/wet.
+
+PARAMETERS (8 + output gain)
+
+1. time_ms — 10…2000 ms, default 400 ms
+   How far back grains are taken from (uniform random offset). Short = a
+   thick, chorus-like smear right behind the note; long = scattered echoes of
+   phrases from seconds ago.
+
+2. grain_ms — 10…500 ms, default 120 ms
+   Grain length. 10–40 ms = buzzy, particle texture; 100–500 ms = smooth,
+   recognisable fragments.
+
+3. density_hz — 1…60 grains/s, default 20
+   Grain rate (jittered +/-50%). At most 16 overlap; extra grains are
+   skipped.
+
+4. pitch_st — -24…+12 semitones, default 0
+   Transposition of every grain. With feedback, each pass transposes again
+   (a -12 cloud cascades down in octaves until the low cut removes it).
+
+5. detune_cents — 0…100 cents, default 15
+   Random detune per grain (+/-). 5–20 = lush chorus; 50–100 = unstable,
+   out-of-tune wash.
+
+6. reverse — 0…1, default 0.3
+   Probability that a grain plays backwards.
+
+7. feedback — 0…0.95, default 0.5
+   Cloud fed back into the buffer: how long the haze hangs on.
+
+8. lowcut_hz — 20…600 Hz, default 100 Hz
+   Two one-pole highpasses on what goes into the buffer (input and feedback).
+
+9. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio (summed into one buffer).
+- out1 / out2: stereo cloud (random equal-power pan per grain), wet only.
+
+NOTES
+- The output is scaled by 1/sqrt(overlap) so density does not change level
+  much. The fed-back signal is scaled by the window sum instead, which keeps
+  the loop stable even when all grains line up (time_ms 10, no detune).
+- Grains never overtake the write head (pitched up) or run off the buffer
+  (reversed): the start offset is clamped for each grain.
+- No limiter, no dry path.

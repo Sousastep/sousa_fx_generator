@@ -1,0 +1,54 @@
+================================================================================
+dly_reverse_echo — Parameter Information
+================================================================================
+
+WHAT IT IS
+A reverse delay. The signal goes round an ordinary echo loop one slice long,
+and the output plays that loop back in reversed slices: two read heads per
+side sweep backwards through the last slice with Hann windows at 50% overlap,
+so the cross-fades are seamless. Every repeat comes out backwards and swells
+into the next note.
+
+Source: Kim & Smith, "Short-Time Time-Reversal on Audio Signals", DAFx-14 §2.1,
+§4, §5 (frame-wise reversal, 50% Hann overlap-add, one frame latency); Kim &
+Smith, DAFx-15 Submission 5 §2.1 (STTR equations).
+
+The point of this one is the trip-hop reverse swell: notes bloom in backwards
+behind the tuba. Short slices (50–120 ms) instead give a granular, ring-mod-
+like smear (the STTR "harmonizing" effect). 100% wet, no dry/wet.
+
+PARAMETERS (6 + output gain)
+
+1. slice_ms — 50…2000 ms, default 400 ms
+   Slice length, which is also the echo period. The first reversed slice comes
+   out one slice after the note. Changes glide (~100 ms) and bend the pitch.
+
+2. feedback — 0…0.95, default 0.4
+   Repeats. Each one is reversed again from the loop. Near 0.95 a held note
+   builds up to ~+7 dB over the input.
+
+3. swell — 0…1, default 0.5
+   Slice envelope. 0 = flat, smooth reversed stream; 1 = every slice ramps
+   up into its end, a pumping "sucked-in" swell.
+
+4. spread — 0…1, default 0.5
+   Shifts the right side's slice boundaries by up to a quarter slice, so left
+   and right reverse at different moments.
+
+5. tone_hz — 500…16000 Hz, default 4000 Hz
+   Lowpass in the feedback loop: later repeats get darker.
+
+6. lowcut_hz — 20…600 Hz, default 100 Hz
+   One-pole highpass on the input and in the loop.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- out1 / out2: stereo reversed repeats, wet only.
+
+NOTES
+- Buffer is 524288 samples per side: a slice needs 2 x slice of history, so
+  slices are capped at 250000 samples (2000 ms is available up to 125 kHz).
+- No limiter, no dry path.

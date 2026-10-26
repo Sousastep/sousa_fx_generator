@@ -1,0 +1,61 @@
+================================================================================
+rev_kron_cloud — Parameter Information
+================================================================================
+
+WHAT IT IS
+A sixteen-line feedback delay network (30–101 ms lines) whose feedback matrix
+is built from four 2x2 rotations (a Kronecker product). The rotation angles
+are swung slowly by an LFO, so the reverb's resonances keep moving and never
+ring, but unlike chorused reverbs the pitch does not wobble. The matrix is
+lossless at every angle, so with freeze on the cloud sustains forever.
+
+Source: Coppola, DAFx-26 Paper 4 §4.1–4.2 (Kronecker rotation matrix, fast
+butterfly multiply), §5.3 (freeze), §5.4 (matrix-angle modulation); Lokki &
+Hiipakka, DAFx-01 §2 (time-variant reverberation).
+
+The point of this one is the endless space-bass pad: long, dense, slowly
+shifting, and frozen on a held note to play over. 100% wet, no dry/wet.
+
+PARAMETERS (8 + output gain)
+
+1. predelay_ms — 0…500 ms, default 40 ms
+   Gap before the cloud.
+
+2. decay_s — 1…60 s, default 12 s
+   RT60 (the damping shortens the top end).
+
+3. freeze — 0…1, default 0  (>= 0.5 = on)
+   Opens the loop to exactly lossless (gain 1, no damping) and mutes the
+   input over ~50 ms. Whatever is in the cloud holds forever; turning it off
+   lets it decay at decay_s.
+
+4. mod_rate_hz — 0.01…5 Hz, default 0.3 Hz
+   Speed of the matrix rotation. Slow = gently shifting colour; 2–5 Hz =
+   swirling, shimmering spectrum.
+
+5. mod_depth — 0…1, default 0.5
+   How far each kernel angle swings around pi/4. 0 = static (can sound
+   metallic on long decays); 1 = the lines decouple and re-couple each cycle.
+
+6. damp_hz — 500…16000 Hz, default 6000 Hz
+   Lowpass in every line. Ignored while frozen.
+
+7. lowcut_hz — 20…600 Hz, default 120 Hz
+   Two one-pole highpasses on the input.
+
+8. size — 0.5…2, default 1.0
+   Scales all line lengths (smoothed). Small = denser and brighter, big =
+   grainier and more spacious; moving it bends the pitch of the tail.
+
+9. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio (left to even lines, right to odd lines).
+- out1 / out2: stereo wet only.
+
+NOTES
+- Level is normalised from decay_s, not from the freeze gain, so freezing
+  does not jump in level.
+- A frozen tail keeps any DC or sub that was in it; keep lowcut_hz up.
+- No limiter, no dry path.

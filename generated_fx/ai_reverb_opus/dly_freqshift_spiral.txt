@@ -1,0 +1,156 @@
+// ============================================================================
+// dly_freqshift_spiral.txt
+// A feedback echo with a single-sideband frequency shifter in the loop: each repeat moves by a fixed Hz, spiralling.
+// From: Scott Wardle, "A Hilbert-Transformer Frequency Shifter for Audio",
+//       DAFx-98, §3 (single-sideband modulation: shift every partial by the
+//       same Hz, so harmonic sounds turn inharmonic), §5.1 (digital quadrature
+//       oscillator) and §5.2 (90-degree phase difference from two allpass
+//       chains instead of an FIR Hilbert transformer).
+//       Esqueda, Välimäki & Parker, "Barberpole Phasing and Flanging
+//       Illusions", DAFx-15 Submission 67, §4 — SSB modulation inside a
+//       feedback delay makes each recirculation step further in frequency,
+//       the endlessly rising/falling (barberpole) effect.
+// Hilbert pair: the cR/cI one-pole allpass chains y = c*(x + y1) - x1 used
+// across this repo (docs/rnbo_codebox/example22), imaginary branch negated.
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio
+// Outlets:
+//   out1 / out2: stereo repeats, wet only
+// ============================================================================
+
+// echo time
+@param({ min: 10, max: 2000, exponent: 2 }) time_ms = 375;
+// feedback
+@param({ min: 0, max: 0.98 }) feedback = 0.7;
+// frequency shift per repeat (negative = falling spiral)
+@param({ min: -200, max: 200 }) shift_hz = -12;
+// ping-pong: 0 = straight stereo, 1 = repeats alternate sides
+@param({ min: 0, max: 1 }) pingpong = 1.0;
+// tone (lowpass in the loop)
+@param({ min: 500, max: 16000, exponent: 2 }) tone_hz = 6000;
+// low cut (in the loop)
+@param({ min: 20, max: 600, exponent: 2 }) lowcut_hz = 80;
+// output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state bufL = new FixedSampleArray(524288);
+@state bufR = new FixedSampleArray(524288);
+@state wIdx: Int = 0;
+@state timeS = -1.0;
+
+// Hilbert allpass state: [channel][section]
+@state reX = new FixedSampleArray(2, 4);
+@state reY = new FixedSampleArray(2, 4);
+@state imX = new FixedSampleArray(2, 4);
+@state imY = new FixedSampleArray(2, 4);
+
+@state oscPh = 0.0;
+
+@state lpL = 0.0;
+@state lpR = 0.0;
+@state hxL = 0.0;
+@state hyL = 0.0;
+@state hxR = 0.0;
+@state hyR = 0.0;
+
+// SSB shift of one channel: analytic signal times e^(j*w*t), real part
+function shiftCh(ch: Int, x: number, cosW: number, sinW: number) {
+	let cR0 = 0.4794008656;
+	let cR1 = 0.8762184935;
+	let cR2 = 0.9765975895;
+	let cR3 = 0.9974992559;
+	let cI0 = 0.1617584983;
+	let cI1 = 0.7330289323;
+	let cI2 = 0.9453497003;
+	let cI3 = 0.9905991567;
+
+	let re = x;
+	let t = cR0 * (re + reY[ch][0]) - reX[ch][0];
+	reX[ch][0] = re;
+	reY[ch][0] = t;
+	re = t;
+	t = cR1 * (re + reY[ch][1]) - reX[ch][1];
+	reX[ch][1] = re;
+	reY[ch][1] = t;
+	re = t;
+	t = cR2 * (re + reY[ch][2]) - reX[ch][2];
+	reX[ch][2] = re;
+	reY[ch][2] = t;
+	re = t;
+	t = cR3 * (re + reY[ch][3]) - reX[ch][3];
+	reX[ch][3] = re;
+	reY[ch][3] = t;
+	re = t;
+
+	let im = x;
+	t = cI0 * (im + imY[ch][0]) - imX[ch][0];
+	imX[ch][0] = im;
+	imY[ch][0] = t;
+	im = t;
+	t = cI1 * (im + imY[ch][1]) - imX[ch][1];
+	imX[ch][1] = im;
+	imY[ch][1] = t;
+	im = t;
+	t = cI2 * (im + imY[ch][2]) - imX[ch][2];
+	imX[ch][2] = im;
+	imY[ch][2] = t;
+	im = t;
+	t = cI3 * (im + imY[ch][3]) - imX[ch][3];
+	imX[ch][3] = im;
+	imY[ch][3] = t;
+	im = t;
+
+	// this coefficient order gives the negative Hilbert; negate (example22)
+	let imH = 0.0 - im;
+	return re * cosW - imH * sinW;
+}
+
+let sr = maximum(samplerate(), 1.0);
+
+// --- Echo time, smoothed (tape-like glide on changes) ---------------------
+let target = clamp(mstosamps(time_ms), 2.0, 520000.0);
+if (timeS < 0.0) {
+	timeS = target;
+}
+timeS = timeS + (1.0 - exp(0.0 - 1.0 / (0.08 * sr))) * (target - timeS);
+
+let rp = wIdx - timeS + 524288.0;
+let ri: Int = floor(rp);
+let dL = linearinterp(rp - ri, bufL[ri & 524287], bufL[(ri + 1) & 524287]);
+let dR = linearinterp(rp - ri, bufR[ri & 524287], bufR[(ri + 1) & 524287]);
+
+// --- Loop filters ----------------------------------------------------------
+let toneC = 1.0 - exp(0.0 - 2.0 * pi * clamp(tone_hz, 100.0, sr * 0.45) / sr);
+let cutR = exp(0.0 - 2.0 * pi * clamp(lowcut_hz, 10.0, sr * 0.45) / sr);
+lpL = lpL + toneC * (dL - lpL);
+lpR = lpR + toneC * (dR - lpR);
+let fL = lpL - hxL + cutR * hyL;
+hxL = lpL;
+hyL = fL;
+let fR = lpR - hxR + cutR * hyR;
+hxR = lpR;
+hyR = fR;
+
+// --- Quadrature oscillator: monotonic phase ramp (§5.1) -------------------
+oscPh = wrap(oscPh + clamp(shift_hz, -200.0, 200.0) / sr, 0.0, 1.0);
+let cosW = cos(2.0 * pi * oscPh);
+let sinW = sin(2.0 * pi * oscPh);
+let sL = shiftCh(0, fL, cosW, sinW);
+let sR = shiftCh(1, fR, cosW, sinW);
+
+// --- Feedback with ping-pong cross-feed -----------------------------------
+let fb = clamp(feedback, 0.0, 0.98);
+let pp = clamp(pingpong, 0.0, 1.0);
+let mid = 0.5 * (in1 + in2);
+let inL = in1 * (1.0 - pp) + mid * pp;
+let inR = in2 * (1.0 - pp);
+bufL[wIdx] = inL + fb * ((1.0 - pp) * sL + pp * sR);
+bufR[wIdx] = inR + fb * ((1.0 - pp) * sR + pp * sL);
+wIdx = (wIdx + 1) & 524287;
+
+// The heard repeats are the delayed signal; the shifter acts on the way back
+// in, so the first repeat is unshifted and each later one is one step further.
+let outG = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = dL * outG;
+out2 = dR * outG;

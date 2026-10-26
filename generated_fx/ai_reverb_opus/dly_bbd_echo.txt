@@ -1,0 +1,166 @@
+// ============================================================================
+// dly_bbd_echo.txt
+// A bucket-brigade analog echo: companded, clock-limited bandwidth, darker and grittier as the delay lengthens.
+// From: Colin Raffel & Julius O. Smith, "Practical Modeling of Bucket-Brigade
+//       Device Circuits", DAFx-10, §3.2-3.4 (NE570/571 compander: 2:1
+//       feedback compressor before the BBD, f(x) = x / avg(|f(x)|), and
+//       feed-forward expander after it, f(x) = avg(|x|) * x, both averaging a
+//       full-wave rectified signal with a one-pole RC filter, tau = 10k * C)
+//       and §4.1 (the accurate BBD model: a fixed number of stages advanced by
+//       an artificial clock unrelated to the sample rate, with interpolation
+//       at the clock instants; anti-aliasing and reconstruction lowpasses).
+//       Gabrielli, D'Angelo & Squartini, "Antialiasing in BBD Chips Using
+//       BLEP", DAFx-25 Paper 29, §2 and §2.1 (operating principle: input
+//       sampled on clock ticks, output held between ticks; the trivial
+//       discrete-time simulation, whose residual aliasing is kept here as
+//       grit on purpose).
+// 4096-stage chip (MN3005-style), 2048 transfers per pass, so the clock is
+// f_clk = 2048 / delay: 300 ms -> 6.8 kHz, 600 ms -> 3.4 kHz. The lowpasses
+// track the clock, so long delays are dark.
+// 100% wet. No dry path, no limiter, no metering. (The tanh at the input node
+// is the circuit's op-amp clipping that bounds self-oscillation, not a safety
+// limiter on the output.)
+// Inlets:
+//   in1 / in2: stereo audio
+// Outlets:
+//   out1 / out2: stereo repeats, wet only
+// ============================================================================
+
+// echo time
+@param({ min: 20, max: 600, exponent: 2 }) time_ms = 300;
+// feedback (above 1 = self-oscillation)
+@param({ min: 0, max: 1.1 }) feedback = 0.55;
+// drive: lowers the clipping point of the input node
+@param({ min: 0, max: 24 }) drive_db = 6;
+// clock modulation rate
+@param({ min: 0.1, max: 8, exponent: 2 }) mod_rate_hz = 0.6;
+// clock modulation depth
+@param({ min: 0, max: 1 }) mod_depth = 0.2;
+// bucket hiss level (breathes with the expander)
+@param({ min: -90, max: -40 }) hiss_db = -70;
+// low cut
+@param({ min: 20, max: 600, exponent: 2 }) lowcut_hz = 80;
+// output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+// the buckets: [channel][stage pair]
+@state bbd = new FixedSampleArray(2, 2048);
+@state head = new FixedIntArray(2);
+@state clkPh = new FixedSampleArray(2);
+@state held = new FixedSampleArray(2);
+@state prevAa = new FixedSampleArray(2);
+
+// linear TPT state-variable lowpasses: 0-3 anti-alias, 4-7 reconstruction
+@state ic1 = new FixedSampleArray(8);
+@state ic2 = new FixedSampleArray(8);
+
+// compander averagers
+@state avgC = new FixedSampleArray(2);
+@state avgE = new FixedSampleArray(2);
+
+@state fbSig = new FixedSampleArray(2);
+@state hpX = new FixedSampleArray(2);
+@state hpY = new FixedSampleArray(2);
+
+@state timeS = -1.0;
+@state lfoPh = 0.0;
+@state hiss = new noise();
+
+// one TPT state-variable lowpass section (Q = 0.707)
+function svfLp(i: Int, x: number, a1: number, a2: number, a3: number) {
+	let v3 = x - ic2[i];
+	let v1 = a1 * ic1[i] + a2 * v3;
+	let v2 = ic2[i] + a2 * ic1[i] + a3 * v3;
+	ic1[i] = 2.0 * v1 - ic1[i];
+	ic2[i] = 2.0 * v2 - ic2[i];
+	return v2;
+}
+
+let sr = maximum(samplerate(), 1.0);
+
+// --- Echo time (glides like the knob of a real unit) ----------------------
+let target = clamp(time_ms, 20.0, 600.0) * 0.001;
+if (timeS < 0.0) {
+	timeS = target;
+}
+timeS = timeS + (1.0 - exp(0.0 - 1.0 / (0.15 * sr))) * (target - timeS);
+
+lfoPh = wrap(lfoPh + clamp(mod_rate_hz, 0.1, 8.0) / sr, 0.0, 1.0);
+let depth = clamp(mod_depth, 0.0, 1.0) * 0.03;
+
+let drv = dbtoa(clamp(drive_db, 0.0, 24.0));
+let fbG = clamp(feedback, 0.0, 1.1);
+let cutR = exp(0.0 - 2.0 * pi * clamp(lowcut_hz, 10.0, sr * 0.45) / sr);
+let avgA = 1.0 - exp(0.0 - 1.0 / (0.01 * sr));
+let ref = 0.25;
+let hissA = dbtoa(clamp(hiss_db, -90.0, -40.0));
+
+let o0 = 0.0;
+let o1 = 0.0;
+for (let c: Int = 0; c < 2; c++) {
+	// clock: left and right LFO in opposite phase
+	let lfo = sin(2.0 * pi * lfoPh + pi * c);
+	let fclk = 2048.0 / (timeS * (1.0 + depth * lfo));
+	let inc = minimum(fclk / sr, 4.0);
+
+	// lowpass coefficients track the clock: cutoff at 0.42 * f_clk
+	let fc = clamp(0.42 * fclk, 200.0, minimum(14000.0, sr * 0.45));
+	let g = tan(pi * fc / sr);
+	let a1 = 1.0 / (1.0 + g * (g + 1.4142136));
+	let a2 = g * a1;
+	let a3 = g * a2;
+
+	// input node: dry in + feedback, op-amp clipping set by drive
+	let x = in1;
+	if (c == 1) {
+		x = in2;
+	}
+	let node = tanh(drv * (x + fbG * fbSig[c])) / drv;
+
+	// low cut
+	let hp = node - hpX[c] + cutR * hpY[c];
+	hpX[c] = node;
+	hpY[c] = hp;
+
+	// compressor (§3.4): gain inversely proportional to the averaged output,
+	// at most +26 dB (the rectifier's floor)
+	let y = hp * ref / maximum(avgC[c], 0.0125);
+	avgC[c] = avgC[c] + avgA * (abs(y) - avgC[c]);
+
+	// anti-aliasing lowpass (4th order)
+	let aa = svfLp(c * 2, svfLp(c * 2 + 1, y, a1, a2, a3), a1, a2, a3);
+
+	// BBD: advance the buckets on each clock tick inside this sample
+	clkPh[c] = clkPh[c] + inc;
+	let guard: Int = 0;
+	while (clkPh[c] >= 1.0 && guard < 5) {
+		clkPh[c] = clkPh[c] - 1.0;
+		// the tick happened clkPh/inc of a sample ago: interpolate the input
+		let back = clamp(clkPh[c] / inc, 0.0, 1.0);
+		let v = aa - back * (aa - prevAa[c]);
+		let h: Int = head[c];
+		held[c] = bbd[c][h];
+		// a bucket holds at most ~1 (12 dB over the companded level)
+		bbd[c][h] = tanh(v) + hissA * hiss.next();
+		head[c] = (h + 1) & 2047;
+		guard = guard + 1;
+	}
+	prevAa[c] = aa;
+
+	// reconstruction lowpass on the held (zero-order-hold) output
+	let rc = svfLp(c * 2 + 4, svfLp(c * 2 + 5, held[c], a1, a2, a3), a1, a2, a3);
+
+	// expander (§3.4): gain proportional to the averaged input
+	avgE[c] = avgE[c] + avgA * (abs(rc) - avgE[c]);
+	let z = rc * avgE[c] / ref;
+	fbSig[c] = z;
+	if (c == 0) {
+		o0 = z;
+	} else {
+		o1 = z;
+	}
+}
+
+let outG = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = o0 * outG;
+out2 = o1 * outG;

@@ -1,0 +1,60 @@
+================================================================================
+rev_coupled_rooms — Parameter Information
+================================================================================
+
+WHAT IT IS
+An eight-line grouped feedback delay network: four short lines (11–20 ms) are
+a small, tight room, and four long lines (61–103 ms, each with an allpass) are
+a huge hall. A coupling angle opens an "aperture" between them, so the tail
+drops fast (the small room), then turns into a slow, dark second slope (the
+hall bleeding back). That is the double-slope decay of coupled spaces.
+
+Source: Das, Schlecht, Abel et al., DAFx-20 Paper 25 §2 Eq. 1–3, §3.1 Eq. 4–6
+(GFDN, per-group T60, coupled orthonormal mixing matrix); Cassidy et al.,
+DAFx-24 Paper 73 §2 (double-slope decay).
+
+The point of this one is punch and depth at once: the attack sits in a small
+room and stays tight on the beat, while a distant hall swells in behind it.
+100% wet, no dry/wet.
+
+PARAMETERS (7 + output gain)
+
+1. predelay_ms — 0…200 ms, default 5 ms
+   Gap before both rooms.
+
+2. small_decay_s — 0.1…2 s, default 0.4 s
+   RT60 of the small room: the first, steep slope.
+
+3. big_decay_s — 1…20 s, default 6 s
+   RT60 of the hall: the second, slow slope.
+
+4. coupling — 0…1, default 0.35
+   Aperture between the rooms (coupling angle 0…pi/4). 0 = small room only;
+   0.2–0.5 = clear double slope with the knee ~25 dB down; 1 = the rooms share
+   their energy, so the hall gets louder but also decays faster.
+
+5. diffuse — 0…1, default 1.0
+   Mixing angle inside each room (0 = no mixing, separate echoes/flutter;
+   1 = Hadamard, dense). Low values give a metallic, slapback-like small room.
+
+6. damp_hz — 300…12000 Hz, default 2000 Hz
+   Lowpass in the hall lines: how dark the second slope is. The small room is
+   fixed at 9 kHz.
+
+7. lowcut_hz — 20…600 Hz, default 100 Hz
+   Two one-pole highpasses on the input. Raise it to keep the sub out of the
+   hall.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio (into the small room, and into the hall by
+  sin(coupling angle)).
+- out1 / out2: stereo wet only (even lines left, odd lines right).
+
+NOTES
+- The mixing matrix is orthonormal at every setting, so the network is stable;
+  the decay comes only from the per-line gains and lowpasses.
+- The hall lines wobble by +/-0.08 ms at 0.23 Hz so the long tail never rings.
+- No limiter, no dry path.

@@ -1,0 +1,61 @@
+================================================================================
+rev_sdn_room — Parameter Information
+================================================================================
+
+WHAT IT IS
+A physical shoebox room built as a scattering delay network. One node sits on
+each of the six walls, exactly where the first reflection from the source to
+the listener hits it; the nodes pass sound to each other along delay lines as
+long as the real distances, and each wall absorbs (absorb) and darkens
+(wall_hz). So the early reflections land at their true times and the decay
+follows the room's Sabine time. Two spaced omni receivers give the stereo.
+
+Source: Fontana et al., DAFx-24 Paper 34 §2.2–2.3 Eq. 2, 3, 6 and §3.2
+(SDN: wall nodes, lossless scattering matrix A = 2/K·11ᵀ − I times
+sqrt(1 − alpha), source/receiver lines and gains, wall filters); Mezza et al.,
+DAFx-25 Paper 51 §2.2 (scattering junction).
+
+The point of this one is a real, small space around the tuba (concrete
+basement, booth, garage) that adds punch and size with early reflections and
+no long wash, so it stays out of the way of the sub. 100% wet, no dry/wet.
+The direct (line-of-sight) sound is left out.
+
+PARAMETERS (7 + output gain)
+
+1. predelay_ms — 0…100 ms, default 0 ms
+   Extra gap before the room (the geometry already gives ~10 ms at 6 m).
+
+2. room_m — 2…30 m, default 6 m
+   Room length; width is 0.8x and height 0.45x. Default T60 is ~0.35 s.
+   2–4 m = booth/closet slap, 6–10 m = studio/garage, 20–30 m = warehouse.
+   Moving it glides (the walls move, so the reflections Doppler-bend).
+
+3. absorb — 0.05…0.9, default 0.3
+   Wall absorption coefficient. 0.05 = bare concrete (long, ringing), 0.3 =
+   normal room, 0.7–0.9 = dead, early reflections only.
+
+4. wall_hz — 500…16000 Hz, default 5000 Hz
+   Lowpass at every wall bounce: soft furnishings low, hard tiles high.
+
+5. source_pos — 0.1…0.9, default 0.5
+   How far across the room the tuba stands from the receivers. Close = more
+   distinct early slaps; far = more diffuse and later.
+
+6. width — 0…1, default 0.8
+   Receiver spacing, 0 to min(2.5 m, 0.4 x room). 0 = mono.
+
+7. lowcut_hz — 20…600 Hz, default 120 Hz
+   Two one-pole highpasses on the source.
+
+8. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio (summed: one source in the room).
+- out1 / out2: left/right receivers, wet only.
+
+NOTES
+- 48 delay lines (30 node-to-node, 6 from the source, 12 to the receivers).
+- Level drops as the room grows (1/r spreading), ~5 dB from 2 m to 30 m.
+- Scattering is lossless before the wall loss, so it is stable at any setting.
+- No limiter, no dry path.

@@ -1,0 +1,57 @@
+================================================================================
+rev_velvet_grain — Parameter Information
+================================================================================
+
+WHAT IT IS
+A reverb built from velvet noise: sparse random +1/-1 clicks instead of dense
+delay-line echoes. Four click patterns (97, 113, 128 and 140 ms long) each
+recirculate through their own lowpass loop, and their signs are mixed so the
+left and right tails are uncorrelated. Each click also gets a random width; the
+wider ones are darker (dark velvet noise).
+
+Source: Prawda, Schlecht & Välimäki, DAFx-22 Paper 28 §2 Eq. 1, §3.3
+(interleaved velvet-noise reverberator, orthogonal sign mixing); Fagerström et
+al., DAFx-22 Paper 31 §3 (dark velvet noise: random pulse widths as running-sum
+filters); Roberts et al., DAFx-23 Paper 57 §2.2 (low density sounds rough).
+
+The point of this one is texture. At high density it is a smooth plain tail;
+turn grain_hz down and the tail breaks into audible crackle, like a dusty
+sampler reverb under a trip-hop loop. 100% wet, no dry/wet.
+
+PARAMETERS (6 + output gain)
+
+1. predelay_ms — 0…250 ms, default 10 ms
+   Gap before the tail starts.
+
+2. decay_s — 0.2…10 s, default 2 s
+   RT60 of the recirculating loops (the loop lowpass shortens the top end a
+   little more).
+
+3. grain_hz — 40…1200 pulses/s, default 400
+   Click density. 900–1200 = smooth; 200–500 = grainy; below ~120 you hear
+   individual ticks, a crackly lo-fi rattle. Level stays about constant.
+
+4. damp_hz — 500…16000 Hz, default 5000 Hz
+   Darkness. Sets both the widest click width and the lowpass inside the loops,
+   so low values give a soft, dark, woolly grain and high values a bright,
+   spitty one.
+
+5. lowcut_hz — 20…600 Hz, default 150 Hz
+   Two one-pole highpasses before the reverb. Keep it at 120–250 Hz to leave
+   the sub dry.
+
+6. width — 0…1, default 1.0
+   Mid/side width. 0 = mono, 1 = the two decorrelated outputs as they are.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio (summed to mono to excite the tail).
+- out1 / out2: stereo wet only.
+
+NOTES
+- The click patterns are deterministic (fixed seeds); changing grain_hz
+  rebuilds them, so moving it while a tail rings can tick.
+- Level is normalised against the loop gain, so long decays are not louder.
+- No limiter, no dry path.

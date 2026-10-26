@@ -1,0 +1,129 @@
+// ============================================================================
+// dly_reverse_echo.txt
+// Echoes played back as reversed, windowed slices, with feedback, so each repeat swells in.
+// From: Hyung-Suk Kim & Julius O. Smith, "Short-Time Time-Reversal on Audio
+//       Signals", DAFx-14, §2.1 (STTR: cut the signal into windowed frames,
+//       reverse each frame, overlap-add), §4 (50% overlap with a Hann window
+//       sums to a constant, so the reversal itself adds no amplitude ripple)
+//       and §5 (real-time form: the frame is played back once it is fully
+//       recorded, i.e. one frame of latency).
+//       Kim & Smith, "Harmonizing Effect using Short-Time Time-Reversal",
+//       DAFx-15 Submission 5, §2.1 (the STTR equations).
+// The slice length is also the echo period: a forward feedback loop of one
+// slice feeds the time-reverser, so every repeat comes out backwards.
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio
+// Outlets:
+//   out1 / out2: stereo reversed repeats, wet only
+// ============================================================================
+
+// slice length = echo time
+@param({ min: 50, max: 2000, exponent: 2 }) slice_ms = 400;
+// feedback
+@param({ min: 0, max: 0.95 }) feedback = 0.4;
+// swell: 0 = smooth Hann slices, 1 = each slice ramps up into its end
+@param({ min: 0, max: 1 }) swell = 0.5;
+// stereo offset of the slice boundaries
+@param({ min: 0, max: 1 }) spread = 0.5;
+// tone (lowpass in the feedback loop)
+@param({ min: 500, max: 16000, exponent: 2 }) tone_hz = 4000;
+// low cut
+@param({ min: 20, max: 600, exponent: 2 }) lowcut_hz = 100;
+// output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state bufL = new FixedSampleArray(524288);
+@state bufR = new FixedSampleArray(524288);
+@state wIdx: Int = 0;
+
+@state sliceS = -1.0;
+@state ph = 0.0;
+
+@state lpL = 0.0;
+@state lpR = 0.0;
+@state hxL = 0.0;
+@state hyL = 0.0;
+@state hxR = 0.0;
+@state hyR = 0.0;
+@state ixL = 0.0;
+@state iyL = 0.0;
+@state ixR = 0.0;
+@state iyR = 0.0;
+
+let sr = maximum(samplerate(), 1.0);
+
+// --- Slice length, smoothed so a change glides instead of clicking -------
+let target = clamp(mstosamps(slice_ms), 64.0, 250000.0);
+if (sliceS < 0.0) {
+	sliceS = target;
+}
+sliceS = sliceS + (1.0 - exp(0.0 - 1.0 / (0.1 * sr))) * (target - sliceS);
+let n = sliceS;
+
+let cutF = clamp(lowcut_hz, 10.0, sr * 0.45);
+let cutR = exp(0.0 - 2.0 * pi * cutF / sr);
+let toneC = 1.0 - exp(0.0 - 2.0 * pi * clamp(tone_hz, 100.0, sr * 0.45) / sr);
+let fb = clamp(feedback, 0.0, 0.95);
+
+// --- Forward echo loop: z[n] = x[n] + fb * filt(z[n - slice]) -------------
+let fp = wIdx - n + 524288.0;
+let fi: Int = floor(fp);
+let backL = linearinterp(fp - fi, bufL[fi & 524287], bufL[(fi + 1) & 524287]);
+let backR = linearinterp(fp - fi, bufR[fi & 524287], bufR[(fi + 1) & 524287]);
+
+lpL = lpL + toneC * (backL - lpL);
+lpR = lpR + toneC * (backR - lpR);
+let fL = lpL - hxL + cutR * hyL;
+hxL = lpL;
+hyL = fL;
+let fR = lpR - hxR + cutR * hyR;
+hxR = lpR;
+hyR = fR;
+
+// input low cut
+let xL = in1 - ixL + cutR * iyL;
+ixL = in1;
+iyL = xL;
+let xR = in2 - ixR + cutR * iyR;
+ixR = in2;
+iyR = xR;
+
+bufL[wIdx] = xL + fb * fL;
+bufR[wIdx] = xR + fb * fR;
+
+// --- Short-time time-reversal: two Hann heads at 50% overlap -------------
+// A head at frame phase u (0..1) plays the sample recorded 2*u*N + 1 ago, so
+// it sweeps backwards through the last frame while the writer moves forward.
+ph = wrap(ph + 1.0 / n, 0.0, 1.0);
+let sw = clamp(swell, 0.0, 1.0);
+let offR = 0.25 * clamp(spread, 0.0, 1.0);
+
+let outL = 0.0;
+let outR = 0.0;
+for (let h: Int = 0; h < 2; h++) {
+	// left head
+	let uL = wrap(ph + 0.5 * h, 0.0, 1.0);
+	let dL = 2.0 * uL * n + 1.0;
+	let rpL = wIdx - dL + 524288.0;
+	let riL: Int = floor(rpL);
+	let sL = linearinterp(rpL - riL, bufL[riL & 524287], bufL[(riL + 1) & 524287]);
+	let winL = 0.5 - 0.5 * cos(2.0 * pi * uL);
+	let envL = (1.0 - sw) + sw * 2.5 * uL * sqrt(uL);
+	outL += sL * winL * envL;
+
+	// right head, frame boundaries shifted by spread
+	let uR = wrap(ph + 0.5 * h + offR, 0.0, 1.0);
+	let dR = 2.0 * uR * n + 1.0;
+	let rpR = wIdx - dR + 524288.0;
+	let riR: Int = floor(rpR);
+	let sR = linearinterp(rpR - riR, bufR[riR & 524287], bufR[(riR + 1) & 524287]);
+	let winR = 0.5 - 0.5 * cos(2.0 * pi * uR);
+	let envR = (1.0 - sw) + sw * 2.5 * uR * sqrt(uR);
+	outR += sR * winR * envR;
+}
+wIdx = (wIdx + 1) & 524287;
+
+let outG = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = outL * outG;
+out2 = outR * outG;

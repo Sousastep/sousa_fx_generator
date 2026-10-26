@@ -1,0 +1,176 @@
+// ============================================================================
+// dly_grain_cloud.txt
+// A granular delay haze: grains from the recent past with random offset, detune and reversal, fed back into the cloud.
+// From: Daniel López, "Vocem: An Application for Real-Time Granular
+//       Synthesis", DAFx-98, §4.2 — the grain parameters: density (grains
+//       per second), winsize (grain length), offset (where in the source the
+//       grain is taken), pitch shift (read speed), chorus (random detune per
+//       grain), "reverse grain", grain amplitude envelope and spatialisation.
+//       Mayank Sanganeria, "GrainProc: a real-time granular synthesis
+//       interface for live performance", NIME-13, §4.3 — the same controls
+//       applied to a live input buffer (grains drawn from the last seconds of
+//       the performer's sound).
+// Asynchronous cloud: grain onsets are jittered, each grain gets a random
+// offset in the last time_ms, a random pan, a Hann envelope, and the summed
+// cloud is fed back into the buffer.
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio (summed into the grain buffer)
+// Outlets:
+//   out1 / out2: stereo grain cloud, wet only
+// ============================================================================
+
+// how far back grains are taken from (offset scatter)
+@param({ min: 10, max: 2000, exponent: 2 }) time_ms = 400;
+// grain length
+@param({ min: 10, max: 500, exponent: 2 }) grain_ms = 120;
+// grains per second
+@param({ min: 1, max: 60, exponent: 2 }) density_hz = 20;
+// grain transposition
+@param({ min: -24, max: 12 }) pitch_st = 0;
+// random detune per grain
+@param({ min: 0, max: 100 }) detune_cents = 15;
+// probability that a grain plays backwards
+@param({ min: 0, max: 1 }) reverse = 0.3;
+// cloud fed back into the buffer
+@param({ min: 0, max: 0.95 }) feedback = 0.5;
+// low cut (input and loop)
+@param({ min: 20, max: 600, exponent: 2 }) lowcut_hz = 100;
+// output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state buf = new FixedSampleArray(524288);
+@state wIdx: Int = 0;
+
+// 16 grain voices
+@state vOn = new FixedIntArray(16);
+@state vPos = new FixedSampleArray(16);
+@state vInc = new FixedSampleArray(16);
+@state vAge = new FixedSampleArray(16);
+@state vLen = new FixedSampleArray(16);
+@state vPanL = new FixedSampleArray(16);
+@state vPanR = new FixedSampleArray(16);
+
+@state sched = 1.0;
+@state rng = 4242.0;
+@state fbL = 0.0;
+@state fbR = 0.0;
+
+@state hxA = 0.0;
+@state hyA = 0.0;
+@state hxB = 0.0;
+@state hyB = 0.0;
+
+function nextRand() {
+	rng = (rng * 16807.0) % 2147483647.0;
+	return rng / 2147483647.0;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let bufN = 524288.0;
+
+// --- Write: input + fed-back cloud, through the low cut -------------------
+let cutR = exp(0.0 - 2.0 * pi * clamp(lowcut_hz, 10.0, sr * 0.45) / sr);
+let fb = clamp(feedback, 0.0, 0.95);
+let w0 = 0.5 * (in1 + in2) + fb * (fbL + fbR);
+let ha = w0 - hxA + cutR * hyA;
+hxA = w0;
+hyA = ha;
+let hb = ha - hxB + cutR * hyB;
+hxB = ha;
+hyB = hb;
+buf[wIdx] = hb;
+
+// --- Scheduler: jittered onsets at density_hz -----------------------------
+let dens = clamp(density_hz, 1.0, 60.0);
+let gLen = clamp(mstosamps(grain_ms), 16.0, 0.5 * sr);
+sched = sched - dens / sr;
+if (sched <= 0.0) {
+	// next onset 0.5..1.5 periods away (asynchronous cloud)
+	sched = sched + 0.5 + nextRand();
+
+	// find a free voice
+	let v: Int = -1;
+	for (let i: Int = 0; i < 16; i++) {
+		if (v < 0 && vOn[i] == 0) {
+			v = i;
+		}
+	}
+	if (v >= 0) {
+		let cents = clamp(pitch_st, -24.0, 12.0) * 100.0 + (2.0 * nextRand() - 1.0) * clamp(detune_cents, 0.0, 100.0);
+		let ratio = exp2(cents / 1200.0);
+		let dir = 1.0;
+		if (nextRand() < clamp(reverse, 0.0, 1.0)) {
+			dir = -1.0;
+		}
+		// start delay: never overtake the writer, never run off the buffer
+		let span = mstosamps(clamp(time_ms, 10.0, 2000.0));
+		let minD = 2.0;
+		if (dir > 0.0 && ratio > 1.0) {
+			minD = (ratio - 1.0) * gLen + 2.0;
+		}
+		let d0 = minD + nextRand() * span;
+		let maxD = bufN - 4.0 - (1.0 + ratio) * gLen;
+		d0 = clamp(d0, minD, maxD);
+
+		let p = wIdx - d0;
+		if (p < 0.0) {
+			p = p + bufN;
+		}
+		vPos[v] = p;
+		vInc[v] = dir * ratio;
+		vAge[v] = 0.0;
+		vLen[v] = gLen;
+		let pan = nextRand();
+		vPanL[v] = cos(0.5 * pi * pan);
+		vPanR[v] = sin(0.5 * pi * pan);
+		vOn[v] = 1;
+	}
+}
+
+// --- Play the active grains -----------------------------------------------
+let cloudL = 0.0;
+let cloudR = 0.0;
+let winSum = 0.0;
+for (let i: Int = 0; i < 16; i++) {
+	if (vOn[i] == 1) {
+		let p = vPos[i];
+		let pi0: Int = floor(p);
+		let s = linearinterp(p - pi0, buf[pi0 & 524287], buf[(pi0 + 1) & 524287]);
+		let u = vAge[i] / vLen[i];
+		let win = 0.5 - 0.5 * cos(2.0 * pi * u);
+		cloudL += s * win * vPanL[i];
+		cloudR += s * win * vPanR[i];
+		winSum += win;
+
+		p = p + vInc[i];
+		if (p >= bufN) {
+			p = p - bufN;
+		}
+		if (p < 0.0) {
+			p = p + bufN;
+		}
+		vPos[i] = p;
+		vAge[i] = vAge[i] + 1.0;
+		if (vAge[i] >= vLen[i]) {
+			vOn[i] = 0;
+		}
+	}
+}
+wIdx = (wIdx + 1) & 524287;
+
+// level: N overlapping uncorrelated grains add up as sqrt(N); the pool caps
+// N at 16 (extra grains are dropped), and sparse clouds are not boosted
+// past the default overlap of 2.4
+let overlap = clamp(dens * gLen / sr, 2.4, 16.0);
+let norm = 2.4 / sqrt(overlap);
+
+// feedback: divided by the window sum, so it never exceeds the buffer's own
+// peak even when grains line up and add coherently (loop gain <= feedback)
+let fbN = 1.0 / (1.4142136 * maximum(1.0, winSum));
+fbL = cloudL * fbN;
+fbR = cloudR * fbN;
+
+let outG = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = cloudL * norm * outG;
+out2 = cloudR * norm * outG;

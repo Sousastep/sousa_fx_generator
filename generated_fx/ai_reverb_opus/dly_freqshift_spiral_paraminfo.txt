@@ -1,0 +1,56 @@
+================================================================================
+dly_freqshift_spiral — Parameter Information
+================================================================================
+
+WHAT IT IS
+A ping-pong echo with a frequency shifter inside the feedback loop. Every time
+a repeat goes round, all of its partials move by the same number of Hz (not by
+an interval), so the echoes spiral down (or up) and turn more and more
+inharmonic: a falling, metallic, sci-fi tail.
+
+Source: Wardle, "A Hilbert-Transformer Frequency Shifter for Audio", DAFx-98
+§3, §5.1, §5.2 (single-sideband shift from a quadrature oscillator and two
+allpass chains); Esqueda, Välimäki & Parker, DAFx-15 Submission 67 §4 (SSB
+modulation inside a feedback delay = barberpole spiral).
+
+The point of this one is the space-bass "falling into the void" echo. Small
+shifts (1–5 Hz) give slowly beating, phasing repeats; 10–50 Hz clear
+downward/upward steps; 100+ Hz bell-like clang. 100% wet, no dry/wet.
+
+PARAMETERS (6 + output gain)
+
+1. time_ms — 10…2000 ms, default 375 ms
+   Echo time (glides ~80 ms when changed). Under ~40 ms the repeats fuse into
+   a shifting comb, the barberpole flanger.
+
+2. feedback — 0…0.98, default 0.7
+   Number of repeats, i.e. how many steps the spiral takes.
+
+3. shift_hz — -200…+200 Hz, default -12 Hz
+   Frequency added per repeat. Negative = falling, positive = rising, 0 = a
+   plain echo. The first repeat is unshifted; repeat n is shifted n-1 times.
+
+4. pingpong — 0…1, default 1.0
+   0 = straight stereo echo; 1 = mono input enters left and the repeats
+   alternate sides (left runs ~4–5 dB hotter than right, as usual for
+   ping-pong).
+
+5. tone_hz — 500…16000 Hz, default 6000 Hz
+   Lowpass in the loop: later repeats darker. Also tames rising spirals.
+
+6. lowcut_hz — 20…600 Hz, default 80 Hz
+   Highpass in the loop. A falling spiral piles up near 0 Hz; this is where it
+   disappears. Raise it for a cleaner bottom.
+
+7. out_gain_db — -24…+12 dB, default 0 dB
+   Final output trim. Does not count toward the 8-param limit.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.
+- out1 / out2: stereo repeats, wet only.
+
+NOTES
+- The 90-degree allpass pair is designed for 44.1–48 kHz and is accurate from
+  ~30 Hz up; below that a little of the opposite sideband leaks through.
+- Checked stable at feedback 0.98 with time 10 ms and shift +/-200 Hz.
+- No limiter, no dry path.

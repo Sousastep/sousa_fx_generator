@@ -1,0 +1,194 @@
+// ============================================================================
+// rev_kron_cloud.txt
+// An endless 16-line cloud whose rotating feedback matrix smears resonances without pitch wobble; freeze holds it.
+// From: Andrea Coppola, "Fast Parametric Matrices for Lossless Feedback Delay
+//       Networks", DAFx-26 Paper 4, §4.1 (feedback matrix as the Kronecker
+//       product of 2x2 rotation kernels R(theta_i), lossless for any angles),
+//       §4.2 (fast multiply: log2(N) butterfly levels of 2x2 rotations),
+//       §5.3 (freeze: a lossless loop with the input removed sustains
+//       forever) and §5.4 (modulating the kernel angles moves the FDN poles,
+//       spreading resonances with less pitch variation than delay-line
+//       modulation).
+//       Lokki & Hiipakka, "A Time-Variant Reverberation Algorithm", DAFx-01,
+//       §2 — time variance in the recirculation to break up colouration.
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio
+// Outlets:
+//   out1 / out2: stereo cloud, wet only
+// ============================================================================
+
+// predelay
+@param({ min: 0, max: 500 }) predelay_ms = 40;
+// decay time (RT60)
+@param({ min: 1, max: 60, exponent: 2 }) decay_s = 12;
+// freeze: lossless loop, input muted (>= 0.5 = on)
+@param({ min: 0, max: 1 }) freeze = 0;
+// matrix rotation rate
+@param({ min: 0.01, max: 5, exponent: 2 }) mod_rate_hz = 0.3;
+// matrix rotation depth
+@param({ min: 0, max: 1 }) mod_depth = 0.5;
+// damping
+@param({ min: 500, max: 16000, exponent: 2 }) damp_hz = 6000;
+// low cut
+@param({ min: 20, max: 600, exponent: 2 }) lowcut_hz = 120;
+// size (scales all 16 line lengths)
+@param({ min: 0.5, max: 2 }) size = 1.0;
+// output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+@state preL = new FixedSampleArray(131072);
+@state preR = new FixedSampleArray(131072);
+@state preIdx: Int = 0;
+
+@state lines = new FixedSampleArray(16, 32768);
+@state wIdx: Int = 0;
+@state baseMs = new FixedSampleArray(16);
+@state lp = new FixedSampleArray(16);
+@state vec = new FixedSampleArray(16);
+@state rd = new FixedSampleArray(16);
+
+@state sizeS = 1.0;
+@state frz = 0.0;
+@state modPh = 0.0;
+
+@state hxL1 = 0.0;
+@state hyL1 = 0.0;
+@state hxL2 = 0.0;
+@state hyL2 = 0.0;
+@state hxR1 = 0.0;
+@state hyR1 = 0.0;
+@state hxR2 = 0.0;
+@state hyR2 = 0.0;
+
+function init() {
+	baseMs[0] = 29.7;
+	baseMs[1] = 37.1;
+	baseMs[2] = 41.3;
+	baseMs[3] = 43.7;
+	baseMs[4] = 47.9;
+	baseMs[5] = 53.3;
+	baseMs[6] = 59.1;
+	baseMs[7] = 61.7;
+	baseMs[8] = 67.3;
+	baseMs[9] = 71.9;
+	baseMs[10] = 73.7;
+	baseMs[11] = 79.1;
+	baseMs[12] = 83.9;
+	baseMs[13] = 89.3;
+	baseMs[14] = 97.1;
+	baseMs[15] = 101.3;
+}
+
+let sr = maximum(samplerate(), 1.0);
+
+// --- Control smoothing (size and freeze move without clicks) ---------------
+let smoothC = 1.0 - exp(0.0 - 1.0 / (0.05 * sr));
+sizeS = sizeS + smoothC * (clamp(size, 0.5, 2.0) - sizeS);
+let frzTarget = 0.0;
+if (freeze >= 0.5) {
+	frzTarget = 1.0;
+}
+frz = frz + smoothC * (frzTarget - frz);
+
+// --- Predelay (ms) ---------------------------------------------------------
+preL[preIdx] = in1;
+preR[preIdx] = in2;
+let preS: Int = clamp(floor(mstosamps(predelay_ms) + 0.5), 0, 131000);
+let pL = preL[(preIdx - preS + 131072) & 131071];
+let pR = preR[(preIdx - preS + 131072) & 131071];
+preIdx = (preIdx + 1) & 131071;
+
+// --- Low cut on the input --------------------------------------------------
+let cutF = clamp(lowcut_hz, 10.0, sr * 0.45);
+let cutR = exp(0.0 - 2.0 * pi * cutF / sr);
+let aL = pL - hxL1 + cutR * hyL1;
+hxL1 = pL;
+hyL1 = aL;
+let xL = aL - hxL2 + cutR * hyL2;
+hxL2 = aL;
+hyL2 = xL;
+let aR = pR - hxR1 + cutR * hyR1;
+hxR1 = pR;
+hyR1 = aR;
+let xR = aR - hxR2 + cutR * hyR2;
+hxR2 = aR;
+hyR2 = xR;
+
+// --- Read the 16 lines, damp, apply decay ---------------------------------
+let rt60 = clamp(decay_s, 1.0, 60.0);
+let lpC = 1.0 - exp(0.0 - 2.0 * pi * clamp(damp_hz, 100.0, sr * 0.45) / sr);
+// freeze: lowpass opens to a wire and the gain goes to exactly 1
+let lpE = lpC + (1.0 - lpC) * frz;
+let gSum = 0.0;
+for (let i: Int = 0; i < 16; i++) {
+	let lenS = clamp(baseMs[i] * 0.001 * sizeS * sr, 4.0, 32760.0);
+	let rp = wIdx - lenS + 32768.0;
+	let ri: Int = floor(rp);
+	let y = linearinterp(rp - ri, lines[i][ri & 32767], lines[i][(ri + 1) & 32767]);
+	rd[i] = y;
+	let l = lp[i] + lpE * (y - lp[i]);
+	lp[i] = l;
+	let g = exp(0.0 - 6.907755 * (lenS / sr) / rt60);
+	gSum += g;
+	vec[i] = l * (g + (1.0 - g) * frz);
+}
+
+// --- Kronecker feedback matrix: four rotation kernels (§4.1-4.2) ----------
+// Each kernel angle sits at pi/4 (Hadamard-like) and is swung by its own
+// phase of one slow LFO (§5.4). Any angles keep the matrix orthonormal.
+modPh = wrap(modPh + clamp(mod_rate_hz, 0.01, 5.0) / sr, 0.0, 1.0);
+let swing = clamp(mod_depth, 0.0, 1.0) * 0.7853982;
+for (let k: Int = 0; k < 4; k++) {
+	let th = 0.7853982 + swing * sin(2.0 * pi * modPh + 1.5707963 * k);
+	let c = cos(th);
+	let s = sin(th);
+	let bit: Int = 1 << k;
+	for (let i: Int = 0; i < 16; i++) {
+		if ((i & bit) == 0) {
+			let j: Int = i | bit;
+			let va = vec[i];
+			let vb = vec[j];
+			vec[i] = c * va + s * vb;
+			vec[j] = c * vb - s * va;
+		}
+	}
+}
+
+// --- Inject (muted while frozen) and write --------------------------------
+let inG = 0.35 * (1.0 - frz);
+for (let i: Int = 0; i < 16; i++) {
+	let sgn = 1.0;
+	if ((i & 2) != 0) {
+		sgn = -1.0;
+	}
+	let src = xL;
+	if ((i & 1) != 0) {
+		src = xR;
+	}
+	lines[i][wIdx] = vec[i] + inG * sgn * src;
+}
+wIdx = (wIdx + 1) & 32767;
+
+// --- Output: even lines left, odd lines right, alternating signs ----------
+let wetL = 0.0;
+let wetR = 0.0;
+for (let i: Int = 0; i < 16; i++) {
+	let sgn = 1.0;
+	if ((i & 4) != 0) {
+		sgn = -1.0;
+	}
+	if ((i & 1) == 0) {
+		wetL += sgn * rd[i];
+	} else {
+		wetR += sgn * rd[i];
+	}
+}
+
+// level from the decay setting (not the freeze gain), so freezing keeps level
+let gMean = gSum / 16.0;
+let norm = 0.8 * sqrt(maximum(1.0 - gMean * gMean, 0.0001));
+
+let outG = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = wetL * norm * outG;
+out2 = wetR * norm * outG;

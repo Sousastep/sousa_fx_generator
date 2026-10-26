@@ -1,0 +1,201 @@
+// ============================================================================
+// rev_velvet_grain.txt
+// A velvet-noise tail of sparse signed clicks whose grain runs from smooth to crackly lo-fi.
+// From: Prawda, Schlecht & Välimäki, "Multichannel Interleaved Velvet Noise",
+//       DAFx-22 Paper 28, §2 Eq. 1 — four extended-velvet-noise (EVN) branches,
+//       pulse k at round(k*Td + r*(Td - 1)), each recirculated through its own
+//       loss filter G(z), and §3.3 — branch outputs mixed orthogonally (sign
+//       patterns) so the two outputs are decorrelated.
+//       Fagerström, Meyer-Kahlen, Schlecht & Välimäki, "Dark Velvet Noise",
+//       DAFx-22 Paper 31, §3 — each pulse gets a random width, realised as one
+//       running-sum filter per unique width; wide pulses = darker clicks.
+//       Roberts et al., DAFx-23 Paper 57, §2.2 — at low pulse density the
+//       sequence is heard as rough/crackly instead of smooth; grain_hz rides
+//       that boundary on purpose.
+// 100% wet. No dry path, no limiter, no metering.
+// Inlets:
+//   in1 / in2: stereo audio (summed to excite the four branches)
+// Outlets:
+//   out1 / out2: stereo tail, wet only
+// ============================================================================
+
+// predelay
+@param({ min: 0, max: 250 }) predelay_ms = 10;
+// decay time (RT60)
+@param({ min: 0.2, max: 10, exponent: 2 }) decay_s = 2.0;
+// pulse density: low = crackly grit, high = smooth
+@param({ min: 40, max: 1200, exponent: 2 }) grain_hz = 400;
+// darkness: pulse width and loop lowpass
+@param({ min: 500, max: 16000, exponent: 2 }) damp_hz = 5000;
+// low cut
+@param({ min: 20, max: 600, exponent: 2 }) lowcut_hz = 150;
+// width
+@param({ min: 0, max: 1 }) width = 1.0;
+// output gain
+@param({ min: -24, max: 12 }) out_gain_db = 0;
+
+// predelay line (mono excitation)
+@state preBuf = new FixedSampleArray(65536);
+@state preIdx: Int = 0;
+
+// raw history for the running-sum filters
+@state rawBuf = new FixedSampleArray(256);
+@state rawIdx: Int = 0;
+
+// one history per pulse width group (dark velvet noise)
+@state grpBuf = new FixedSampleArray(4, 32768);
+@state grpSum = new FixedSampleArray(4);
+@state gIdx: Int = 0;
+
+// one recirculating loop per EVN branch
+@state loopBuf = new FixedSampleArray(4, 32768);
+@state loopLp = new FixedSampleArray(4);
+@state lIdx: Int = 0;
+
+// EVN pulse tables: position, signed gain, width group
+@state tapPos = new FixedIntArray(4, 32);
+@state tapGain = new FixedSampleArray(4, 32);
+@state tapGrp = new FixedIntArray(4, 32);
+@state tapCount = new FixedIntArray(4);
+@state loopLen = new FixedIntArray(4);
+
+@state rng = 1.0;
+@state lastSr = 0.0;
+@state lastGrain = -1.0;
+
+// low-cut: two one-pole highpasses in series
+@state hx1 = 0.0;
+@state hy1 = 0.0;
+@state hx2 = 0.0;
+@state hy2 = 0.0;
+
+function nextRand() {
+	rng = (rng * 16807.0) % 2147483647.0;
+	return rng / 2147483647.0;
+}
+
+// Eq. 1: k-th pulse inside grid cell k, signed, assigned a random width group
+function makeBranch(b: Int, sr: number, density: number) {
+	let lenS = loopLen[b];
+	let k: Int = clamp(floor(density * 0.25 * lenS / sr + 0.5), 1, 32);
+	tapCount[b] = k;
+	rng = 1234.0 + 7919.0 * b;
+	let td = lenS / k;
+	let amp = 1.0 / sqrt(k * 1.0);
+	for (let m: Int = 0; m < k; m++) {
+		let r = nextRand();
+		let p: Int = clamp(floor(m * td + r * (td - 1.0) + 0.5), 0, lenS - 1);
+		tapPos[b][m] = p;
+		let sgn = 1.0;
+		if (nextRand() < 0.5) {
+			sgn = -1.0;
+		}
+		tapGain[b][m] = sgn * amp;
+		let gq: Int = clamp(floor(nextRand() * 4.0), 0, 3);
+		tapGrp[b][m] = gq;
+	}
+}
+
+let sr = maximum(samplerate(), 1.0);
+let x = 0.5 * (in1 + in2);
+
+// --- (Re)build the pulse tables when the rate or the density moves --------
+let dens = clamp(grain_hz, 40.0, 1200.0);
+if (sr != lastSr || abs(dens - lastGrain) > 0.5) {
+	loopLen[0] = clamp(floor(0.0971 * sr), 16, 32700);
+	loopLen[1] = clamp(floor(0.1129 * sr), 16, 32700);
+	loopLen[2] = clamp(floor(0.1277 * sr), 16, 32700);
+	loopLen[3] = clamp(floor(0.1399 * sr), 16, 32700);
+	for (let b: Int = 0; b < 4; b++) {
+		makeBranch(b, sr, dens);
+	}
+	lastSr = sr;
+	lastGrain = dens;
+}
+
+// --- Predelay (ms) ---------------------------------------------------------
+preBuf[preIdx] = x;
+let preS: Int = clamp(floor(mstosamps(predelay_ms) + 0.5), 0, 65000);
+let xp = preBuf[(preIdx - preS + 65536) & 65535];
+preIdx = (preIdx + 1) & 65535;
+
+// --- Low cut ---------------------------------------------------------------
+let cutF = clamp(lowcut_hz, 10.0, sr * 0.45);
+let cutR = exp(0.0 - 2.0 * pi * cutF / sr);
+let ha = xp - hx1 + cutR * hy1;
+hx1 = xp;
+hy1 = ha;
+let hb = ha - hx2 + cutR * hy2;
+hx2 = ha;
+hy2 = hb;
+
+// --- Dark velvet noise: four pulse widths as leaky running sums -----------
+// boxcar of width w has its -3 dB point near 0.443*sr/w
+let dampF = clamp(damp_hz, 200.0, sr * 0.45);
+let wMax = clamp(0.443 * sr / dampF, 1.0, 120.0);
+rawBuf[rawIdx] = hb;
+let leak = 0.999;
+for (let j: Int = 0; j < 4; j++) {
+	let w: Int = clamp(floor(wMax * (j + 1) * 0.25 + 0.5), 1, 120);
+	let aw = pow(leak, w * 1.0);
+	let old = rawBuf[(rawIdx - w + 256) & 255];
+	let s = leak * grpSum[j] + hb - aw * old;
+	grpSum[j] = s;
+	grpBuf[j][gIdx] = s * (1.0 - leak) / (1.0 - aw);
+}
+rawIdx = (rawIdx + 1) & 255;
+
+// --- Four EVN branches, each recirculating through G(z) -------------------
+let rt60 = clamp(decay_s, 0.2, 10.0);
+let lpC = 1.0 - exp(0.0 - 2.0 * pi * dampF / sr);
+let br0 = 0.0;
+let br1 = 0.0;
+let br2 = 0.0;
+let br3 = 0.0;
+let gSum = 0.0;
+for (let b: Int = 0; b < 4; b++) {
+	let fir = 0.0;
+	let k: Int = tapCount[b];
+	for (let m: Int = 0; m < k; m++) {
+		let gq: Int = tapGrp[b][m];
+		let p: Int = tapPos[b][m];
+		fir += tapGain[b][m] * grpBuf[gq][(gIdx - p + 32768) & 32767];
+	}
+	let lenS: Int = loopLen[b];
+	let back = loopBuf[b][(lIdx - lenS + 32768) & 32767];
+	let lp = loopLp[b] + lpC * (back - loopLp[b]);
+	loopLp[b] = lp;
+	let g = exp(0.0 - 6.907755 * (lenS / sr) / rt60);
+	gSum += g;
+	let y = fir + g * lp;
+	loopBuf[b][lIdx] = y;
+	if (b == 0) {
+		br0 = y;
+	} else if (b == 1) {
+		br1 = y;
+	} else if (b == 2) {
+		br2 = y;
+	} else {
+		br3 = y;
+	}
+}
+gIdx = (gIdx + 1) & 32767;
+lIdx = (lIdx + 1) & 32767;
+
+// --- Orthogonal sign mixing (§3.3): two decorrelated outputs -------------
+let wetL = 0.5 * (br0 + br1 - br2 + br3);
+let wetR = 0.5 * (br0 - br1 + br2 + br3);
+
+// level: the loop gain sets the tail energy, so normalise by it
+let gMean = 0.25 * gSum;
+let norm = 1.4 * sqrt(maximum(1.0 - gMean * gMean, 0.0001));
+let sL = wetL * norm;
+let sR = wetR * norm;
+
+// --- Width (mid/side) -----------------------------------------------------
+let mid = 0.5 * (sL + sR);
+let side = 0.5 * (sL - sR) * clamp(width, 0.0, 1.0);
+
+let outG = dbtoa(clamp(out_gain_db, -24.0, 12.0));
+out1 = (mid + side) * outG;
+out2 = (mid - side) * outG;
