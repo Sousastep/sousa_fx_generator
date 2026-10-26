@@ -3,14 +3,17 @@ rev_fdn4_dark_hall — Parameter Information
 ================================================================================
 
 WHAT IT IS
-A four-line feedback delay network. The lines (1.00 : 1.31 : 1.71 : 2.13 times
-the room size) are mixed every sample by a 4x4 Hadamard matrix scaled by 1/2,
-which is unitary, so the loop itself loses no energy — the tail length comes
-only from the per-line decay gains, one lowpass and one DC blocker.
+A four-line feedback delay network. The input first runs through four series
+allpass diffusers per channel (so the hall is dense from the first
+reflections, not a handful of discrete echoes) and a 12 dB/oct low cut. The
+lines (1.00 : 1.31 : 1.71 : 2.13 times the room size) are mixed every sample by
+a 4x4 Hadamard matrix scaled by 1/2, which is unitary, so the loop itself
+loses no energy — the tail length comes only from the per-line decay gains,
+one lowpass and one DC blocker per line.
 
 Source: Beltrán et al., DAFx-99 §5.1 (Jot's reverberator: delay bank + unitary
 matrix A + absorptive filter); Dahl & Jot, DAFx-00 §2.1 (unitary-feedback delay
-networks).
+networks). Input diffusers: Dattorro, "Effect Design Part 1", JAES 1997.
 
 The point of this one is the bottom end: a long, smooth hall whose tail has no
 sub-bass and rolls off fast in the top. On tuba it gives size without mud.
@@ -20,24 +23,38 @@ PARAMETERS (7 + output gain)
 
 1. predelay_ms — 0…250 ms, default 30 ms
    Gap before the hall. 0–20 ms is an intimate room; 80–250 ms is a big hall
-   where the tuba sits in front of the space.
+   where the tuba sits in front of the space. Slider tapered (exponent 2).
 
 2. size_ms — 15…120 ms, default 45 ms
    Length of the shortest line; the others are 1.31, 1.71 and 2.13 times it.
-   Short = small dense room, long = sparse modal hall (audible individual
-   echoes at the extreme).
+   Short = small dense room, long = a bigger, slower-building hall. Size no
+   longer changes how dark or how long the tail is (see damp_hz), and the
+   level stays within ~1.5 dB across the whole range.
 
 3. decay_s — 1…20 s, default 6 s
-   RT60. Each line gets its own gain solved from its own length, so the four
-   lines decay together instead of the short ones dying first.
+   RT60 in the band between lowcut_hz and damp_hz (measured within ~15% from
+   1 to 20 s with the filters wide open). Each line gets its own gain solved
+   from its own length, so the four lines decay together instead of the short
+   ones dying first. With the default filters (80 Hz … 1.5 kHz) the tuba band
+   rings for about half of decay_s — that is the "dark" part. Level is
+   normalised, so a long decay is not much louder or quieter than a short
+   one (±1.5 dB on the tuba). Slider tapered (exponent 2).
 
 4. damp_hz — 250…8000 Hz, default 1500 Hz
-   Lowpass in every line. This is the main "dark" control; 800 Hz–1.5 kHz gives
-   the dubplate tail, 4 kHz+ a brighter hall.
+   Lowpass in every line, set per second rather than per pass: at this
+   frequency the tail dies an extra 45 dB/s faster than decay_s, above it
+   faster still, whatever the room size. This is the main "dark" control;
+   800 Hz–1.5 kHz gives the dubplate tail, 4 kHz+ a brighter hall. Slider
+   tapered (exponent 3).
 
 5. lowcut_hz — 20…500 Hz, default 80 Hz
-   DC blocker in every line. Raise it to 150–300 Hz to keep the sub completely
-   out of the tail so the dry sub-bass stays the only low end.
+   12 dB/oct highpass on the hall input plus a per-second-calibrated DC
+   blocker in every line (at this frequency the tail dies an extra 45 dB/s
+   faster). Measured sub (20–60 Hz) against the 300 Hz–1 kHz band: −22 dB at
+   80 Hz, −40 dB at 200 Hz. Raise it to 150–300 Hz to keep the sub completely
+   out of the tail so the dry sub-bass stays the only low end. On a tuba this
+   is also a level control: most of the tuba is below 500 Hz, so 20 Hz is
+   ~+7 dB and 500 Hz ~−20 dB against the default. Slider tapered (exponent 2).
 
 6. mod_depth — 0…1, default 0.3
    Depth of the slow, mutually offset line-length modulation (up to 6 samples).
@@ -45,7 +62,9 @@ PARAMETERS (7 + output gain)
    slightly detuned and never metallic.
 
 7. width — 0…1, default 1.0
-   Mid/side spread of the two tap pairs. 0 = mono, 1 = full width.
+   Mid/side spread of the two tap pairs (lines 0+3 left, 1+2 right). At 1 the
+   two sides are balanced and nearly uncorrelated on a mono tuba (|r| ≲ 0.2),
+   so the hall also survives a mono sum. 0 = mono.
 
 8. out_gain_db — -24…+12 dB, default 0 dB
    Final output trim. Does not count toward the 8-param limit.
@@ -57,7 +76,13 @@ INLETS / OUTLETS
 - out1 / out2: stereo wet only.
 
 NOTES
-- Hadamard mixing is normalised by 1/2, so the loop is lossless apart from the
-  filters and the decay gains; the network is stable at any setting.
-- Level is normalised against the mean decay gain.
+- Hadamard mixing is normalised by 1/2, and every filter in the loop has gain
+  ≤ 1, so the loop is lossless apart from the filters and the decay gains;
+  the network is stable at any setting (a 60 s tail at 20 s / 15 ms decays
+  to −230 dB).
+- The output is taken after the loop filters, so even the first pass
+  through each line is damped and low-cut.
+- Level is normalised against the mean decay gain with a measured correction
+  for size and decay; the default sits ~5 dB under the dry tuba.
+- Buffers hold 250 ms predelay and the 120 ms room at up to 96 kHz.
 - No limiter, no dry path, no pitch tracking.

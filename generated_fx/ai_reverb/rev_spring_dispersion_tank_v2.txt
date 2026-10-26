@@ -29,11 +29,11 @@
 //   - predelay / disperse / damp are slewed (no zipper clicks).
 // ============================================================================
 
-@param({ min: 0, max: 150 }) predelay_ms = 10;      // predelay
+@param({ min: 0, max: 150, exponent: 2 }) predelay_ms = 10;      // predelay
 @param({ min: 15, max: 90 }) spring_ms = 45;        // spring length
 @param({ min: 0, max: 1 }) disperse = 0.6;          // dispersion
-@param({ min: 0.4, max: 8 }) decay_s = 2.5;         // decay
-@param({ min: 800, max: 12000 }) damp_hz = 3500;    // damping
+@param({ min: 0.4, max: 8, exponent: 2 }) decay_s = 2.5;         // decay
+@param({ min: 800, max: 12000, exponent: 2 }) damp_hz = 3500;    // damping
 @param({ min: 0, max: 1 }) width = 0.7;             // width
 @param({ min: 0, max: 1 }) elastic = 0.6;           // spring mass: 0 = instant jump (v1), up = slower + bouncier
 @param({ min: 0, max: 1 }) whack = 0.35;            // clang / rattle when the spring is moved
@@ -172,7 +172,10 @@ nPrevR = nR;
 // --- Loop gain and damping (DAFx-09 §3: TD sets the echo spacing) ----------
 let springSec = springPos / sr;
 let rt60 = clamp(decay_s, 0.4, 8.0);
-let gLoop = clamp(exp(0.0 - 6.907755 * springSec / rt60), 0.0, 0.975);
+// Every other gain in the loop is <= 1 (the 20 Hz DC blocker peaks at
+// 1.0013), so 0.995 is only a guard; at 0.975 a 15 ms spring topped out
+// at a 4 s decay whatever decay_s said
+let gLoop = clamp(exp(0.0 - 6.907755 * springSec / rt60), 0.0, 0.995);
 
 let dampC = 1.0 - exp(0.0 - 2.0 * pi * dampSm / sr);
 
@@ -250,8 +253,10 @@ springBufR[spIdx] = dR;
 spIdx = (spIdx + 1) & 32767;
 
 // Energy normalisation: a comb of feedback g carries 1/(1-g^2) of the input
-// energy, so scale by its inverse root to keep the wet level steady.
-let norm = sqrt(maximum(1.0 - gLoop * gLoop, 0.0001));
+// energy, so scale by its inverse root to keep the wet level steady. The
+// (rt60 / 2.5)^0.15 term is measured: damping and dispersion eat more of a
+// long tail, which left decay 8 s ~5 dB under decay 0.4 s on the tuba
+let norm = sqrt(maximum(1.0 - gLoop * gLoop, 0.0001)) * pow(rt60 / 2.5, 0.15);
 let wetL = tapL * norm;
 let wetR = tapR * norm;
 

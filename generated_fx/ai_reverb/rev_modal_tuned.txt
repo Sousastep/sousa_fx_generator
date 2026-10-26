@@ -2,48 +2,70 @@
 // rev_modal_tuned.txt
 // Eight 5-limit room modes locked to the tuba's f0.
 // From: Jonathan S. Abel & Kurt James Werner, "Distortion and Pitch Processing
-//       Using a Modal Reverberator Architecture", DAFx-15 Paper 72, §2 (the
-//       modal reverberator: parallel resonant filters, h_m(t) = e^{(j*w_m -
-//       a_m)t}, decay set per mode) and §3.3 (mode frequencies scaled by a
-//       ratio -> pitch). The equal-tempered 2^(sigma/12) of that section is
-//       replaced here by 5-limit ratios.
+//       Using a Modal Reverberator Architecture", DAFx-15 Paper 72, §2 Fig. 2
+//       (a mode = heterodyne to dc, smooth with the mode's exponential decay,
+//       modulate back up; h_m(t) = e^{(j*w_m - a_m)t}) and §3.3 Fig. 8 (a
+//       different modulation frequency than the heterodyne one shifts the
+//       pitch). Each mode heterodynes the tuba harmonic nearest its ratio
+//       (k*f0, k = 1..3) and is modulated out at ratio*f0, so the chord sounds
+//       on a steady note - a resonator merely tuned to ratio*f0 is not excited
+//       by a harmonic tone. The paper's 2^(sigma/12) is replaced by 5-limit
+//       ratios, and the decay smoothing runs on each harmonic's magnitude, so
+//       tracker error below a few Hz cannot cancel a long-decay mode.
 // 100% wet. No dry path, no limiter, no metering.
 // Inlets:
 //   in1 / in2: stereo audio (summed to excite the mode bank)
-//   in3: f0 in Hz — 0 means unknown, the last value is held (55 Hz at startup)
+//   in3: f0 in Hz — 0 means unknown, the last value is held (55 Hz at startup);
+//        the modes glide to a new f0 over ~15 ms
 //   in4: 0..1 one-bar phasor, bound only (modes follow f0, not the bar)
 // Outlets:
 //   out1 / out2: stereo modal tail, wet only
 // ============================================================================
 
-@param({ min: 0, max: 100 }) predelay_ms = 15;      // predelay
-@param({ min: 0.5, max: 20 }) decay_s = 5;          // decay
+@param({ min: 0, max: 100, exponent: 2 }) predelay_ms = 15;      // predelay
+@param({ min: 0.5, max: 20, exponent: 2 }) decay_s = 5;          // decay
 @param({ min: 0, max: 1 }) tilt = 0.45;             // brightness
 @param({ min: 0, max: 25 }) detune_cents = 8;       // detune
 @param({ min: 0, max: 1 }) sub_weight = 0.35;       // sub octave
 @param({ min: 0, max: 1 }) width = 0.8;             // width
 @param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
 
-@state preL = new FixedSampleArray(8192);
-@state preR = new FixedSampleArray(8192);
+@state preL = new FixedSampleArray(16384);
+@state preR = new FixedSampleArray(16384);
 @state preIdx: Int = 0;
 
 // 5-limit mode ratios: 1/2, 1/1, 6/5, 5/4, 3/2, 5/3, 2/1, 5/2
 @state modeRatio = new FixedSampleArray([0.5, 1.0, 1.2, 1.25, 1.5, 1.6666667, 2.0, 2.5]);
+// Harmonic each mode listens to: the one nearest its ratio on a log scale
+@state modeHarm = new FixedSampleArray([1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0]);
 
-@state a1L = new FixedSampleArray(8);
-@state a2L = new FixedSampleArray(8);
-@state gL = new FixedSampleArray(8);
-@state y1L = new FixedSampleArray(8);
-@state y2L = new FixedSampleArray(8);
+@state rM = new FixedSampleArray(8);     // per-mode envelope decay coefficient
+@state ampM = new FixedSampleArray(8);   // per-mode output gain (tilt, sub)
+@state envM = new FixedSampleArray(8);   // per-mode decaying envelope
+// Synthesis phases, spread so the eight partials do not start in phase; L and
+// R start together, so at detune 0 the two sides are identical (mono-safe)
+@state phL = new FixedSampleArray([0.0, 0.61, 0.23, 0.87, 0.42, 0.05, 0.71, 0.33]);
+@state phR = new FixedSampleArray([0.0, 0.61, 0.23, 0.87, 0.42, 0.05, 0.71, 0.33]);
 
-@state a1R = new FixedSampleArray(8);
-@state a2R = new FixedSampleArray(8);
-@state gR = new FixedSampleArray(8);
-@state y1R = new FixedSampleArray(8);
-@state y2R = new FixedSampleArray(8);
+// Harmonic analysis: two cascaded one-poles on the heterodyned signal for
+// k = 1, 2, 3 (real and imaginary parts)
+@state h1aRe = 0.0;
+@state h1aIm = 0.0;
+@state h1bRe = 0.0;
+@state h1bIm = 0.0;
+@state h2aRe = 0.0;
+@state h2aIm = 0.0;
+@state h2bRe = 0.0;
+@state h2bIm = 0.0;
+@state h3aRe = 0.0;
+@state h3aIm = 0.0;
+@state h3bRe = 0.0;
+@state h3bIm = 0.0;
+@state anPh = 0.0;     // analysis phase of the fundamental, integrated from f0
 
+@state ampNorm = 1.0;   // 1 / sqrt(sum of ampM^2): tilt and sub change colour, not level
 @state f0Hold = 55.0;
+@state f0Glide = 55.0;
 @state ctlCnt: Int = 0;
 
 let sr = maximum(samplerate(), 1.0);
@@ -54,38 +76,35 @@ let barIn = in4; // accepted for the batch contract; modes follow f0, not the ba
 // --- f0: read, hold when unknown (0), never fall back to a derivative ------
 let fin = in3;
 if (fin > 20.0 && fin < 1200.0) { f0Hold = fin; }
-let f0 = clamp(f0Hold, 20.0, 1200.0);
+// ~15 ms glide in the log domain, so a note change bends instead of stepping
+let glideC = 1.0 - exp(0.0 - 1.0 / (0.015 * sr));
+f0Glide = f0Glide * exp(glideC * log(clamp(f0Hold, 20.0, 1200.0) / f0Glide));
+let f0 = clamp(f0Glide, 20.0, 1200.0);
 
-// --- Resonator coefficients, updated every 32 samples (control rate) ------
+// --- Mode decay and gain, updated every 32 samples (control rate) ---------
 if (ctlCnt == 0) {
 	let rt60 = clamp(decay_s, 0.5, 20.0);
-	let tiltBase = 0.45 + 0.60 * clamp(tilt, 0.0, 1.0);
-	let det = clamp(detune_cents, 0.0, 25.0) * 0.000577623;
+	let tiltBase = 0.45 + 0.55 * clamp(tilt, 0.0, 1.0);
 	let subW = clamp(sub_weight, 0.0, 1.0);
+	// the root (1/1) is the reference: the sub is subW of it, each mode above
+	// is tiltBase times the one below (tilt 1 = all as loud as the root)
 	let tiltG = 1.0;
+	let ampSq = 0.0;
 
 	for (let m: Int = 0; m < 8; m++) {
 		// higher modes die a little sooner, as in a real room
 		let modeDecay = rt60 / (1.0 + 0.5 * m / 7.0);
-		let rAmt = exp(0.0 - 6.907755 / (modeDecay * sr));
-		let fm = clamp(f0 * modeRatio[m], 10.0, sr * 0.45);
+		rM[m] = exp(0.0 - 6.907755 / (modeDecay * sr));
 
-		let wL = 2.0 * pi * clamp(fm * (1.0 - det), 10.0, sr * 0.45) / sr;
-		let wR = 2.0 * pi * clamp(fm * (1.0 + det), 10.0, sr * 0.45) / sr;
-
-		let amp = tiltG;
-		if (m == 0) { amp = tiltG * subW; }
-
-		a1L[m] = 2.0 * rAmt * cos(wL);
-		a2L[m] = rAmt * rAmt;
-		gL[m] = amp * 2.0 * sin(wL) * (1.0 - rAmt);
-
-		a1R[m] = 2.0 * rAmt * cos(wR);
-		a2R[m] = rAmt * rAmt;
-		gR[m] = amp * 2.0 * sin(wR) * (1.0 - rAmt);
-
-		tiltG = tiltG * tiltBase;
+		let amp = subW;
+		if (m > 0) {
+			amp = tiltG;
+			tiltG = tiltG * tiltBase;
+		}
+		ampM[m] = amp;
+		ampSq = ampSq + amp * amp;
 	}
+	ampNorm = 1.0 / sqrt(maximum(ampSq, 0.000001));
 }
 ctlCnt = (ctlCnt + 1) & 31;
 
@@ -93,47 +112,90 @@ ctlCnt = (ctlCnt + 1) & 31;
 preL[preIdx] = xL;
 preR[preIdx] = xR;
 
-let preSamps = clamp(mstosamps(predelay_ms), 1.0, 8180.0);
+let preSamps = clamp(mstosamps(predelay_ms), 1.0, 16300.0);
 
 let rpL = preIdx - preSamps;
-while (rpL < 0.0) { rpL += 8192.0; }
+while (rpL < 0.0) { rpL += 16384.0; }
 let piL: Int = floor(rpL);
 let pL = cubicinterp(rpL - piL,
-	preL[(piL - 1 + 8192) & 8191],
-	preL[piL & 8191],
-	preL[(piL + 1) & 8191],
-	preL[(piL + 2) & 8191]);
+	preL[(piL - 1 + 16384) & 16383],
+	preL[piL & 16383],
+	preL[(piL + 1) & 16383],
+	preL[(piL + 2) & 16383]);
 
 let rpR = preIdx - preSamps;
-while (rpR < 0.0) { rpR += 8192.0; }
+while (rpR < 0.0) { rpR += 16384.0; }
 let piR: Int = floor(rpR);
 let pR = cubicinterp(rpR - piR,
-	preR[(piR - 1 + 8192) & 8191],
-	preR[piR & 8191],
-	preR[(piR + 1) & 8191],
-	preR[(piR + 2) & 8191]);
+	preR[(piR - 1 + 16384) & 16383],
+	preR[piR & 16383],
+	preR[(piR + 1) & 16383],
+	preR[(piR + 2) & 16383]);
 
-preIdx = (preIdx + 1) & 8191;
+preIdx = (preIdx + 1) & 16383;
 
-// --- Eight resonators per channel -----------------------------------------
+// --- Heterodyne harmonics 1..3 of f0 to dc and smooth (analysis) ----------
+// Lowpass at 10% of f0 (2..15 Hz, 12 dB/oct): rejects the neighbouring
+// harmonics (>= 37 dB at f0 away) and tolerates a few Hz of tracker error
 let xin = 0.5 * (pL + pR);
+anPh = wrap(anPh + f0 / sr, 0.0, 1.0);
+let c1 = cos(2.0 * pi * anPh);
+let s1 = sin(2.0 * pi * anPh);
+let c2 = c1 * c1 - s1 * s1;
+let s2 = 2.0 * c1 * s1;
+let c3 = c2 * c1 - s2 * s1;
+let s3 = s2 * c1 + c2 * s1;
+
+let anC = 1.0 - exp(0.0 - 2.0 * pi * clamp(0.1 * f0, 2.0, 15.0) / sr);
+h1aRe = h1aRe + anC * (xin * c1 - h1aRe);
+h1aIm = h1aIm + anC * (0.0 - xin * s1 - h1aIm);
+h1bRe = h1bRe + anC * (h1aRe - h1bRe);
+h1bIm = h1bIm + anC * (h1aIm - h1bIm);
+h2aRe = h2aRe + anC * (xin * c2 - h2aRe);
+h2aIm = h2aIm + anC * (0.0 - xin * s2 - h2aIm);
+h2bRe = h2bRe + anC * (h2aRe - h2bRe);
+h2bIm = h2bIm + anC * (h2aIm - h2bIm);
+h3aRe = h3aRe + anC * (xin * c3 - h3aRe);
+h3aIm = h3aIm + anC * (0.0 - xin * s3 - h3aIm);
+h3bRe = h3bRe + anC * (h3aRe - h3bRe);
+h3bIm = h3bIm + anC * (h3aIm - h3bIm);
+
+// A cosine of amplitude A heterodynes to A/2 at dc, hence the 2
+let mag1 = 2.0 * sqrt(h1bRe * h1bRe + h1bIm * h1bIm);
+let mag2 = 2.0 * sqrt(h2bRe * h2bRe + h2bIm * h2bIm);
+let mag3 = 2.0 * sqrt(h3bRe * h3bRe + h3bIm * h3bIm);
+
+// --- Eight modes: decay-smoothed harmonic level, modulated at ratio * f0 --
+let det = clamp(detune_cents, 0.0, 25.0) * 0.000577623;
+let fL = f0 * (1.0 - det) / sr;
+let fR = f0 * (1.0 + det) / sr;
 let accL = 0.0;
 let accR = 0.0;
 
 for (let m: Int = 0; m < 8; m++) {
-	let vL = gL[m] * xin + a1L[m] * y1L[m] - a2L[m] * y2L[m];
-	y2L[m] = y1L[m];
-	y1L[m] = vL;
-	accL = accL + vL;
+	let k = modeHarm[m];
+	let mag = mag1;
+	if (k > 2.5) { mag = mag3; }
+	else if (k > 1.5) { mag = mag2; }
 
-	let vR = gR[m] * xin + a1R[m] * y1R[m] - a2R[m] * y2R[m];
-	y2R[m] = y1R[m];
-	y1R[m] = vR;
-	accR = accR + vR;
+	let r = rM[m];
+	let env = envM[m] * r + (1.0 - r) * mag;
+	envM[m] = env;
+
+	let ratio = modeRatio[m];
+	let pl = wrap(phL[m] + ratio * fL, 0.0, 1.0);
+	let pr = wrap(phR[m] + ratio * fR, 0.0, 1.0);
+	phL[m] = pl;
+	phR[m] = pr;
+
+	// modes pushed above 0.45 * sr are dropped, as the paper suggests
+	let a = (ratio * f0 < sr * 0.45) ? ampM[m] * env : 0.0;
+	accL = accL + a * cos(2.0 * pi * pl);
+	accR = accR + a * cos(2.0 * pi * pr);
 }
 
-let wetL = accL * 1.0;
-let wetR = accR * 1.0;
+let wetL = accL * ampNorm * 1.45;
+let wetR = accR * ampNorm * 1.45;
 
 // --- Width (mid/side) -----------------------------------------------------
 let mid = 0.5 * (wetL + wetR);

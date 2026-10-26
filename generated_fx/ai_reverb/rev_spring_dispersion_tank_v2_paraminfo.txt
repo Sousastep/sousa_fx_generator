@@ -20,7 +20,7 @@ PARAMETERS (8 + output gain)
 1. predelay_ms — 0…150 ms, default 10 ms
    Gap before the spring is hit. 0–20 ms keeps the drip glued to the tongue;
    80 ms+ pulls the tank behind the note. Slewed (~40 ms), so moving it glides
-   like a tape delay instead of clicking.
+   like a tape delay instead of clicking. Slider tapered (exponent 2).
 
 2. spring_ms — 15…90 ms, default 45 ms
    Echo spacing, now exact (loop delay is compensated). Short = tight, bright,
@@ -34,20 +34,25 @@ PARAMETERS (8 + output gain)
    so even the first echo chirps.
 
 4. decay_s — 0.4…8 s, default 2.5 s
-   RT60 of the tank. Loop gain is derived from this and the live spring length,
-   so long springs decay in fewer round trips for the same setting.
+   RT60 of the tank (measured within ~3% over the whole range, every spring
+   length). Loop gain is derived from this and the live spring length, so long
+   springs decay in fewer round trips for the same setting. Level stays within
+   ~1 dB from 0.4 to 8 s. Slider tapered (exponent 2).
 
 5. damp_hz — 800…12000 Hz, default 3500 Hz
    One-pole lowpass inside the loop. Low values darken each pass (vintage tank),
-   high values keep the metallic top.
+   high values keep the metallic top. Slider tapered (exponent 2).
 
 6. width — 0…1, default 0.7
    Mid/side spread of the two slightly detuned spring lines (the right line is
-   3.7% longer). 0 = mono tank, 1 = wide.
+   3.7% longer). 0 = mono tank, 1 = wide. Because a spring is a comb, a
+   sustained tuba note can sit on a comb peak in one line and between peaks
+   in the other, so the two sides can differ by a couple of dB on a held note
+   (most at long springs).
 
-7. elastic — 0…1, default 0.6   (NEW)
+7. elastic — 0…1, default 0.6
    How heavy and springy the spring body is when spring_ms moves.
-     0     = instant jump, exactly like v1 (click/clang, no pitch glide)
+     0     = instant jump (click/clang, no pitch glide)
      ~0.3  = fast critically-damped glide: a quick pitched "zip"
      ~0.6  = glide with one visible overshoot: "sproing"
      1.0   = slow (about 2.4 Hz) and underdamped: wobbles several times, dubby
@@ -55,7 +60,7 @@ PARAMETERS (8 + output gain)
    Glide speed is capped so the echoes never play backwards (pitch ratio stays
    between about 0.2x and 1.8x).
 
-8. whack — 0…1, default 0.35   (NEW)
+8. whack — 0…1, default 0.35
    Clang and rattle injected into the loop when spring_ms moves: a burst on
    each jump of the knob (~30 ms decay) plus a continuous rattle proportional
    to the spring's speed. Passes through the dispersion chain, so it chirps.
@@ -74,14 +79,15 @@ INLETS / OUTLETS
 NOTES
 - Level is energy-normalised against the loop gain, so changing decay_s does
   not change loudness much.
-- Loop gain is capped at 0.975; the tank cannot run away. The loop also has a
-  20 Hz DC blocker and a gentle tanh (unity at small signal, soft ceiling
-  around 1.4), which only colours hot or whacked signal.
+- Loop gain is capped at 0.995 (a guard only: the allpasses, lowpass and
+  interpolation are all ≤ 1 and the 20 Hz DC blocker peaks at 1.0013); the
+  tank cannot run away — 60 s of 15↔90 ms knob slams at full elastic, whack,
+  disperse and decay end below −260 dB. The loop also has a gentle tanh
+  (unity at small signal, soft ceiling around 1.4), which only colours hot
+  or whacked signal.
 - Tension coupling: while the spring stretches the chirp steepens, while it
   compresses the chirp relaxes. Only active when elastic > 0.
 - Delay buffers are 32768 samples, enough for the full range up to 192 kHz.
-- If a batch maps params by index, the two new @param lines sit between width
-  and out_gain_db; move them below out_gain_db to keep v1 indices unchanged.
 - No pitch tracking, no bar sync, no limiter.
 - The whack burst uses two declared noise generators (@state ... = new noise(),
   read with .next()), one per channel.

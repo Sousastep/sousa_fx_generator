@@ -3,15 +3,21 @@ rev_shimmer_just — Parameter Information
 ================================================================================
 
 WHAT IT IS
-A shimmer reverb: the tail is fed back through a grain pitch shifter, so every
-pass climbs by one fixed interval. Because the interval is 5-limit and the loop
-is closed, the stacked tail builds a just-intonation chord (root, octave,
-twelfth, double octave …) instead of the drifting equal-tempered stack a
-semitone-based shifter produces.
+A shimmer reverb built from two parallel loops fed by the same diffused
+input: a shimmer loop, fed back through a grain pitch shifter and two
+diffusing allpasses so every pass climbs by one fixed interval and smears
+into a wash, and an unshifted body loop (the same diffusion, no shifter)
+that holds the root. shift_mix blends the two. The shimmer stack is the powers of the chosen ratio: 2/1 gives root,
+octave, two octaves …; 3/2 gives 1, 3/2, 9/4, 27/8 …; 3/1 gives root,
+twelfth, 9/1 …. With 2/1 and 3/1 every layer stays exactly in tune with the
+tuba's harmonics; 5/4, 5/3 and 5/2 stack pure thirds and sixths, which drift
+off the harmonic series after a pass or two (that is the colour, not a bug).
 
-Source: Abel & Werner, DAFx-15 Paper 72 §3.3 (pitch by scaling the ringing
-frequencies — the paper's 2^{σ/12} is replaced here by 5-limit ratios) inside a
-diffused delay loop after Beltrán et al., DAFx-99 §2.5.
+Source: the pitch-shifter-in-the-reverb-loop shimmer cited by Abel & Werner,
+DAFx-15 Paper 72 §1 (ValhallaShimmer, their ref. [26]), with their 2^{σ/12}
+shift replaced by 5-limit ratios; the shifter is the classic two-head,
+Hann-crossfaded delay-line shifter; the diffusion is series Schroeder
+allpasses after Beltrán et al., DAFx-99 §2.5.
 
 100% wet, no dry/wet. Classic for "space bass" pads and for making a single
 tuba note into a chord.
@@ -20,34 +26,48 @@ PARAMETERS (7 + output gain)
 
 1. predelay_ms — 0…200 ms, default 25 ms
    Gap before the shimmer. Short keeps it attached to the note; long lets the
-   note speak before the octave stack arrives.
+   note speak before the octave stack arrives. On top of it the body's first
+   reflections arrive after ~65 ms and the shifter's first layer after ~1.5
+   grain windows (~150 ms at the default window). Slider tapered (exponent 2).
 
 2. decay_s — 1…30 s, default 8 s
-   RT60 of the loop (which is about twice the grain window long). Long values
-   let several upward passes accumulate into a full chord.
+   RT60 of both loops, each solved from its own loop length (body measured
+   1.2 / 3.3 / 8.2 / 27 s for 1 / 3 / 8 / 30 s). Long values let several
+   upward passes accumulate into a full chord. The shimmer layer itself
+   empties sooner than decay_s, because every pass moves its energy up a
+   step and the top is eaten by tone_hz — so the long tail you hear at
+   mid shift_mix is mostly the body. Level stays within ~±1.5 dB from 1 to
+   30 s. Slider tapered (exponent 2).
 
 3. interval — 5/4, 4/3, 3/2, 5/3, 2/1, 5/2, 3/1; default 2/1
    The 5-limit interval added per pass. 2/1 gives the classic octave shimmer;
    3/2 and 5/3 make a narrower, more chordal stack; 3/1 gets huge fast.
 
 4. shift_mix — 0…1, default 0.55
-   How much of the feedback is pitch-shifted (the rest is the plain loop).
-   At 0 the effect is an ordinary diffused reverb; at 1 every pass is shifted
-   and the output is the shifted signal only. Intermediate values mix a
-   straight reverb body under the octave layer, which is what keeps the tuba's
-   fundamental present under the shimmer.
+   Equal-power blend between the body loop (0) and the shimmer loop (1). At 0
+   the effect is a plain single-loop diffused reverb (it can ring metallic at
+   long decays — it is the shimmer's body, not a hall); at 1 only the shifted
+   stack comes out. Intermediate values put a straight reverb body under the
+   octave layer, which is what keeps the tuba's fundamental present under the
+   shimmer. Each loop is level-normalised, so the knob changes the balance,
+   not the loudness (±1 dB on the tuba). Earlier versions blended inside one
+   loop, which lost up to 3 dB per pass and capped the real decay near 3.5 s.
 
 5. tone_hz — 500…12000 Hz, default 4000 Hz
-   One-pole lowpass in the loop. Shifting up adds brightness on every pass, so
-   this is the control that keeps a long shimmer from turning into hiss.
+   One-pole lowpass in both loops. Shifting up adds brightness on every pass, so
+   this is the control that keeps a long shimmer from turning into hiss (and
+   from aliasing: the shifter has no anti-alias filter of its own). Slider
+   tapered (exponent 2).
 
 6. window_ms — 40…200 ms, default 90 ms
-   Grain length of the shifter. Short = grainy, audible flutter; long = smooth,
-   but the grain repeats become audible as a slow warble.
+   Grain length of the shifter (the body loop does not depend on it). Short =
+   grainy, audible flutter; long = smooth, but the grain repeats become
+   audible as a slow warble.
 
 7. width — 0…1, default 0.9
    Mid/side spread. The two channels run the shifter with a 0.37 grain-phase
-   offset, so at 1 they are fully decorrelated.
+   offset and both loops use different lengths per side; on a mono tuba the
+   two sides are only weakly correlated (r ≈ 0.1) at 1. 0 = mono.
 
 8. out_gain_db — -24…+12 dB, default 0 dB
    Final output trim. Does not count toward the 8-param limit.
@@ -59,8 +79,12 @@ INLETS / OUTLETS
 - out1 / out2: stereo wet only.
 
 NOTES
-- The shifter is a two-head Hann-crossfaded grain shifter reading a single
-  loop line; there is no internal pitch detector and no f0 dependence.
-- Feedback is capped at 0.99 and the lowpass sits inside the loop, so the
-  upward stack cannot run away.
+- The shifter is a two-head Hann-crossfaded grain shifter reading the
+  shimmer loop's line; there is no internal pitch detector and no f0
+  dependence.
+- Every element in either loop has gain ≤ 1 (the crossfaded heads, the
+  lowpass, unity-gain allpasses) and each loop gain is capped at 0.99, so
+  the upward stack cannot run away (90 s tails at the extremes end below
+  −158 dB). The shift_mix blend is outside both loops.
+- Window up to 200 ms at up to 96 kHz.
 - Interval choices are 5-limit only: 5/4, 4/3, 3/2, 5/3, 2/1, 5/2, 3/1.

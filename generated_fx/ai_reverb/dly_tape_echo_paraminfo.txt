@@ -17,14 +17,17 @@ and magnetisation saturation).
 
 PARAMETERS (7 + output gain)
 
-1. echo_div — 1/16, 1/8T, 1/8, 1/4, 1/2, 1 bar; default 1/8
+1. echo_div — 1/16, 1/8T, 1/8, 1/8D, 1/4, 1/2, 1 bar; default 1/8
    Repeat time as a subdivision of the bar on in4. 1/8 is the half-beat
-   slapback; 1/8T pushes slightly ahead of the grid, 1/4 and up are long
-   trailing repeats.
+   echo (250 ms at 120 BPM; 1/16 is the nearest thing to a slapback); 1/8T
+   lands ahead of the eighth grid, 1/8D (dotted eighth) is the classic
+   syncopated tape-echo setting, 1/4 and up are long trailing repeats.
 
 2. feedback — 0…0.9, default 0.5
-   Number of repeats. The saturation and the head-loss filter sit in the loop,
-   so high settings self-compress rather than run away.
+   Number of repeats. Loop gain is feedback × (saturation, head loss — each
+   ≤ 1), so even 0.9 always dies away (measured: an impulse falls ~70 dB in
+   15 s at 1/8). The saturation and the head-loss filter sit in the loop, so
+   loud repeats self-compress and each one is darker than the last.
 
 3. wow_flutter — 0…1, default 0.35
    Depth of the transport drift: 0.7 Hz wow (up to ~2.2 ms) plus 6.3 Hz flutter
@@ -33,22 +36,29 @@ PARAMETERS (7 + output gain)
    way for a tape-azimuth effect.
 
 4. saturate — 0…1, default 0.4
-   Drive into the loop's soft clipper. Unity small-signal gain at any setting,
-   so this changes tone and compression rather than level. High settings make
-   the repeats thicken and then flatten.
+   Drive into the loop's soft clipper (unity small-signal gain, so it cannot
+   add loop gain). The level it takes off is made up at the output, calibrated
+   on a tuba at -18 dBFS RMS: across the whole range the echo level stays
+   within ~0.6 dB, so this changes tone and compression rather than level
+   (quieter sources come up by up to ~3 dB at 1). High settings make the
+   repeats thicken and then flatten.
 
 5. tone_hz — 800…12000 Hz, default 5000 Hz
-   One-pole play-head loss. 2–3 kHz is a worn head on a slow machine; 8 kHz+
-   keeps the repeats bright.
+   One-pole play-head loss, inside the loop. 2–3 kHz is a worn head on a slow
+   machine; 8 kHz+ keeps the repeats bright. Slider tapered (exponent 2).
 
 6. head_bump — 0…1, default 0.4
-   Amount of the 90 Hz playback-coil resonance added back. This is the low
-   "thump" that makes tape echo feel bigger than the dry signal; on a sub-heavy
-   rig keep it under 0.5.
+   Amount of the 90 Hz playback-coil resonance (Q ≈ 1.2) added to the output.
+   This is the low "thump" that makes tape echo feel bigger than the dry
+   signal. It is applied on the way out only, not in the feedback loop (in the
+   loop it made the repeats grow without bound), so it does not pile up from
+   repeat to repeat. On the tuba it adds ~+1 dB at 0.4 and ~+4 dB at 1; on a
+   sub-heavy rig keep it under 0.5.
 
 7. width — 0…1, default 0.6
-   Mid/side spread. The two channels also run slightly different delay lengths
-   (right is 0.15% longer), so at 1 the repeats are fully separate.
+   Mid/side spread of whatever difference the two heads make. The right head
+   runs a 0.15% longer delay and its wow/flutter moves the opposite way, so
+   even a mono tuba gets a drifting stereo image; at 0 the echo is mono.
 
 8. out_gain_db — -24…+12 dB, default 0 dB
    Final output trim. Does not count toward the 8-param limit.
@@ -56,13 +66,20 @@ PARAMETERS (7 + output gain)
 INLETS / OUTLETS
 - in1 / in2: stereo audio.
 - in3: connected but unused (batch inlet layout).
-- in4: one-bar phasor. Bar period is measured wrap-to-wrap and held; with in4
-  static the echo keeps the last measured time, or 2.000 s (120 BPM) if in4 was
-  never seen.
+- in4: one-bar phasor. The bar period is measured from how fast in4 moves
+  (re-estimated every quarter bar, so it locks within a quarter bar from any
+  start phase) and held; with in4 static the echo keeps the last measured
+  time, or 2.000 s (120 BPM) if in4 was never seen. Backward jumps and large
+  forward steps (transport relocate) are ignored.
 - out1 / out2: stereo repeats only.
 
 NOTES
-- Delay time is slewed (~40 ms), so a subdivision change glides like a tape
-  speed change instead of clicking.
-- Maximum delay is one bar at 60 BPM (4 s at 48 kHz); slower bars clamp.
+- Delay time is slewed (~50 ms time constant, the head never runs backwards
+  or faster than double speed), so a subdivision change glides like a tape
+  speed change — up to an octave of bend — instead of clicking.
+- Output level: the echo tail is normalised to the input energy
+  (√(1 − feedback²)); on the tuba the default sits ~0.7 dB under the dry
+  level, feedback 0.9 ~5 dB under (the loop filters eat the long tail).
+- Maximum delay is 262100 samples (5.46 s at 48 kHz, 2.73 s at 96 kHz);
+  longer subdivisions clamp.
 - No bias/hiss modelling, no pitch tracking, no limiter, no dry path.

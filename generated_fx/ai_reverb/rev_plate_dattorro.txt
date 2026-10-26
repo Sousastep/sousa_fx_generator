@@ -1,11 +1,12 @@
 // ============================================================================
-// rev_plate_dattorro.txt   (revision 2: audit fixes applied)
+// rev_plate_dattorro.txt   (revision 3: full Dattorro tank and output taps)
 // A Dattorro plate: dense bright metal with a slow wobble.
 // From: Fernando A. Beltrán, José R. Beltrán, Nicolas Holzem & Adrian Gogu,
 //       "Matlab Implementation of Reverberation Algorithms", DAFx-99, §3 and
 //       Table 1 — the Dattorro (JAES 1997) network: predelay -> bandwidth
-//       lowpass -> four input allpasses -> two cross-coupled tank lines with
-//       decay diffusion allpasses, damping and four output taps.
+//       lowpass -> four input allpasses -> two cross-coupled tank halves, each
+//       modulated allpass -> delay -> damping -> decay -> allpass -> delay ->
+//       decay, read by the seven output taps per side of Table 1.
 // 100% wet. No dry path, no limiter, no metering.
 // Inlets:
 //   in1 / in2: stereo audio
@@ -14,7 +15,18 @@
 // Outlets:
 //   out1 / out2: stereo plate, wet only
 //
-// Changes vs revision 1:
+// Changes in revision 3:
+//   - the tank is Dattorro's full half: the 1800 / 2656 stages are allpasses
+//     (decay diffusion 2 = 0.5) followed by the 3720 / 3163 delays, and decay
+//     diffusion 1 is -0.70 as in the paper; the decay gain is applied twice
+//     per half. Revision 2 used 1800 / 2656 as plain delays and had no
+//     3720 / 3163 lines.
+//   - output is the seven taps per side of DAFx-99 Table 1 (taken inside the
+//     delay lines and allpasses). The four end-of-line taps of revision 2
+//     left a ~12 dB energy hole at ~130 ms followed by a second swell.
+//   - wobble modulates the decay diffusion 1 allpasses (as in the paper)
+//
+// Changes in revision 2:
 //   - decay_s is now a true RT60: the decay gain is solved from the whole
 //     half-loop (both tank delays of both halves, both decay allpasses, and
 //     the one-sample cross-feedback). Range is now 0.8..20 s, default 5.0 s,
@@ -29,12 +41,12 @@
 //   - t1/t2 share one write index; buffers sized for sample rates to ~218 kHz
 // ============================================================================
 
-@param({ min: 0, max: 200 }) predelay_ms = 20;      // predelay
-@param({ min: 0.8, max: 20 }) decay_s = 5.0;        // decay (RT60)
-@param({ min: 500, max: 16000 }) damp_hz = 6000;    // damping
+@param({ min: 0, max: 200, exponent: 2 }) predelay_ms = 20;      // predelay
+@param({ min: 0.8, max: 20, exponent: 2 }) decay_s = 5.0;        // decay (RT60)
+@param({ min: 500, max: 16000, exponent: 2 }) damp_hz = 6000;    // damping
 @param({ min: 0, max: 1 }) diffuse = 0.65;          // diffusion
 @param({ min: 0, max: 3 }) wobble_ms = 0.8;         // wobble depth
-@param({ min: 0.05, max: 2 }) wobble_hz = 0.35;     // wobble rate
+@param({ min: 0.05, max: 2, exponent: 2 }) wobble_hz = 0.35;     // wobble rate
 @param({ min: 0, max: 1 }) width = 1.0;             // width
 @param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
 
@@ -52,16 +64,19 @@
 @state inAp = new FixedSampleArray(8, 4096);
 @state iaIdx: Int = 0;
 
-// Two decay-diffusion allpasses per tank half: row 0=L1, 1=L2, 2=R1, 3=R2
-@state tankAp = new FixedSampleArray(4, 8192);
+// Decay diffusion 1 (modulated) allpass per tank half: row 0 = L (672), 1 = R (908)
+@state tankAp = new FixedSampleArray(2, 8192);
 @state taIdx: Int = 0;
 
-// Tank delay lines: 4453 / 1800 samples (left), 4217 / 2656 (right) @ 29.76 kHz
-// 32768 samples holds the longest line (4453) up to ~218 kHz.
+// Tank, per half at 29.76 kHz: delay t1 (4453 L / 4217 R), decay diffusion 2
+// allpass whose internal line is t2 (1800 L / 2656 R), delay t3 (3720 L /
+// 3163 R). 32768 samples holds the longest (4453) up to ~218 kHz.
 @state t1L = new FixedSampleArray(32768);
 @state t1R = new FixedSampleArray(32768);
 @state t2L = new FixedSampleArray(32768);
 @state t2R = new FixedSampleArray(32768);
+@state t3L = new FixedSampleArray(32768);
+@state t3R = new FixedSampleArray(32768);
 @state tIdx: Int = 0;
 
 @state dmpL = 0.0;
@@ -83,7 +98,8 @@
 // denormals during long silences
 @state dn = 1e-18;
 
-// One Schroeder allpass stage on a tank row (fractional, for the wobble)
+// Decay diffusion 1: Schroeder allpass on a tank row (fractional, for the
+// wobble) with Dattorro's coefficient -0.70
 function tankStep(row: Int, xin: number, len: number): number {
 	let rp = taIdx - len;
 	while (rp < 0.0) { rp += 8192.0; }
@@ -93,9 +109,9 @@ function tankStep(row: Int, xin: number, len: number): number {
 		tankAp[row][i0 & 8191],
 		tankAp[row][(i0 + 1) & 8191],
 		tankAp[row][(i0 + 2) & 8191]);
-	let v = xin + 0.5 * xd;
+	let v = xin - 0.7 * xd;
 	tankAp[row][taIdx] = v;
-	return xd - 0.5 * v;
+	return xd + 0.7 * v;
 }
 
 // One input diffusion allpass stage (integer length, no interpolation)
@@ -123,6 +139,8 @@ let t1LenL: Int = floor(clamp(4453.0 * srScale, 16.0, 32700.0) + 0.5);
 let t1LenR: Int = floor(clamp(4217.0 * srScale, 16.0, 32700.0) + 0.5);
 let t2LenL: Int = floor(clamp(1800.0 * srScale, 16.0, 32700.0) + 0.5);
 let t2LenR: Int = floor(clamp(2656.0 * srScale, 16.0, 32700.0) + 0.5);
+let t3LenL: Int = floor(clamp(3720.0 * srScale, 16.0, 32700.0) + 0.5);
+let t3LenR: Int = floor(clamp(3163.0 * srScale, 16.0, 32700.0) + 0.5);
 
 let baseA = clamp(672.0 * srScale, 8.0, 7900.0);
 let baseB = clamp(908.0 * srScale, 8.0, 7900.0);
@@ -133,12 +151,13 @@ let preTarget = clamp(mstosamps(clamp(predelay_ms, 0.0, 200.0)), 2.0, 65000.0);
 
 let gTarget = 0.40 + 0.35 * clamp(diffuse, 0.0, 1.0);
 
-// Decay: the gain is applied once per tank half. One half pass is
-// allpass1 + delay1 + delay2 + allpass2 + 1 sample of cross-feedback; the
-// left and right halves differ in length, so use the average of the two.
-let halfSamps = 0.5 * (t1LenL + t2LenL + t1LenR + t2LenR) + baseA + baseB + 1.0;
+// Decay: the gain is applied twice per tank half (after the damping and at
+// the end), so each application is the square root of the half-pass gain.
+// One half pass is allpass1 + delay1 + allpass2 + delay3 + 1 sample of
+// cross-feedback; the halves differ in length, so use the average of the two.
+let halfSamps = 0.5 * (t1LenL + t2LenL + t3LenL + t1LenR + t2LenR + t3LenR) + baseA + baseB + 1.0;
 let halfSec = halfSamps / sr;
-let tgtDecay = clamp(exp(0.0 - 6.907755 * halfSec / clamp(decay_s, 0.8, 20.0)), 0.0, 0.92);
+let tgtDecay = clamp(exp(0.0 - 3.4538776 * halfSec / clamp(decay_s, 0.8, 20.0)), 0.0, 0.97);
 
 let dampF = clamp(damp_hz, 200.0, sr * 0.45);
 let tgtDampC = 1.0 - exp(0.0 - 2.0 * pi * dampF / sr);
@@ -213,15 +232,13 @@ diffR = inputStep(7, diffR, l3);
 iaIdx = (iaIdx + 1) & 4095;
 
 // --- Wobble: right half runs a quarter cycle behind the left ---------------
+// Modulates the decay diffusion 1 allpasses (672 left, 908 right)
 wobPh = wrap(wobPh + clamp(wobble_hz, 0.01, 5.0) / sr, 0.0, 1.0);
 let wobL = sin(2.0 * pi * wobPh) * smWob;
 let wobR = sin(2.0 * pi * (wobPh + 0.25)) * smWob;
 
-// Left half: 672 then 908. Right half: 908 then 672 (own allpass order).
 let apL1 = clamp(baseA + wobL, 8.0, 8000.0);
-let apL2 = clamp(baseB - wobL, 8.0, 8000.0);
 let apR1 = clamp(baseB + wobR, 8.0, 8000.0);
-let apR2 = clamp(baseA - wobR, 8.0, 8000.0);
 
 // --- Left tank half -------------------------------------------------------
 let aL = diffL + xfbL;
@@ -231,34 +248,76 @@ t1L[tIdx] = yA_L;
 let dL = t1L[(tIdx - t1LenL) & 32767];
 dmpL = dmpL + smDampC * (dL - dmpL);
 
-t2L[tIdx] = dmpL * smDecay;
-let eL = t2L[(tIdx - t2LenL) & 32767];
-let yB_L = tankStep(1, eL, apL2);
+// decay diffusion 2: allpass (0.5) whose internal line is t2L
+let zL = t2L[(tIdx - t2LenL) & 32767];
+let vL = dmpL * smDecay + 0.5 * zL;
+t2L[tIdx] = vL;
+let yB_L = zL - 0.5 * vL;
+
+t3L[tIdx] = yB_L;
+let fL = t3L[(tIdx - t3LenL) & 32767];
 
 // --- Right tank half ------------------------------------------------------
 let aR = diffR + xfbR;
-let yA_R = tankStep(2, aR, apR1);
+let yA_R = tankStep(1, aR, apR1);
 
 t1R[tIdx] = yA_R;
 let dR = t1R[(tIdx - t1LenR) & 32767];
 dmpR = dmpR + smDampC * (dR - dmpR);
 
-t2R[tIdx] = dmpR * smDecay;
-let eR = t2R[(tIdx - t2LenR) & 32767];
-let yB_R = tankStep(3, eR, apR2);
+let zR = t2R[(tIdx - t2LenR) & 32767];
+let vR = dmpR * smDecay + 0.5 * zR;
+t2R[tIdx] = vR;
+let yB_R = zR - 0.5 * vR;
+
+t3R[tIdx] = yB_R;
+let fR = t3R[(tIdx - t3LenR) & 32767];
+
+// --- Output taps: DAFx-99 Table 1 (Dattorro), positions scaled to the rate -
+// Read before the index advances, so a tap of k is the value written k
+// samples ago (t1 / t3: the delay input, t2: the allpass's internal node)
+let k266: Int = floor(266.0 * srScale + 0.5);
+let k2974: Int = floor(2974.0 * srScale + 0.5);
+let k1913: Int = floor(1913.0 * srScale + 0.5);
+let k1996: Int = floor(1996.0 * srScale + 0.5);
+let k1990: Int = floor(1990.0 * srScale + 0.5);
+let k187: Int = floor(187.0 * srScale + 0.5);
+let k1066: Int = floor(1066.0 * srScale + 0.5);
+let k353: Int = floor(353.0 * srScale + 0.5);
+let k3627: Int = floor(3627.0 * srScale + 0.5);
+let k1228: Int = floor(1228.0 * srScale + 0.5);
+let k2673: Int = floor(2673.0 * srScale + 0.5);
+let k2111: Int = floor(2111.0 * srScale + 0.5);
+let k335: Int = floor(335.0 * srScale + 0.5);
+let k121: Int = floor(121.0 * srScale + 0.5);
+
+let rawL = t1R[(tIdx - k266) & 32767]
+	+ t1R[(tIdx - k2974) & 32767]
+	- t2R[(tIdx - k1913) & 32767]
+	+ t3R[(tIdx - k1996) & 32767]
+	- t1L[(tIdx - k1990) & 32767]
+	- t2L[(tIdx - k187) & 32767]
+	- t3L[(tIdx - k1066) & 32767];
+let rawR = t1L[(tIdx - k353) & 32767]
+	+ t1L[(tIdx - k3627) & 32767]
+	- t2L[(tIdx - k1228) & 32767]
+	+ t3L[(tIdx - k2673) & 32767]
+	- t1R[(tIdx - k2111) & 32767]
+	- t2R[(tIdx - k335) & 32767]
+	- t3R[(tIdx - k121) & 32767];
 
 tIdx = (tIdx + 1) & 32767;
 taIdx = (taIdx + 1) & 8191;
 
-// Cross-coupling: each half drives the other on the next sample
-xfbL = yB_R;
-xfbR = yB_L;
+// Cross-coupling: each half's end (after its second decay) drives the other
+// on the next sample
+xfbL = fR * smDecay;
+xfbR = fL * smDecay;
 
-// --- Output taps (DAFx-99 Table 1, reduced to four alternating taps) ------
-let rawL = 0.50 * dL + 0.45 * eR + 0.30 * yA_L - 0.25 * yB_R;
-let rawR = 0.50 * dR + 0.45 * eL + 0.30 * yA_R - 0.25 * yB_L;
-
-let norm = 0.85 * sqrt(maximum(1.0 - smDecay * smDecay, 0.0001));
+// Level: energy normalisation against the half-pass gain (decay squared);
+// 0.28 is the measured trim (default sits ~4 dB under the dry tuba)
+let gHalf = smDecay * smDecay;
+let norm = 0.28 * sqrt(maximum(1.0 - gHalf * gHalf, 0.0001));
 let wetL = rawL * norm;
 let wetR = rawR * norm;
 

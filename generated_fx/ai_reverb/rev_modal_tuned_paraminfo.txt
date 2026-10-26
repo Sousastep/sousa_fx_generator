@@ -3,18 +3,29 @@ rev_modal_tuned — Parameter Information
 ================================================================================
 
 WHAT IT IS
-A modal reverb: eight parallel two-pole resonators standing in for eight room
-modes, with the mode frequencies tuned to 5-limit ratios of the tuba's own f0
-instead of to a fixed room. Play a note and the "room" rings in tune with it;
-change note and the modes follow.
+A modal reverb: eight parallel modes, each ringing at a 5-limit ratio of the
+tuba's own f0 instead of at a fixed room frequency. Play a note and the "room"
+rings a just-intonation chord built on it; change note and the modes glide to
+follow.
+
+How a mode works (the paper's heterodyne → smooth → modulate form): it
+listens to the tuba harmonic nearest its ratio (f0, 2·f0 or 3·f0), tracks
+that harmonic's level with the mode's decay, and sings it back at ratio·f0.
+That is what lets 6/5, 3/2 or the sub octave sound on a steady note — a
+plain resonator tuned to 1.2·f0 gets no energy from a harmonic tone (in the
+first version six of the eight modes were 27–119 dB down for that reason).
 
 Source: Abel & Werner, "Distortion and Pitch Processing Using a Modal
-Reverberator Architecture", DAFx-15 Paper 72 §2 (parallel resonant filters,
-per-mode decay h_m(t) = e^{(jω_m−α_m)t}) and §3.3 (mode-frequency scaling for
-pitch). The paper's 2^{σ/12} semitone ratio is replaced by 5-limit ratios.
+Reverberator Architecture", DAFx-15 Paper 72 §2 Fig. 2 (mode = heterodyne,
+smooth with an exponential, modulate) and §3.3 Fig. 8 (modulating at a
+different frequency than the heterodyne shifts the pitch). The paper's
+2^{σ/12} semitone ratio is replaced by 5-limit ratios, and the decay smoothing
+runs on the harmonic's magnitude, so a long decay is not cancelled by a
+fraction of a Hz of tracker error.
 
 The mode set is 1/2, 1/1, 6/5, 5/4, 3/2, 5/3, 2/1, 5/2 — a just-intonation
-overtone chord, no equal-tempered interval anywhere.
+chord (both thirds, the fifth, the sixth), no equal-tempered interval
+anywhere. Modes 1/2 … 5/4 listen to f0, 3/2 … 2/1 to 2·f0, 5/2 to 3·f0.
 
 100% wet, no dry/wet.
 
@@ -22,25 +33,31 @@ PARAMETERS (7 + output gain)
 
 1. predelay_ms — 0…100 ms, default 15 ms
    Gap before the mode bank. 0–15 ms makes the ring feel like part of the
-   instrument; 40–100 ms puts it behind the note.
+   instrument; 40–100 ms puts it behind the note. Slider tapered (exponent 2).
 
 2. decay_s — 0.5…20 s, default 5 s
    RT60 of the lowest mode; each higher mode decays up to ~1.5x faster through
-   the mode index. This is the "how long the room sings" control.
+   the mode index. This is the "how long the room sings" control. It is also
+   the swell time: a mode builds up at the same rate it dies away, so long
+   decays bloom slowly behind the note. Steady-note level stays within ~2 dB
+   from 0.5 to 20 s. Slider tapered (exponent 2).
 
 3. tilt — 0…1, default 0.45
-   Gain tilt across the modes: 0 = only the low modes speak (dark, subby),
-   1 = upper modes as loud as the fundamental (bright, metallic).
+   Gain tilt across the modes above the root: each one is (0.45 + 0.55·tilt)
+   times the one below. 0 = only the low modes speak (dark, subby), 1 = every
+   mode as loud as the root (bright, full chord). The bank is power-
+   normalised, so tilt changes the colour, not the level (±0.5 dB).
 
 4. detune_cents — 0…25 cents, default 8 cents
    The left channel's modes sit this far flat, the right channel this far sharp.
-   At 0 both channels are identical and the ring is static; 8–15 cents gives
-   slow beating and a wide image.
+   At 0 both channels are identical (mono) and the ring is static; 8–15 cents
+   gives slow beating and a wide image. In a mono sum the detuned pair beats.
 
 5. sub_weight — 0…1, default 0.35
-   Level of the extra 1/2 mode (an octave below f0). This is the deep-dubstep
+   Level of the extra 1/2 mode (an octave below f0, synthesised from the
+   fundamental — the tuba itself has nothing there). This is the deep-dubstep
    end: at 0 the tail is root-and-up, at 1 the sub octave is as loud as the
-   root.
+   root. Power-normalised with the rest, so it changes balance, not level.
 
 6. width — 0…1, default 0.8
    Mid/side spread of the two detuned banks. 0 = mono.
@@ -53,14 +70,20 @@ INLETS / OUTLETS
 - in1 / in2: stereo audio, summed to excite the mode bank.
 - in3: f0 in Hz. Values of 20…1200 Hz are taken; 0 (or anything outside) means
   "unknown" and the last value is held. If in3 is never valid the bank runs at
-  a fixed 55 Hz. There is no zero-crossing fallback and 0 is never read as 1 Hz.
+  a fixed 55 Hz (then only notes near 55 Hz and its harmonics excite it).
+  There is no zero-crossing fallback and 0 is never read as 1 Hz.
 - in4: one-bar phasor, connected but unused — the modes follow f0, not the bar.
 - out1 / out2: stereo wet only.
 
 NOTES
-- Resonator coefficients are recomputed every 32 samples, so an f0 jump is
-  heard as a fast glide rather than a per-sample click. A tracker octave error
-  will still move the whole mode set by that octave.
-- Each mode is gain-normalised to unity at its own resonance, then scaled; the
-  bank cannot self-oscillate (r < 1 always).
+- f0 glides over ~15 ms (log domain) and every oscillator phase is an
+  integrated ramp, so a note change bends the ringing chord to the new root
+  with no click and no level jump. A tracker octave error will still move the
+  whole mode set by that octave.
+- The harmonic analysis lowpass is 10% of f0 (2…15 Hz, 12 dB/oct): it
+  rejects the neighbouring harmonics by ≥ 37 dB and tolerates a few Hz of
+  tracker error.
+- There is no feedback anywhere: a mode's level can never exceed the level of
+  the harmonic it listens to, so the bank cannot self-oscillate.
+- Output: the default sits ~4.5 dB under the dry tuba.
 - No limiter, no dry path, no internal pitch detector.

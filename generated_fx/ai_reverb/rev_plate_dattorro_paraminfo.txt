@@ -1,17 +1,23 @@
 ================================================================================
-rev_plate_dattorro — Parameter Information   (revision 2)
+rev_plate_dattorro — Parameter Information   (revision 3)
 ================================================================================
 
 WHAT IT IS
 A plate reverb built on the Dattorro (JAES 1997) topology as implemented in
 Beltrán et al., "Matlab Implementation of Reverberation Algorithms", DAFx-99 §3
 and Table 1: predelay → bandwidth lowpass → four input allpasses → two
-cross-coupled delay lines of 4453/1800 and 4217/2656 samples (at 29.76 kHz,
-scaled to your sample rate), each with a decay-diffusion allpass, a damping
-lowpass, a decay gain and four alternating output taps.
+cross-coupled tank halves. Each half (sample counts at 29.76 kHz, scaled to
+your sample rate) is a modulated decay-diffusion allpass (672 / 908, −0.70) →
+delay (4453 / 4217) → damping lowpass → decay gain → decay-diffusion allpass
+(1800 / 2656, 0.5) → delay (3720 / 3163) → decay gain, then on into the other
+half. The stereo output is the seven taps per side of Table 1, read from
+inside those delays and allpasses.
 
 Dense, bright and fast to build up — the classic plate for snare and vocal
-throws. 100% wet, no dry/wet: put it on an aux send or replace the dry outside.
+throws. The tail is at full density within ~20 ms and decays smoothly (the
+revision 2 tank, with four end-of-line taps, had a ~12 dB hole at ~130 ms and
+a second swell after it). 100% wet, no dry/wet: put it on an aux send or
+replace the dry outside.
 
 PARAMETERS (7 + output gain)
 
@@ -19,36 +25,41 @@ PARAMETERS (7 + output gain)
    Gap before the plate. 0–15 ms welds the plate to the transient; 40–200 ms
    pushes it behind the note for a bigger perceived room. Changes glide rather
    than jump, so moving it live is click-free (it takes a moment to arrive, and
-   large moves give a brief pitch glide on the input).
+   large moves give a brief pitch glide on the input). Slider tapered
+   (exponent 2).
 
 2. decay_s — 0.8…20 s, default 5.0 s
-   RT60 of the tank. The decay gain is solved from the full half-loop length
-   (both tank delays of both halves, both decay allpasses and the cross-feedback
-   sample), so the dialled time is roughly true at any sample rate. Damping
-   makes the highs die sooner than the dialled figure. The old 0.3…12 s range
-   was calibrated against a loop that was too short; 5.0 s here sounds like the
-   old 2.0 s default.
+   RT60 of the tank. The decay gain (applied twice per half, as in the paper)
+   is solved from the full half-loop length (both allpasses, both delays and
+   the cross-feedback sample, averaged over the two halves), so the dialled
+   time is true at any sample rate (measured 1.0 / 2.0 / 5.0 / 19.2 s for
+   0.8 / 2 / 5 / 20 s with damping open). Damping makes the highs die sooner
+   than the dialled figure. Level rises ~4 dB from 0.8 to 20 s on the tuba.
+   Slider tapered (exponent 2).
 
 3. damp_hz — 500…16000 Hz, default 6000 Hz
    One-pole lowpass in each tank half. 2–4 kHz makes a dark, old plate;
-   10 kHz+ keeps the metal bright.
+   10 kHz+ keeps the metal bright. Slider tapered (exponent 2).
 
 4. diffuse — 0…1, default 0.65
    Gain of the four input allpasses (0.40…0.75). Low = discrete early echoes
    before the tail; high = the tail starts immediately with no flutter.
 
 5. wobble_ms — 0…3 ms, default 0.8 ms
-   Depth of the slow modulation on the tank's decay-diffusion allpasses.
-   This is what stops a plate from ringing metallically on sustained notes.
-   The right half is modulated a quarter cycle behind the left.
+   Depth of the slow modulation on the tank's first (−0.70) decay-diffusion
+   allpasses, as in the paper. This is what stops a plate from ringing
+   metallically on sustained notes. The right half is modulated a quarter
+   cycle behind the left. (Dattorro's own excursion is ~0.5 ms; 3 ms is a
+   deliberate chorus.)
 
 6. wobble_hz — 0.05…2 Hz, default 0.35 Hz
    Rate of that modulation. Below 0.2 Hz it reads as drift, above 1 Hz as a
-   subtle chorus on the tail.
+   subtle chorus on the tail. Slider tapered (exponent 2).
 
 7. width — 0…1, default 1.0
-   Mid/side spread of the two tank halves. 0 collapses to mono, 1 is the full
-   cross-coupled stereo image.
+   Mid/side spread of the two output tap sets. 0 collapses to mono, 1 is the
+   full image: on an impulse the two sides are uncorrelated (r ≈ 0.00), on a
+   mono tuba r ≈ 0.14, balanced within ~1 dB.
 
 8. out_gain_db — -24…+12 dB, default 0 dB
    Final output trim, after everything. Does not count toward the 8-param limit.
@@ -63,20 +74,22 @@ INLETS / OUTLETS
 - out1 / out2: stereo wet only.
 
 NOTES
-- Decay diffusion allpass gains are fixed at 0.5, as in Dattorro's tank.
-- Level is normalised against the decay gain, so long tails do not get louder.
+- Decay diffusion allpass gains are fixed at −0.70 (modulated) and 0.5, as in
+  Dattorro's tank. Every element of the tank has gain ≤ 1 and the decay gain
+  is capped at 0.97 (reached only past 20 s), so it cannot run away — a 90 s
+  tail at the extremes ends below −280 dB.
+- Level is normalised against the half-pass gain; the default sits ~4 dB
+  under the dry tuba.
 - The bandwidth lowpass uses Dattorro's fixed coefficient of 0.9995, which is
   effectively transparent; it is there for fidelity to the paper, not as a tone
   control.
-- All delay lengths are rounded to whole samples after scaling from the paper's
-  29.76 kHz table. Only the tank decay-diffusion allpasses are fractional (for
-  the wobble).
+- All delay lengths and output tap positions are rounded to whole samples
+  after scaling from the paper's 29.76 kHz table. Only the modulated
+  decay-diffusion allpasses are fractional (for the wobble).
 - Buffers are sized so the plate keeps its full length up to about 218 kHz; the
   200 ms predelay range holds at any rate up to about 327 kHz.
-- Left and right tank halves use the two decay-diffusion allpass lengths in
-  opposite order (672→908 left, 908→672 right) for a wider, smoother image.
 - A sub-audible alternating offset (about -360 dB) on the input keeps long
   silent tails from running into denormal numbers.
-- The tank lines use DAFx-99's 1800/2656 as plain delays. Dattorro's original
-  diagram uses those as allpasses, followed by two further delays; this
-  implementation has not been changed to match that.
+- The input stays stereo: the left input feeds the left half and the right
+  input the right half (Dattorro sums to mono first); on a mono tuba that is
+  the same thing.

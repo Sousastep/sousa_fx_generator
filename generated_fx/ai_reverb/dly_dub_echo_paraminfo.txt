@@ -18,22 +18,26 @@ where it is.
 
 PARAMETERS (6 + output gain)
 
-1. echo_div — 1/16, 1/8T, 1/8, 1/4, 1/2, 1 bar; default 1/4
-   Repeat time as a subdivision of the bar coming in on in4. 1/4 is the beat
-   (dotted-feel dub), 1/8T is the triplet push, 1/2 and 1 bar are slow
-   sound-on-sound spaces.
+1. echo_div — 1/16, 1/8T, 1/8, 1/8D, 1/4, 1/2, 1 bar; default 1/4
+   Repeat time as a subdivision of the bar coming in on in4. 1/4 is the beat,
+   1/8D (dotted eighth, 3/16 bar) is the classic dub skank delay, 1/8T is the
+   triplet push, 1/2 and 1 bar are slow sound-on-sound spaces.
 
 2. feedback — 0…0.95, default 0.6
    Number of repeats. 0.3–0.5 is a few echoes, 0.7+ is a self-feeding dub
-   throw; the loop filters keep even 0.95 from running away.
+   throw. The loop gain is capped at 0.95 and the loop filters only remove
+   level, so even 0.95 dies away (measured: an impulse falls ~60 dB in 10 s at
+   1/16 with the filters wide open).
 
 3. tone_hz — 300…12000 Hz, default 2200 Hz
    Lowpass in the loop. This is the "each repeat is darker" control; 800 Hz
-   gives the classic muffled dub trail.
+   gives the classic muffled dub trail. It already shapes the first repeat.
+   Slider is tapered (exponent 3), so the middle of its travel is ~1.8 kHz.
 
 4. lowcut_hz — 20…400 Hz, default 120 Hz
-   DC blocker in the loop. Raise it to 200–300 Hz so the echo never carries sub
-   — important on a rig where the sub is already working hard.
+   One-pole highpass in the loop. Raise it to 200–300 Hz so the echo never
+   carries sub (it applies from the first repeat on) — important on a rig
+   where the sub is already working hard. Slider tapered (exponent 2).
 
 5. smear — 0…1, default 0.25
    Allpass diffusion (11.3 / 13.1 ms per channel) before the signal re-enters
@@ -41,9 +45,10 @@ PARAMETERS (6 + output gain)
 
 6. pingpong — 0…1, default 0.5
    Cross-feed between the two lines. 0 = repeats stay in their own channel,
-   0.5 = equal cross-feed, 1 = full ping-pong. At 1 the right line takes no
-   direct input, so a mono source alternates sides once feedback is up — at 0
-   feedback a single repeat lands on the left only.
+   0.5 = equal cross-feed (a mono tuba echoes dead centre), 1 = full
+   ping-pong. From 0.5 to 1 the input also folds to mono into the left line
+   and the right line's direct feed fades out, so at 1 a mono source bounces
+   L, R, L, R … — at 0 feedback a single repeat lands on the left only.
 
 7. out_gain_db — -24…+12 dB, default 0 dB
    Final output trim. Does not count toward the 8-param limit.
@@ -51,15 +56,21 @@ PARAMETERS (6 + output gain)
 INLETS / OUTLETS
 - in1 / in2: stereo audio.
 - in3: connected but unused (batch inlet layout).
-- in4: one-bar phasor. The bar period is measured wrap-to-wrap and held; with
-  in4 static the echo keeps the last measured time, or 2.000 s (120 BPM) if in4
-  was never seen. Never silent, never a click.
+- in4: one-bar phasor. The bar period is measured from how fast in4 moves
+  (re-estimated every quarter bar, so it locks within a quarter bar from any
+  start phase) and held; with in4 static the echo keeps the last measured
+  time, or 2.000 s (120 BPM) if in4 was never seen. Backward jumps and large
+  forward steps (transport relocate) are ignored. Never silent, never a click.
 - out1 / out2: stereo repeats only.
 
 NOTES
-- Delay time is slewed (~40 ms), so changing the subdivision glides like tape
-  instead of clicking, and a briefly missing phasor cannot jump the delay.
-- Maximum delay is one bar at 60 BPM (4 s at 48 kHz); slower bars clamp.
-- Loop gain is capped at 0.95 and the time constant of the filters is inside
-  the loop, so it cannot self-oscillate.
+- Delay time is slewed (~50 ms time constant, and the tape head never runs
+  backwards or faster than double speed), so changing the subdivision glides
+  like tape — up to an octave of pitch bend — instead of clicking, and a
+  briefly missing phasor cannot jump the delay. A big jump (1/16 → 1 bar)
+  takes a couple of seconds to arrive.
+- Maximum delay is 262100 samples (5.46 s at 48 kHz, 2.73 s at 96 kHz);
+  longer subdivisions clamp.
+- Loop gain is capped at 0.95 and every filter in the loop has gain ≤ 1 where
+  it matters, so it cannot self-oscillate.
 - No pitch shifting, no internal tempo detector, no limiter, no dry path.

@@ -14,10 +14,10 @@
 //   out1 / out2: stereo echoes, wet only
 // ============================================================================
 
-@param({ enum: ["1/16", "1/8T", "1/8", "1/4", "1/2", "1 bar"] }) echo_div = 3; // repeat time
+@param({ enum: ["1/16", "1/8T", "1/8", "1/8D", "1/4", "1/2", "1 bar"] }) echo_div = 4; // repeat time
 @param({ min: 0, max: 0.95 }) feedback = 0.6;       // feedback
-@param({ min: 300, max: 12000 }) tone_hz = 2200;    // damping
-@param({ min: 20, max: 400 }) lowcut_hz = 120;      // low cut
+@param({ min: 300, max: 12000, exponent: 3 }) tone_hz = 2200;    // damping
+@param({ min: 20, max: 400, exponent: 2 }) lowcut_hz = 120;      // low cut
 @param({ min: 0, max: 1 }) smear = 0.25;            // smear
 @param({ min: 0, max: 1 }) pingpong = 0.5;          // ping-pong
 @param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
@@ -39,24 +39,34 @@
 @state hyR = 0.0;
 
 @state barSec = 2.0;      // held bar period; 2 s = 120 BPM until in4 is seen
-@state barCnt = 0.0;
+@state barCnt = 0.0;      // moving samples since the last estimate
+@state barPhAcc = 0.0;    // phasor travel since the last estimate
 @state prevBarIn = 0.0;
 @state dSlew = 96000.0;   // current delay in samples, slewed toward the target
+@state started = 0;       // dSlew starts on its target instead of gliding in
 
 let sr = maximum(samplerate(), 1.0);
 let xL = in1;
 let xR = in2;
 let unused_in3 = in3; // keeps the in3 port present
 
-// --- Bar clock: follow in4, otherwise free-run at the last measured bar ----
+// --- Bar clock: measure in4's speed, hold the last bar when it stops ------
+// Period = moving samples / phasor travel, re-estimated every quarter bar, so
+// it locks within a quarter bar from any start phase; a held in4 or a
+// transport jump (backward, or a forward step too large for a bar) is ignored
 let barIn = clamp(in4, 0.0, 1.0);
-let barMoved = (abs(barIn - prevBarIn) > 0.0000005) ? 1.0 : 0.0;
+let dPh = barIn - prevBarIn;
+if (dPh < -0.5) { dPh += 1.0; }
 
-if (barIn < prevBarIn - 0.5) {
-	if (barCnt > sr * 0.25 && barCnt < sr * 12.0) { barSec = barCnt / sr; }
-	barCnt = 0.0;
-} else if (barMoved > 0.5) {
+if (dPh > 0.0000005 && dPh < 0.001) {
+	barPhAcc += dPh;
 	barCnt += 1.0;
+	if (barPhAcc >= 0.25) {
+		let barEst = barCnt / (barPhAcc * sr);
+		if (barEst > 0.25 && barEst < 12.0) { barSec = barEst; }
+		barPhAcc = 0.0;
+		barCnt = 0.0;
+	}
 }
 prevBarIn = barIn;
 
@@ -64,15 +74,22 @@ prevBarIn = barIn;
 let divFrac = 0.0625;
 if (echo_div == 1) { divFrac = 0.0833333; }
 else if (echo_div == 2) { divFrac = 0.125; }
-else if (echo_div == 3) { divFrac = 0.25; }
-else if (echo_div == 4) { divFrac = 0.5; }
-else if (echo_div == 5) { divFrac = 1.0; }
+else if (echo_div == 3) { divFrac = 0.1875; }
+else if (echo_div == 4) { divFrac = 0.25; }
+else if (echo_div == 5) { divFrac = 0.5; }
+else if (echo_div == 6) { divFrac = 1.0; }
 
 let dTarget = clamp(divFrac * barSec * sr, 4.0, 262100.0);
 
 // Slew the read point: changing the subdivision glides like tape instead of
-// clicking, and the phasor briefly dropping out never jumps the delay
-dSlew = dSlew + 0.0004 * (dTarget - dSlew);
+// clicking, and the phasor briefly dropping out never jumps the delay. The step
+// is capped at 1 sample/sample, so the head runs between stopped and double
+// speed (at most an octave up) and never backwards
+if (started == 0) {
+	dSlew = dTarget;
+	started = 1;
+}
+dSlew = dSlew + clamp(0.0004 * (dTarget - dSlew), -1.0, 1.0);
 let dSamps = clamp(dSlew, 4.0, 262100.0);
 
 // --- Read the line --------------------------------------------------------
@@ -94,7 +111,8 @@ let tapR = cubicinterp(rdR - iR,
 	dlyR[(iR + 1) & 262143],
 	dlyR[(iR + 2) & 262143]);
 
-// --- Feedback filters: darkening lowpass + sub-removing DC blocker --------
+// --- Loop filters: darkening lowpass + sub-removing DC blocker -----------
+// They sit on the tap, so every repeat (the first one included) is filtered
 let toneF = clamp(tone_hz, 100.0, sr * 0.45);
 let toneC = 1.0 - exp(0.0 - 2.0 * pi * toneF / sr);
 let cutF = clamp(lowcut_hz, 10.0, sr * 0.45);
@@ -136,16 +154,18 @@ let ping = clamp(pingpong, 0.0, 1.0);
 let backL = linearinterp(ping, sL, sR) * fb;
 let backR = linearinterp(ping, sR, sL) * fb;
 
-// At full ping-pong the right line takes no direct input, so a mono source
-// alternates sides instead of echoing identically in both
-dlyL[wIdx] = xL + backL;
-dlyR[wIdx] = xR * (1.0 - ping) + backR;
+// Above 0.5 the input folds to mono into the left line and the right line's
+// direct feed fades out, so at 1 a mono source alternates sides; up to 0.5
+// both lines take their full input (a mono source stays centred)
+let pingIn = clamp(2.0 * ping - 1.0, 0.0, 1.0);
+dlyL[wIdx] = linearinterp(pingIn, xL, 0.5 * (xL + xR)) + backL;
+dlyR[wIdx] = xR * (1.0 - pingIn) + backR;
 wIdx = (wIdx + 1) & 262143;
 
 // --- Output: the repeats only -------------------------------------------
 let norm = 0.72 * sqrt(maximum(1.0 - fb * fb, 0.0025));
-let wetL = tapL * norm;
-let wetR = tapR * norm;
+let wetL = fL * norm;
+let wetR = fR * norm;
 
 let g = dbtoa(clamp(out_gain_db, -24.0, 12.0));
 out1 = wetL * g;
