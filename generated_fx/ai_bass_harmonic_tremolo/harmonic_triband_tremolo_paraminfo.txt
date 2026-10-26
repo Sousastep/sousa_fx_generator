@@ -4,7 +4,7 @@ harmonic_triband_tremolo — Parameter Information   (rev 2)
 
 WHAT IT IS
 A three-band harmonic tremolo that rotates. The note is split into low, mid and
-high bands at two 5-limit multiples of the tracked pitch, and each band's gain
+high bands at two multiples of the tracked pitch, and each band's gain
 is breathed at its own LFO phase. At rotation 0 all three bands pump together
 (an ordinary tremolo); as rotation approaches 1 the three LFOs sit a third of a
 cycle apart, their gains sum to a constant, and the whole-signal level stops
@@ -12,9 +12,9 @@ pumping while the colour of the note travels up and down the harmonic series.
 That is the spectral-timbre half of what the DAFx-06 effect taxonomy calls
 "tremolo" (loudness / rhythm / spectral timbre).
 
-Defaults are set for tuba and other low brass: slow rotation, the fundamental
-mostly held, the 2nd-3rd partials ("body") and the 4th-and-up partials ("bite")
-trading places.
+Defaults are set for tuba and other low brass: slow rotation, the lowest
+partials mostly held, partials 4-8 ("body") and the 8th-and-up partials
+("bite") trading places.
 
 WHAT CHANGED FROM REV 1
 - Bands are now in phase. The old split (differences of cascaded one-poles)
@@ -30,7 +30,11 @@ WHAT CHANGED FROM REV 1
   flat-magnitude allpass (phase-shifted only). This is inaudible on its own,
   but do not mix the effect with a parallel dry copy: the phase shift would
   comb around the crossover points. Use depth to go dry.
-- Tuba-oriented defaults (below). Cold-start split is 3/2 of 55 Hz.
+- Tuba-oriented defaults (below).
+- Rev 2b: the split_ratio menu (first edge 1/1...4/1 x f0, second edge an
+  octave above) is replaced by two continuous crossover controls,
+  low_split_xf0 (3-6 x f0) and high_split_xf0 (7-12 x f0). Cold-start edges
+  are 4 x and 8 x 55 Hz (220 / 440 Hz).
 
 Source: Disch & Zölzer, DAFx-99 §2 Eqs. 1-2 (AM law) and §5 (three 120°-spaced
 modulators with constant sum); Verfaille/Guastavino/Traube, DAFx-06 paper 107
@@ -39,7 +43,7 @@ modulators with constant sum); Verfaille/Guastavino/Traube, DAFx-06 paper 107
 1976 (LR4 crossover); Zavalishin, "The Art of VA Filter Design" (TPT
 state-variable filter used to build the crossovers).
 
-PARAMETERS (6 + output gain)
+PARAMETERS (7 + output gain)
 
 1. rate_hz — 0.05…12 Hz, default 1.0 Hz
    Rotation speed. 0.2-1 Hz reads as a drifting filter, and is the sweet spot
@@ -62,38 +66,49 @@ PARAMETERS (6 + output gain)
    In between, the leftover level pumping scales with (1 - rotation). The
    default leaves a faint breath of level motion so the effect stays alive.
 
-4. split_ratio — 1/1, 3/2, 2/1, 5/2, 3/1, 4/1; default 3/2
-   First band edge as a 5-limit multiple of f0; the second edge is one octave
-   above it. Because the slopes are 24 dB/oct, where the partials land is
-   predictable. Share of each partial (amplitude) in the low / mid / high band:
+4. low_split_xf0 — 3…6 x f0, default 4
+   Centre of the first crossover (low / mid), as a multiple of the tracked
+   pitch. Continuous, so non-integer settings put the edge between partials.
+   Partials well below it sit in the low band; the partial AT it is shared
+   50/50 between low and upper.
 
-     split   partial 1       partial 2       partial 3       partial 4
-     1/1     .50/.47/.03     .06/.47/.47     .01/.16/.82     0/.06/.94
-     3/2     .84/.16/0       .24/.63/.12     .06/.47/.47     .02/.24/.74
-     2/1     .94/.06/0       .50/.47/.03     .17/.63/.20     .06/.47/.47
-     3/1     .99/.01/0       .84/.16/0       .50/.47/.03     .24/.63/.12
-     4/1     1.0/0/0         .94/.06/0       .76/.23/0       .50/.47/.03
+5. high_split_xf0 — 7…12 x f0, default 8
+   Centre of the second crossover (mid / high), as a multiple of the tracked
+   pitch. The two ranges never overlap, so the mid band is always at least
+   7/6 wide (6 -> 7, about a minor third) and up to two octaves (3 -> 12).
 
-   3/2 (default) puts the fundamental in the low band, partials 2-3 in the mid
-   band and partial 4 upward in the high band. 1/1 splits the fundamental
-   itself across the low and mid bands. 4/1 leaves nearly the whole note in the
-   low band and tremolos only the top.
+   Because the slopes are 24 dB/oct (each band is |LR4|: low = 1/(1+r^4) with
+   r = partial/edge), where the partials land is predictable. Share of each
+   partial (amplitude) in the low / mid / high band:
 
-5. sub_hold — 0…1, default 0.7
+     edges   p1          p2          p3          p4          p6          p8          p12
+     3 / 7   .99/.01/0   .84/.16/0   .50/.48/.02 .24/.69/.07 .06/.61/.33 .02/.36/.62 0/.10/.89
+     4 / 8   1.0/0/0     .94/.06/0   .76/.24/0   .50/.47/.03 .16/.63/.20 .06/.47/.47 .01/.16/.82
+     5 / 10  1.0/0/0     .98/.02/0   .89/.11/0   .71/.28/.01 .33/.60/.08 .13/.62/.25 .03/.32/.65
+     6 / 12  1.0/0/0     .99/.01/0   .94/.06/0   .84/.16/0   .50/.47/.03 .24/.63/.13 .06/.47/.47
+
+   4 / 8 (default) keeps partials 1-3 in the low band, centres the mid band on
+   partials 4-8, splits partial 8 evenly with the high band and sends
+   partial 10 upward mostly to the high band. Lower settings
+   pull the 3rd and 4th partials into the rotation; 6 / 12 leaves nearly the
+   lowest five partials in the low band and tremolos only the upper harmonics.
+   Both edges glide (30 ms) when the knobs or the note change.
+
+6. sub_hold — 0…1, default 0.7
    How much the lowest band is exempt from modulation. At 1 the low band never
    moves and only the two upper bands rock against each other (a clean
    antiphase pair at rotation 1), which keeps the bass note solid. At 0 all
    three bands rotate equally. At rotation 1 the total gain stays constant for
    every sub_hold value; the upper bands compensate for the held low band.
 
-6. bar_sync — 0…1, default 0.7
+7. bar_sync — 0…1, default 0.7
    How far the rotation is organised by the bar phasor. At 0 the LFO runs at
    rate_hz. Turning it up pulls the rate to the nearest whole number of cycles
    per bar and locks the phase to the downbeat; the settle is a 200 ms glide in
    frequency, never a jump in gain. At 1 the rotation repeats identically every
    bar, and the rate knob picks the multiple.
 
-7. out_gain_db — -24…+12 dB, default 0 dB
+8. out_gain_db — -24…+12 dB, default 0 dB
    Final trim, the last thing in the chain. Does not count toward the
    8-parameter limit.
 

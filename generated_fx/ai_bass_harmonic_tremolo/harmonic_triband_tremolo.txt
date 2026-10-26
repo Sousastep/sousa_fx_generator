@@ -1,6 +1,6 @@
 // ============================================================================
 // harmonic_triband_tremolo.txt   (rev 2: Linkwitz-Riley bands, tuba defaults)
-// Rotating harmonic tremolo: the input is split into three bands at 5-limit
+// Rotating harmonic tremolo: the input is split into three bands at two
 // multiples of the tracked note, and each band's gain is breathed at its own
 // LFO phase, so the tremolo travels up the harmonic series instead of pumping
 // the whole note. With the phases a third of a cycle apart the three gains sum
@@ -49,7 +49,8 @@
 @param({ min: 0.05, max: 12.0 }) rate_hz = 1.0;        // rotation rate
 @param({ min: 0.0, max: 1.0 }) depth = 0.75;           // modulation depth
 @param({ min: 0.0, max: 1.0 }) rotation = 0.85;        // phase spread per band
-@param({ enum: ["1/1", "3/2", "2/1", "5/2", "3/1", "4/1"] }) split_ratio = 1; // first split = f0 x
+@param({ min: 3.0, max: 6.0 }) low_split_xf0 = 4.0;    // first crossover = f0 x
+@param({ min: 7.0, max: 12.0 }) high_split_xf0 = 8.0;  // second crossover = f0 x
 @param({ min: 0.0, max: 1.0 }) sub_hold = 0.7;         // low band modulation
 @param({ min: 0.0, max: 1.0 }) bar_sync = 0.7;         // downbeat pull
 @param({ min: -24.0, max: 12.0 }) out_gain_db = 0.0;   // output gain
@@ -75,7 +76,8 @@
 
 @state f0Last = 55.0;
 @state f0Sm = 55.0;
-@state spSm = 82.5;
+@state spSm = 220.0;
+@state spHiSm = 440.0;
 
 @state lfoPh = 0.0;
 @state prevBar = 0.0;
@@ -99,19 +101,17 @@ let f0Slew = 1.0 - exp(0.0 - 1.0 / (0.02 * sr));
 f0Sm = f0Sm + (f0Last - f0Sm) * f0Slew;
 let f0 = clamp(f0Sm, 20.0, 1200.0);
 
-// --- first split as a 5-limit multiple, second split one octave above -----
-let mult = 1.5;
-if (split_ratio == 0) { mult = 1.0; }
-else if (split_ratio == 2) { mult = 2.0; }
-else if (split_ratio == 3) { mult = 2.5; }
-else if (split_ratio == 4) { mult = 3.0; }
-else if (split_ratio == 5) { mult = 4.0; }
+// --- crossovers as multiples of f0 (the ranges do not overlap) ------------
+let multLo = clamp(low_split_xf0, 3.0, 6.0);
+let multHi = clamp(high_split_xf0, 7.0, 12.0);
 
-let spTarget = clamp(f0 * mult, 25.0, sr * 0.2);
+let spTarget = clamp(f0 * multLo, 25.0, sr * 0.2);
+let spHiTarget = clamp(f0 * multHi, 25.0, sr * 0.45);
 let spSlew = 1.0 - exp(0.0 - 1.0 / (0.03 * sr));
 spSm = spSm + (spTarget - spSm) * spSlew;
+spHiSm = spHiSm + (spHiTarget - spHiSm) * spSlew;
 let fLo = clamp(spSm, 25.0, sr * 0.2);
-let fHi = clamp(spSm * 2.0, 25.0, sr * 0.45);
+let fHi = clamp(maximum(spHiSm, fLo * 1.05), 25.0, sr * 0.45);
 
 // --- SVF coefficients, shared by both channels -----------------------------
 let gLoTan = sin(pi * fLo / sr) / cos(pi * fLo / sr);
