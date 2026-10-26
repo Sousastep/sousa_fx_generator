@@ -1,0 +1,47 @@
+================================================================================
+lp_nonlinear_biquad — Parameter Information
+================================================================================
+
+WHAT IT IS
+A resonant 2-pole lowpass that is a plain digital biquad (transposed direct
+form II) with a saturator on each of its two state registers. Loud signals
+push the poles inward, so the resonance squashes itself: a smooth growl
+(tanh), a buzzy edge (hard clip) or a metallic ring (wavefolder). Stable at
+every setting.
+
+Source: Chowdhury, DAFx-20 paper 3 §2.2 (slope <= 1 nonlinearities), §3
+(nonlinear biquad, Eq. 13–14, Fig. 5), §3.1–3.2 (stability, pole
+movement), §5.1 (resonant lowpass example).
+
+PARAMETERS (4)
+
+1. shape — 0…2, default 0
+   Saturator on the registers: 0 = tanh (soft), 1 = hard clip, 2 = sine
+   wavefolder. Values in between crossfade.
+
+2. drive_db — 0…24 dB, default 6 dB
+   Level into the registers. More drive = more of the self-compressing,
+   distorted character; the output is trimmed by half the drive in dB.
+
+3. freq_offset_st — -36…+36 semitones, default 0
+   Transposes the cutoff that arrives on in3.
+
+4. width — 0…100 %, default 50 %
+   Adds a side signal from a copy of the filter tuned up to +1 octave (at
+   100 %). L+R is exactly the plain filter, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: cutoff in Hz. Values <= 1 Hz are ignored (last value held, 600 Hz at
+  start).
+- in4: resonance 0…1 = Q 0.5…20 (log taper). 0 or unpatched = a gentle,
+  unresonant lowpass.
+
+NOTES
+- Gain staging: the registers saturate near full scale, which caps the
+  resonant peak, so no resonance makeup is applied. Measured with the test
+  tuba at -18 dBFS RMS, resonance 0 to 1 changes the level by up to 5 dB
+  (6 dB with hard clip and a cutoff around 150 Hz).
+- Not clean even at drive 0: the registers already saturate on hot input.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

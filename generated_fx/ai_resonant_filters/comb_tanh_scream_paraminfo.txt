@@ -1,0 +1,48 @@
+================================================================================
+comb_tanh_scream — Parameter Information
+================================================================================
+
+WHAT IT IS
+A feedback comb with a tanh saturator inside the loop. At moderate
+resonance it rings like a comb that gets grittier the longer it rings. Past
+~0.93 the loop gain goes above 1 and it self-oscillates: a screaming,
+pitched drone locked to in3. The saturator keeps that drone bounded.
+
+Source: Chowdhury, DAFx-20 paper 3 §2.2 and §4 (saturating nonlinearity in
+the feedback path keeps a recursive filter bounded); Norilo, DAFx-14 §3
+(combs with nonlinear feedback as modulation-delay effects).
+
+PARAMETERS (4)
+
+1. polarity — -1…+1, default +1
+   +1 = positive feedback, peaks at f, 2f, 3f… (bright, buzzy).
+   -1 = negative feedback over half the period, peaks at f, 3f, 5f… (hollow,
+   square-ish, same pitch). Toward 0 the feedback (and the resonance) fades.
+
+2. drive_db — 0…24 dB, default 12 dB
+   Saturation inside the loop. More drive = the ring distorts sooner and
+   the self-oscillation is quieter and grittier. At 0 dB the scream is
+   loudest and cleanest.
+
+3. freq_offset_st — -36…+36 semitones, default 0
+   Transposes the comb pitch that arrives on in3.
+
+4. width — 0…100 %, default 50 %
+   Adds a side signal from a second comb tuned up to +1 octave (at 100 %).
+   L+R is exactly the plain comb, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: comb pitch in Hz (sr/9990…sr/8). Values <= 1 Hz are ignored (last
+  value held, 600 Hz at start).
+- in4: resonance 0…1 = loop gain 0…1.08 (self-oscillates above ~0.93). It
+  keeps droning after the tuba stops until in4 comes down.
+
+NOTES
+- Gain staging: the tanh caps the feedback, so the makeup is gentler than
+  a plain comb's: (1 - cm)^0.3 (1 + cm)^0.25 with cm = min(|loop gain|,
+  0.95). With the test tuba, resonance 0 to 1 stays between about +7 dB
+  (drive 0, comb on the tuba's pitch, mono) and -9 dB.
+- A fixed 6 kHz lowpass in the loop takes the fizz off the scream.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

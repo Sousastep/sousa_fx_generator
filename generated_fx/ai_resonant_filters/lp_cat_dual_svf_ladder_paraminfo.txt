@@ -1,0 +1,47 @@
+================================================================================
+lp_cat_dual_svf_ladder — Parameter Information
+================================================================================
+
+WHAT IT IS
+Octave CAT style 24 dB/oct lowpass: two 2-pole state-variable sections in
+series inside one feedback loop, instead of the Moog's four 1-pole stages.
+Rounder and vocal at low damping, closer to a Moog at high damping. The loop
+input is saturated, so self-oscillation stays bounded.
+
+Source: Werner & McClellan, DAFx-20 paper 70 §2–3.1 (Eq. 2–10, "~CAT" with
+equal section damping); McClellan, DAFx-26 paper 28 (stability of the
+trapezoidal SVF and ladder under modulation).
+
+PARAMETERS (4)
+
+1. damping — 0.2…1.2, default 0.7
+   Damping r of each SVF section. 1.064 is the original CAT; lower values
+   make each section peaky, so the filter gets a vowel-like hump even with
+   no resonance.
+
+2. drive_db — 0…24 dB, default 6 dB
+   Saturation at the loop input. Small-signal gain stays at unity; more
+   drive = grittier resonance and a quieter self-oscillation.
+
+3. freq_offset_st — -36…+36 semitones, default 0
+   Transposes the cutoff that arrives on in3.
+
+4. width — 0…100 %, default 50 %
+   Adds a side signal from a copy of the filter tuned up to +1 octave (at
+   100 %). L hears the brighter copy, R its mirror image; L+R is exactly the
+   plain filter, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: cutoff in Hz. Values <= 1 Hz are ignored (last value held, 600 Hz at
+  start).
+- in4: resonance 0…1 (1 = edge of self-oscillation). 0 or unpatched = no
+  resonance, still a 24 dB lowpass.
+
+NOTES
+- Gain staging: feedback cuts the passband by up to 15 dB; half of that is
+  made up (sqrt(1 + 4 r^2 k)), and half the extra section peak is removed
+  when damping < 0.707, so turning resonance up thins the sound instead of
+  making it louder.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

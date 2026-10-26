@@ -1,0 +1,110 @@
+// ============================================================================
+// yoi_peaking_formants.txt — formant EQ: three resonant peaking bells boost
+//                            F1, F2, F3 of the vowel path U -> O -> I on top
+//                            of the full signal, so the tuba keeps its body
+//                            while it says "yoi"
+//
+// From: J. Liski, V. Välimäki, "The Quest for the Best Graphic Equalizer",
+//       DAFx-17 paper 94 §2 (second-order peaking / bell filter: boost g at
+//       the centre frequency, unity far from it, bandwidth set by Q);
+//       C. Traube, N. D'Alessandro, DAFx-05 P_104 §1.5 (vowels in the
+//       (F1, F2) plane, Fig. 8 / Fig. 11).
+//
+// Signal (per channel):
+//   v      = clamp(log2(f_in3 / 200) / 4, 0, 1)    200 Hz U, 800 O, 3200 I
+//   F1..3  = log-interpolated  U (300, 870, 2240) -> O (570, 840, 2410)
+//                              -> I (270, 2290, 3010) Hz, x formant shift
+//   y      = PK(F3, B) PK(F2, B) PK(F1, B) x       RBJ peaking biquads
+//   B      = in4 * max_boost_db,  Q = 1 + 7 * in4 (1 .. 8)
+//   out    = y * dbtoa(-0.2 * B)                   (takes back a fifth of
+//                                                   the boost: the bells
+//                                                   mostly miss the tuba's
+//                                                   strong low harmonics)
+//   in4 = 0 is a flat, dry passthrough.
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: vowel position as a frequency in Hz (held when <= 1 Hz; 800 Hz = O
+//        at start)
+//   in4: resonance 0..1 (formant boost and sharpness together)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo filter, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Formant boost at in4 = 1 (dB)
+@param({ min: 6, max: 24 }) max_boost_db = 15;
+// Moves all three formants (semitones): - = bigger mouth, + = smaller
+@param({ min: -12, max: 12 }) formant_shift_st = 0;
+// Vowel position offset from in3 (semitones; 24 st = U to O)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): formant-shifted side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// TDF-II registers: slot = channel * 3 + formant (0 L, 1 R, 2 side copy)
+@state z1 = new FixedSampleArray(9);
+@state z2 = new FixedSampleArray(9);
+@state fHold = 800.0;
+@state fSm = 800.0;
+@state resSm = 0.0;
+
+// RBJ peaking biquad on slot idx: centre 2^l2f Hz, gain amp A = 10^(dB/40), Q q
+function peak(idx: Int, x: number, l2f: number, amp: number, q: number, sr: number): number {
+	let w0 = 2.0 * pi * clamp(exp2(l2f), 20.0, sr * 0.45) / sr;
+	let cw = cos(w0);
+	let al = sin(w0) / (2.0 * q);
+	let ia0 = 1.0 / (1.0 + al / amp);
+	let b0 = (1.0 + al * amp) * ia0;
+	let b1 = -2.0 * cw * ia0;
+	let b2 = (1.0 - al * amp) * ia0;
+	let a2 = (1.0 - al / amp) * ia0;
+	let y = b0 * x + z1[idx];
+	z1[idx] = b1 * x - b1 * y + z2[idx];
+	z2[idx] = b2 * x - a2 * y;
+	return y;
+}
+
+// Three bells in series, channel ch (log2 frequencies l1..l3)
+function bells(ch: Int, x: number, l1: number, l2: number, l3: number, amp: number, q: number, sr: number): number {
+	let b: Int = ch * 3;
+	let y = peak(b, x, l1, amp, q, sr);
+	y = peak(b + 1, y, l2, amp, q, sr);
+	return peak(b + 2, y, l3, amp, q, sr);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 vowel position (held), in4 resonance, 5 ms smoothing ------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), 20.0, 20000.0);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+// --- Vowel path U -> O -> I, interpolated in log2(Hz) ------------------------
+let v = clamp(log2(fSm / 200.0) * 0.25, 0.0, 1.0);
+let lo = (v < 0.5) ? 1.0 : 0.0;
+let t = (v < 0.5) ? 2.0 * v : 2.0 * v - 1.0;
+let shift = clamp(formant_shift_st, -12.0, 12.0) / 12.0;
+let l1 = shift + lo * linearinterp(t, 8.2288, 9.1548) + (1.0 - lo) * linearinterp(t, 9.1548, 8.0768);
+let l2 = shift + lo * linearinterp(t, 9.7649, 9.7142) + (1.0 - lo) * linearinterp(t, 9.7142, 11.1611);
+let l3 = shift + lo * linearinterp(t, 11.1293, 11.2348) + (1.0 - lo) * linearinterp(t, 11.2348, 11.5555);
+
+let boostDb = resSm * clamp(max_boost_db, 6.0, 24.0);
+let amp = dbtoa(0.5 * boostDb);
+let q = 1.0 + 7.0 * resSm;
+let makeup = dbtoa(-0.2 * boostDb);
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+
+// --- Filter: L, R, and a side copy on the mono sum shifted up to +1 octave --
+let yL = bells(0, xL, l1, l2, l3, amp, q, sr);
+let yR = bells(1, xR, l1, l2, l3, amp, q, sr);
+let yD = bells(2, 0.5 * (xL + xR), l1 + wd, l2 + wd, l3 + wd, amp, q, sr);
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

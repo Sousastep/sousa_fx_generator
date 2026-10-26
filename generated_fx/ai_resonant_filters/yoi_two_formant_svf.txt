@@ -1,0 +1,114 @@
+// ============================================================================
+// yoi_two_formant_svf.txt — synth-style "yoi": a saturated resonant SVF
+//                           lowpass on F1 in parallel with a saturated SVF
+//                           bandpass on F2, both gliding U -> O -> I as in3
+//                           rises
+//
+// From: D. K. Wise, "The Modified Chamberlin and Zölzer Filter Structures",
+//       DAFx-06 p053 §1.1 Fig. 1 Eq. 1 (Chamberlin structure: two embedded
+//       integrators, f ~ tuning, q ~ 1/Q, simultaneous lowpass and bandpass
+//       outputs), §2 Eq. 3 (stable for 0 < f < 2, 0 < q < (4 - f^2) / 2f);
+//       Y. Han, J. Na, K. Lee, "FutureGrab", NIME-12 §3 (the first two
+//       formants suffice for vowel-like effects);
+//       R. McClellan, "Stability Analysis of Time-Varying Virtual Analog
+//       Filters", DAFx-26 paper 28 §SVF.
+//
+// Signal (per channel, Chamberlin, u = x * drive):
+//   low  += f * band;  high = u - low - q * band
+//   band  = tanh(f * high + band)          (saturated band integrator)
+//   f     = 2 sin(pi F / sr),  q = 1 / Q,  Q = 20^in4 (1 .. 20)
+//   y     = F1gain * low(F1) + band(F2) * q * sqrt(Q)
+//           (the lowpass keeps the tuba's body at unity and its peak is
+//            capped by the saturated band state; the bandpass is unity
+//            peak x sqrt(Q), i.e. constant power)
+//   out   = y * drive^-3/4
+//   F1, F2 log-interpolated U (300, 870) -> O (570, 840) -> I (270, 2290) Hz
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: vowel position as a frequency in Hz (held when <= 1 Hz; 800 Hz = O
+//        at start)
+//   in4: resonance 0..1 (formant sharpness)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo filter, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Drive into the saturated band integrators (dB)
+@param({ min: 0, max: 24 }) drive_db = 6;
+// Level of the F1 lowpass against the F2 bandpass (dB)
+@param({ min: -12, max: 6 }) f1_level_db = 0;
+// Vowel position offset from in3 (semitones; 24 st = U to O)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): formant-shifted side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// Chamberlin states: slot = channel * 2 + formant (0 L, 1 R, 2 side copy)
+@state lowS = new FixedSampleArray(6);
+@state bandS = new FixedSampleArray(6);
+@state fHold = 800.0;
+@state fSm = 800.0;
+@state resSm = 0.0;
+
+// One saturated Chamberlin step on slot idx; updates the states, returns the highpass
+function chamberlin(idx: Int, u: number, f: number, q: number): number {
+	lowS[idx] = lowS[idx] + f * bandS[idx];
+	let high = u - lowS[idx] - q * bandS[idx];
+	bandS[idx] = tanh(f * high + bandS[idx]);
+	return high;
+}
+
+// Two formants for channel ch: F1 lowpass + F2 bandpass
+function twoFormant(ch: Int, u: number, f1: number, f2: number, q: number, lpGain: number, bpGain: number): number {
+	let b: Int = ch * 2;
+	let unusedHigh1 = chamberlin(b, u, f1, q);
+	let unusedHigh2 = chamberlin(b + 1, u, f2, q);
+	return lpGain * lowS[b] + bpGain * bandS[b + 1];
+}
+
+// Chamberlin tuning coefficient for 2^l2f Hz (kept well inside f < 2)
+function chamF(l2f: number, sr: number): number {
+	return 2.0 * sin(pi * clamp(exp2(l2f), 20.0, sr * 0.16) / sr);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 vowel position (held), in4 resonance, 5 ms smoothing ------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), 20.0, 20000.0);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+// --- Vowel path U -> O -> I, interpolated in log2(Hz) ------------------------
+let v = clamp(log2(fSm / 200.0) * 0.25, 0.0, 1.0);
+let lo = (v < 0.5) ? 1.0 : 0.0;
+let t = (v < 0.5) ? 2.0 * v : 2.0 * v - 1.0;
+let l1 = lo * linearinterp(t, 8.2288, 9.1548) + (1.0 - lo) * linearinterp(t, 9.1548, 8.0768);
+let l2 = lo * linearinterp(t, 9.7649, 9.7142) + (1.0 - lo) * linearinterp(t, 9.7142, 11.1611);
+
+let q = 1.0 / pow(20.0, resSm);
+let sq = sqrt(1.0 / q);
+let drv = dbtoa(clamp(drive_db, 0.0, 24.0));
+let lpGain = dbtoa(clamp(f1_level_db, -12.0, 6.0));
+let bpGain = q * sq;
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+
+let f1 = chamF(l1, sr);
+let f2 = chamF(l2, sr);
+let f1D = chamF(l1 + wd, sr);
+let f2D = chamF(l2 + wd, sr);
+
+// --- Filter: L, R, and a side copy on the mono sum shifted up to +1 octave --
+let yL = twoFormant(0, xL * drv, f1, f2, q, lpGain, bpGain);
+let yR = twoFormant(1, xR * drv, f1, f2, q, lpGain, bpGain);
+let yD = twoFormant(2, 0.5 * (xL + xR) * drv, f1D, f2D, q, lpGain, bpGain);
+let side = wd * (yD - 0.5 * (yL + yR));
+
+let outGain = pow(drv, -0.75);
+out1 = (yL + side) * outGain;
+out2 = (yR - side) * outGain;

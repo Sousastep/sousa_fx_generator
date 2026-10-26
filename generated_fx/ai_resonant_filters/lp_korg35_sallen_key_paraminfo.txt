@@ -1,0 +1,43 @@
+================================================================================
+lp_korg35_sallen_key — Parameter Information
+================================================================================
+
+WHAT IT IS
+The Korg MS-20 (rev. 2, Korg35) 12 dB/oct lowpass. Two one-pole stages, with
+the resonance fed back through an amplifier whose diodes clip. At low
+resonance it is a clean 2-pole lowpass; turn the resonance up and the peak
+gets harder and screams, and the diodes keep it from running away.
+
+Source: Danish, Bilbao & Ducceschi, DAFx-21 paper 37 §3.1.1 (Korg35 state
+equations, Eq. 17–20); McClellan, DAFx-26 paper 28 §Sallen-Key (stable
+under modulation); Müller & Hélie, DAFx-19 paper 6 (Sallen-Key op-amp
+model).
+
+PARAMETERS (3)
+
+1. drive_db — 0…24 dB, default 9 dB
+   Level into the filter (and back out again). The diodes sit only in the
+   resonance path, so drive does nothing at resonance 0. With resonance up,
+   more drive = earlier, harder diode clipping on the peak.
+
+2. freq_offset_st — -36…+36 semitones, default 0
+   Transposes the cutoff that arrives on in3.
+
+3. width — 0…100 %, default 50 %
+   Adds a side signal from a copy of the filter tuned up to +1 octave (at
+   100 %). L+R is exactly the plain filter, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: cutoff in Hz. Values <= 1 Hz are ignored (last value held, 600 Hz at
+  start).
+- in4: resonance 0…1. Above ~0.98 it self-oscillates, limited by the
+  diodes. 0 or unpatched = clean 2-pole lowpass.
+
+NOTES
+- Gain staging: the passband stays at unity, and the diodes cap the peak.
+  A quarter-power makeup ((1.5 / (1 + Q))^(1/4), Q capped at 8) keeps the
+  level within about 3.5 dB from resonance 0 to 1 with the test tuba, at
+  every drive setting.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

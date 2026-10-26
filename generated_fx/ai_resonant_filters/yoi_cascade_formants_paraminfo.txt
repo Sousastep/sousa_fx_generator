@@ -1,0 +1,47 @@
+================================================================================
+yoi_cascade_formants — Parameter Information
+================================================================================
+
+WHAT IT IS
+A vowel filter built like a vocal tract: five two-pole formant resonators
+in series (an all-pole cascade), each at unity gain below its formant.
+Unlike the parallel version, the tuba's low end passes untouched and the
+upper formants fall off naturally, so it sounds like the tuba is singing
+through a mouth rather than through three bandpasses. in3 glides the vowel
+U -> O -> I.
+
+Source: Cook, DAFx-98 COO62 (formants as vocal-tract tube modes, all-pole
+formant filtering); Traube & D'Alessandro, DAFx-05 P_104 §1.5 (vowels in
+the (F1, F2) plane).
+
+PARAMETERS (3)
+
+1. formant_shift_st — -12…+12 semitones, default 0
+   Moves all five formants together without changing the vowel: down =
+   bigger, darker mouth; up = smaller, brighter.
+
+2. freq_offset_st — -36…+36 semitones, default 0
+   Offsets the vowel position that arrives on in3. 24 st moves from U to
+   O, 48 st from U to I.
+
+3. width — 0…100 %, default 50 %
+   Adds a side signal from a copy with its formants shifted up to +1 octave
+   (at 100 %). L+R is exactly the plain filter, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: vowel position as a frequency in Hz, log scale: 200 Hz or lower =
+  U, 800 Hz = O, 3200 Hz or higher = I. Values <= 1 Hz are ignored (last
+  value held, 800 Hz = O at start).
+- in4: resonance 0…1 = formant Q 2…30 (log taper).
+
+NOTES
+- Formants (Hz): U 300 / 870 / 2240, O 570 / 840 / 2410, I 270 / 2290 /
+  3010 (log-interpolated), with F4 3300 and F5 3750 fixed. All five shift
+  with formant_shift_st.
+- Gain staging: output × 0.7 × (Q/2)^-0.4. With the test tuba, resonance 0
+  to 1 changes the level by between +1.3 dB (U, mono) and -4 dB.
+- Ringing formants give a high crest factor: expect peaks about 20 dB
+  above the RMS.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

@@ -1,0 +1,116 @@
+// ============================================================================
+// lp_nonlinear_biquad.txt — resonant 2-pole lowpass built as a "nonlinear
+//                           biquad": a transposed direct form II whose two
+//                           state registers pass through saturators
+//
+// From: J. Chowdhury, "Stable Structures for Nonlinear Biquad Filters",
+//       DAFx-20 paper 3: §2.2 Eq. 8-11 (base nonlinearities with slope
+//       <= 1: soft clip, hard clip, wavefolder), §3 Eq. 13-14 and Fig. 5
+//       (nonlinear TDF-II), §3.1 (stable whenever the linear filter is and
+//       f'(x) <= 1), §3.2 Eq. 22-23 (large states pull the poles inward,
+//       so the resonance compresses itself), §5.1 (resonant lowpass, tanh).
+//
+// Signal (per channel):
+//   y   = b0 u + f(s1)
+//   s1  = b1 u - a1 y + f(s2)
+//   s2  = b2 u - a2 y
+//   f   = tanh -> hard clip -> sin fold (shape 0 -> 1 -> 2)
+//   RBJ lowpass coefficients, Q = 0.5 * 40^in4 (0.5 .. 20)
+//   u   = x * drive;  out = y / sqrt(drive)
+//   No resonance makeup: the saturated registers cap the resonant peak
+//   themselves (§3.2), so level stays within ~5 dB from in4 = 0 to 1.
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: cutoff in Hz (held when <= 1 Hz; 600 Hz until the first value)
+//   in4: resonance 0..1 (Q 0.5 .. 20, log)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo filter, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// State saturator: 0 tanh, 1 hard clip, 2 sine wavefolder
+@param({ min: 0, max: 2 }) shape = 0;
+// Drive into the saturators (dB)
+@param({ min: 0, max: 24 }) drive_db = 6;
+// Cutoff offset from in3 (semitones)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): detuned side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// TDF-II registers: slot = channel (0 L, 1 R, 2 side copy)
+@state s1 = new FixedSampleArray(3);
+@state s2 = new FixedSampleArray(3);
+@state fHold = 600.0;
+@state fSm = 600.0;
+@state resSm = 0.0;
+
+// Base nonlinearity (slope <= 1), morphing tanh -> clip -> fold
+function sat(x: number, shp: number): number {
+	let soft = tanh(x);
+	let hard = clamp(x, -1.0, 1.0);
+	let fold = sin(x);
+	let y = 0.0;
+	if (shp < 1.0) {
+		y = soft + (hard - soft) * shp;
+	} else {
+		y = hard + (fold - hard) * (shp - 1.0);
+	}
+	return y;
+}
+
+// One nonlinear-biquad lowpass step, channel ch; coefficients normalised by a0
+function nlBiquad(ch: Int, u: number, b0: number, b1: number, a1: number, a2: number, shp: number): number {
+	let y = b0 * u + sat(s1[ch], shp);
+	s1[ch] = b1 * u - a1 * y + sat(s2[ch], shp);
+	s2[ch] = b0 * u - a2 * y;
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 cutoff (held), in4 resonance, 5 ms smoothing --------------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), 20.0, sr * 0.45);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+let q = 0.5 * pow(40.0, resSm);
+let shp = clamp(shape, 0.0, 2.0);
+let dGain = dbtoa(clamp(drive_db, 0.0, 24.0));
+let drv = dGain;
+let makeup = 1.0 / sqrt(dGain);
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+
+// RBJ lowpass, centre and side copy (up to +1 octave)
+let w0 = 2.0 * pi * fSm / sr;
+let cw = cos(w0);
+let al = sin(w0) / (2.0 * q);
+let ia0 = 1.0 / (1.0 + al);
+let b0 = 0.5 * (1.0 - cw) * ia0;
+let b1 = (1.0 - cw) * ia0;
+let a1 = -2.0 * cw * ia0;
+let a2 = (1.0 - al) * ia0;
+
+let w0D = 2.0 * pi * minimum(fSm * exp2(wd), sr * 0.45) / sr;
+let cwD = cos(w0D);
+let alD = sin(w0D) / (2.0 * q);
+let ia0D = 1.0 / (1.0 + alD);
+let b0D = 0.5 * (1.0 - cwD) * ia0D;
+let b1D = (1.0 - cwD) * ia0D;
+let a1D = -2.0 * cwD * ia0D;
+let a2D = (1.0 - alD) * ia0D;
+
+// --- Filter: L, R, and a side copy on the mono sum ---------------------------
+let yL = nlBiquad(0, xL * drv, b0, b1, a1, a2, shp);
+let yR = nlBiquad(1, xR * drv, b0, b1, a1, a2, shp);
+let yD = nlBiquad(2, 0.5 * (xL + xR) * drv, b0D, b1D, a1D, a2D, shp);
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

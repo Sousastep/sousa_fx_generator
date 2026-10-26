@@ -1,0 +1,116 @@
+// ============================================================================
+// yoi_parallel_formants.txt — three parallel formant bandpasses (F1, F2, F3)
+//                             gliding along the vowel path U -> O -> I as
+//                             in3 rises: the dubstep "yoi"
+//
+// From: C. Traube, N. D'Alessandro, "Vocal Synthesis and Graphical
+//       Representation of the Phonetic Gestures Underlying Guitar Timbre
+//       Description", DAFx-05 P_104 §1.5 (vowels as points in the (F1, F2)
+//       plane, Fig. 8 / Fig. 11; F1 = openness, F2 = acuteness);
+//       Y. Han, J. Na, K. Lee, "FutureGrab: A Wearable Subtractive
+//       Synthesizer Using Hand Gesture", NIME-12 §3 (band-pass formant
+//       filters slid between two vowels by one control);
+//       B. Pritchard, S. Fels, "GRASSP", NIME-06 §4 (parallel formant
+//       resonators after the excitation).
+//
+// Signal (per channel):
+//   v      = clamp(log2(f_in3 / 200) / 4, 0, 1)    200 Hz U, 800 O, 3200 I
+//   F1..3  = log-interpolated  U (300, 870, 2240) -> O (570, 840, 2410)
+//                              -> I (270, 2290, 3010) Hz, x formant shift
+//   y      = BP(F1) + 0.5 BP(F2) + 0.25 BP(F3)     linear unity-peak TPT
+//                                                 bandpasses (example26)
+//   Q      = 2 * 15^in4 (2 .. 30), same for all three
+//   out    = y * 2 * sqrt(Q / 2)                  constant power: a narrower
+//                                                 band passes less energy
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: vowel position as a frequency in Hz (held when <= 1 Hz; 800 Hz = O
+//        at start)
+//   in4: resonance 0..1 (formant sharpness)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo filter, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Moves all three formants (semitones): - = bigger mouth, + = smaller
+@param({ min: -12, max: 12 }) formant_shift_st = 0;
+// Vowel position offset from in3 (semitones; 24 st = U to O)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): formant-shifted side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// bandpass states: slot = channel * 3 + formant (0 L, 1 R, 2 side copy)
+@state ic1 = new FixedSampleArray(9);
+@state ic2 = new FixedSampleArray(9);
+@state fHold = 800.0;
+@state fSm = 800.0;
+@state resSm = 0.0;
+
+// Unity-peak TPT state-variable bandpass on slot idx
+function svfBp(idx: Int, x: number, g: number, kd: number): number {
+	let a1 = 1.0 / (1.0 + g * (g + kd));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - ic2[idx];
+	let v1 = a1 * ic1[idx] + a2 * v3;
+	let v2 = ic2[idx] + a2 * ic1[idx] + a3 * v3;
+	ic1[idx] = 2.0 * v1 - ic1[idx];
+	ic2[idx] = 2.0 * v2 - ic2[idx];
+	return kd * v1;
+}
+
+// Prewarped TPT gain for formant frequency f (Hz)
+function tptG(f: number, sr: number): number {
+	return tan(pi * clamp(f, 20.0, sr * 0.45) / sr);
+}
+
+// Three parallel formants, channel ch
+function formants(ch: Int, x: number, g1: number, g2: number, g3: number, kd: number): number {
+	let b: Int = ch * 3;
+	return svfBp(b, x, g1, kd) + 0.5 * svfBp(b + 1, x, g2, kd) + 0.25 * svfBp(b + 2, x, g3, kd);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 vowel position (held), in4 resonance, 5 ms smoothing ------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), 20.0, 20000.0);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+// --- Vowel path U -> O -> I, interpolated in log2(Hz) ------------------------
+let v = clamp(log2(fSm / 200.0) * 0.25, 0.0, 1.0);
+let lo = (v < 0.5) ? 1.0 : 0.0;
+let t = (v < 0.5) ? 2.0 * v : 2.0 * v - 1.0;
+// log2 of U, O, I formants
+let l1 = lo * linearinterp(t, 8.2288, 9.1548) + (1.0 - lo) * linearinterp(t, 9.1548, 8.0768);
+let l2 = lo * linearinterp(t, 9.7649, 9.7142) + (1.0 - lo) * linearinterp(t, 9.7142, 11.1611);
+let l3 = lo * linearinterp(t, 11.1293, 11.2348) + (1.0 - lo) * linearinterp(t, 11.2348, 11.5555);
+let shift = clamp(formant_shift_st, -12.0, 12.0) / 12.0;
+
+let q = 2.0 * pow(15.0, resSm);
+let kd = 1.0 / q;
+let makeup = 2.0 * sqrt(q * 0.5);
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+
+let g1 = tptG(exp2(l1 + shift), sr);
+let g2 = tptG(exp2(l2 + shift), sr);
+let g3 = tptG(exp2(l3 + shift), sr);
+let g1D = tptG(exp2(l1 + shift + wd), sr);
+let g2D = tptG(exp2(l2 + shift + wd), sr);
+let g3D = tptG(exp2(l3 + shift + wd), sr);
+
+// --- Filter: L, R, and a side copy on the mono sum shifted up to +1 octave --
+let yL = formants(0, xL, g1, g2, g3, kd);
+let yR = formants(1, xR, g1, g2, g3, kd);
+let yD = formants(2, 0.5 * (xL + xR), g1D, g2D, g3D, kd);
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

@@ -1,0 +1,108 @@
+// ============================================================================
+// comb_tanh_scream.txt — feedback comb with a tanh saturator inside the
+//                        loop: below unity loop gain a resonant comb that
+//                        grits up as it rings, above it a bounded,
+//                        screaming self-oscillation locked to in3
+//
+// From: J. Chowdhury, "Stable Structures for Nonlinear Biquad Filters",
+//       DAFx-20 paper 3: §2.2 Eq. 10-11 (saturating base nonlinearity,
+//       slope <= 1), §4 (nonlinear feedback structure: a saturator in the
+//       feedback path keeps the state bounded; large states pull the
+//       effective loop gain down);
+//       V. Norilo, "Exploring the Vectored Time Variant Comb Filter",
+//       DAFx-14 §3 (comb filters with nonlinear feedback as a family of
+//       modulation-delay effects).
+//
+// Signal (per channel):
+//   v   = x + tanh(drive * c * LP(AP(v[n - N]))) / drive
+//   c   = 1.08 * in4 * polarity             (|c| > 1 self-oscillates; the
+//                                            tanh bounds it at 1/drive)
+//   N   = sr / f for polarity >= 0 (peaks f, 2f, 3f ...)
+//         sr / 2f for polarity < 0 (negative feedback: peaks f, 3f, 5f ...)
+//   out = v * (1 - cm)^0.3 * (1 + cm)^0.25, cm = min(|c|, 0.95): half the
+//         plain-comb makeup exponents, since the tanh caps the feedback
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: comb pitch in Hz (held when <= 1 Hz; 600 Hz until the first)
+//   in4: resonance 0..1 (above ~0.93 the loop self-oscillates)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo comb, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Feedback polarity: -1 odd harmonics (hollow), +1 all harmonics
+@param({ min: -1, max: 1 }) polarity = 1;
+// Loop saturation drive (dB): more = grittier ring, quieter scream
+@param({ min: 0, max: 24 }) drive_db = 12;
+// Comb pitch offset from in3 (semitones)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): detuned side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// ring buffers: 3 x 10000 samples (0 L, 1 R, 2 side copy)
+@state buf = new FixedSampleArray(30000);
+@state wpos: Int = 0;
+@state apX1 = new FixedSampleArray(3);
+@state apY1 = new FixedSampleArray(3);
+@state lpS = new FixedSampleArray(3);
+@state fHold = 600.0;
+@state fSm = 600.0;
+@state resSm = 0.0;
+
+// Saturated comb, channel ch: loop delay d samples, loop coefficient c, LP pole p
+function scomb(ch: Int, x: number, d: number, c: number, p: number, drv: number): number {
+	let n: Int = clamp(trunc(d - 0.5), 1, 9990);
+	let fr = clamp(d - n, 0.0, 1.5);
+	let a = (1.0 - fr) / (1.0 + fr);
+	let base: Int = ch * 10000;
+	let tap = buf[base + ((wpos - n + 10000) % 10000)];
+	let ap = a * tap + apX1[ch] - a * apY1[ch];
+	apX1[ch] = tap;
+	apY1[ch] = ap;
+	lpS[ch] = (1.0 - p) * ap + p * lpS[ch];
+	let v = x + tanh(drv * c * lpS[ch]) / drv;
+	buf[base + wpos] = v;
+	return v;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 pitch (held), in4 resonance, 5 ms smoothing ---------------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fMin = sr / 9990.0;
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), fMin, sr * 0.125);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+let pol = clamp(polarity, -1.0, 1.0);
+let c = 1.08 * resSm * pol;
+let cm = minimum(abs(c), 0.95);
+let makeup = pow(1.0 - cm, 0.3) * pow(1.0 + cm, 0.25);
+let drv = dbtoa(clamp(drive_db, 0.0, 24.0));
+// fixed loop lowpass (6 kHz) and its phase delay at the comb pitch
+let p = exp(-2.0 * pi * minimum(6000.0, sr * 0.45) / sr);
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+
+// --- Loop delays: full period (positive) or half period (negative) ----------
+let half = (pol < 0.0) ? 0.5 : 1.0;
+let w = 2.0 * pi * fSm / sr;
+let d = half * sr / fSm - atan2(p * sin(w), 1.0 - p * cos(w)) / w;
+let fD = minimum(fSm * exp2(wd), sr * 0.125);
+let wD = 2.0 * pi * fD / sr;
+let dD = half * sr / fD - atan2(p * sin(wD), 1.0 - p * cos(wD)) / wD;
+
+// --- Comb: L, R, and a side copy on the mono sum tuned up to +1 octave ------
+let yL = scomb(0, xL, d, c, p, drv);
+let yR = scomb(1, xR, d, c, p, drv);
+let yD = scomb(2, 0.5 * (xL + xR), dD, c, p, drv);
+wpos = (wpos + 1) % 10000;
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

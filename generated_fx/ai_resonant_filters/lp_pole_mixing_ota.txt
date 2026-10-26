@@ -1,0 +1,126 @@
+// ============================================================================
+// lp_pole_mixing_ota.txt — 4-stage OTA one-pole cascade with resonance
+//                          feedback; mixing the five stage taps morphs the
+//                          response LP4 -> LP2 -> BP2 -> HP2
+//
+// From: R. Trausmuth, A. Huovilainen, "POWERWAVE - A High Performance Single
+//       Chip Interpolating Wavetable Synthesizer", DAFx-05 P_293 §filter
+//       (mixing the outputs of the individual ladder stages gives the other
+//       responses; only the last tap = the original Moog lowpass);
+//       A. Huovilainen, "Non-Linear Digital Implementation of the Moog
+//       Ladder Filter", DAFx-04 P_061 §3-5 (OTA / transistor stage
+//       saturation at the input differential pair, feedback k up to 4);
+//       R. McClellan, "Stability Analysis of Time-Varying Virtual Analog
+//       Filters", DAFx-26 paper 28 §ladder (stable time-varying k range).
+//
+// Signal (per channel):
+//   y1..y4 = four TPT one-pole lowpasses in series, y0 = stage-1 input
+//   u      = x - k y4_est     (zero-delay solve of the linear loop)
+//   y0     = tanh(drive u) / drive
+//   out    = c0 y0 + c1 y1 + c2 y2 + c3 y3 + c4 y4   (pole mixing)
+//            LP4 (0,0,0,0,1)  LP2 (0,0,1,0,0)  BP2 (0,2,-2,0,0)
+//            HP2 (1,-2,1,0,0), crossfaded by shape
+//   k      = 4 * in4 (self-oscillation at 1)
+//   makeup = (1 + k)^(share / 2), share 1 (LP4) -> 0.5 (LP2) -> 0 (BP2,
+//            HP2): the y2 tap already rings 6 dB more than y4
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: cutoff in Hz (held when <= 1 Hz; 600 Hz until the first value)
+//   in4: resonance 0..1 (1 = edge of self-oscillation)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo filter, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Response: 0 LP4, 0.33 LP2, 0.67 BP2, 1 HP2 (crossfades in between)
+@param({ min: 0, max: 1 }) shape = 0;
+// Input stage saturation drive (dB)
+@param({ min: 0, max: 24 }) drive_db = 3;
+// Cutoff offset from in3 (semitones)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): detuned side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// one-pole states: slot = channel * 4 + stage (0 L, 1 R, 2 side copy)
+@state s = new FixedSampleArray(12);
+@state fHold = 600.0;
+@state fSm = 600.0;
+@state resSm = 0.0;
+
+// TPT one-pole lowpass on slot idx, gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - s[idx]) * gg;
+	let y = v + s[idx];
+	s[idx] = y + v;
+	return y;
+}
+
+// Pole-mixed 4-stage cascade, channel ch
+function poleMix(ch: Int, x: number, gg: number, k: number, drv: number, c0: number, c1: number, c2: number, c4: number): number {
+	let b: Int = ch * 4;
+	let h = 1.0 - gg;
+	// y4 = gg^4 u + sum, from the four states
+	let sum = gg * gg * gg * h * s[b] + gg * gg * h * s[b + 1] + gg * h * s[b + 2] + h * s[b + 3];
+	let g4 = gg * gg * gg * gg;
+	let y4Est = (g4 * x + sum) / (1.0 + k * g4);
+	let y0 = tanh(drv * (x - k * y4Est)) / drv;
+	let y1 = lp1(b, y0, gg);
+	let y2 = lp1(b + 1, y1, gg);
+	let y3 = lp1(b + 2, y2, gg);
+	let y4 = lp1(b + 3, y3, gg);
+	return c0 * y0 + c1 * y1 + c2 * y2 + c4 * y4;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 cutoff (held), in4 resonance, 5 ms smoothing --------------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), 20.0, sr * 0.45);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+let k = 4.0 * resSm;
+let drv = dbtoa(clamp(drive_db, 0.0, 24.0));
+
+// --- Pole-mixing coefficients (the y3 tap is unused by these four modes) ----
+let m = clamp(shape, 0.0, 1.0) * 3.0;
+let c0 = 0.0;
+let c1 = 0.0;
+let c2 = 0.0;
+let c4 = 0.0;
+if (m < 1.0) {
+	c2 = m;
+	c4 = 1.0 - m;
+} else if (m < 2.0) {
+	let t = m - 1.0;
+	c1 = 2.0 * t;
+	c2 = 1.0 - 3.0 * t;
+} else {
+	let t = m - 2.0;
+	c0 = t;
+	c1 = 2.0 - 4.0 * t;
+	c2 = -2.0 + 3.0 * t;
+}
+let lpShare = clamp(1.0 - 0.5 * m, 0.0, 1.0);
+let makeup = pow(1.0 + k, 0.5 * lpShare);
+
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+let g = tan(pi * fSm / sr);
+let gg = g / (1.0 + g);
+let gD = tan(pi * minimum(fSm * exp2(wd), sr * 0.45) / sr);
+let ggD = gD / (1.0 + gD);
+
+// --- Filter: L, R, and a side copy on the mono sum tuned up to +1 octave ----
+let yL = poleMix(0, xL, gg, k, drv, c0, c1, c2, c4);
+let yR = poleMix(1, xR, gg, k, drv, c0, c1, c2, c4);
+let yD = poleMix(2, 0.5 * (xL + xR), ggD, k, drv, c0, c1, c2, c4);
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

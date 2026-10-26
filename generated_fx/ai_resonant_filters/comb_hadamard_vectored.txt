@@ -1,0 +1,129 @@
+// ============================================================================
+// comb_hadamard_vectored.txt — vectored comb: four delay lines tuned from
+//                              the in3 period, cross-coupled through an
+//                              orthogonal Hadamard feedback matrix (a tiny
+//                              pitched FDN): chordal / bell-like resonance
+//
+// From: V. Norilo, "Exploring the Vectored Time Variant Comb Filter",
+//       DAFx-14: §2 Fig. 1 (comb filter -> FDN: delay and feedback
+//       vectored, feedback gain becomes a matrix multiply), §3 (comb-filter
+//       effects as parametrisations of the vectored comb), recursive
+//       Hadamard matrix multiplication;
+//       "Filters, Delays, Modulations and Demodulations: A Tutorial",
+//       DAFx-98 DUT52 §3 (comb with lowpass in the loop).
+//
+// Signal (per channel, i = 0..3):
+//   t_i  = AP_i(line_i[n - N_i])             (Thiran fractional delay)
+//   m    = (H4 / 2) t                        (orthonormal Hadamard)
+//   line_i <- x / 2 + g * LP(m_i)
+//   y    = sum(line_i) / 2                   (y = x when g = 0)
+//   N_i  = (sr / f) * 2^(-spread * log2(ratio_i)), ratio = 1, 5/4, 3/2, 2
+//          (spread 0: four equal lines = comb at f plus the odd harmonics
+//          of f/2 from the matrix's -1 eigenvalues; spread 1: root, third,
+//          fifth and octave lines exchanging energy)
+//   g    = 0.98 * in4;  out = y * (1 - g)^0.6 * (1 + g)^0.5 (the matrix
+//          spreads energy over many modes, so it boosts less than a plain
+//          comb and gets a gentler makeup)
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: root frequency in Hz (held when <= 1 Hz; 600 Hz until the first)
+//   in4: resonance 0..1 (loop gain; 0 = dry signal straight through)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo comb, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Line tuning spread: 0 unison, 1 major chord (root, 3rd, 5th, octave)
+@param({ min: 0, max: 1 }) spread = 0.3;
+// Root offset from in3 (semitones)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): detuned side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// 12 ring buffers of 10000 samples: line = channel * 4 + i (0 L, 1 R, 2 side)
+@state buf = new FixedSampleArray(120000);
+@state wpos: Int = 0;
+@state apX1 = new FixedSampleArray(12);
+@state apY1 = new FixedSampleArray(12);
+@state lpS = new FixedSampleArray(12);
+@state fHold = 600.0;
+@state fSm = 600.0;
+@state resSm = 0.0;
+
+// Fractional-delay tap of line ln, delay d samples (integer read + Thiran allpass)
+function tapLine(ln: Int, d: number): number {
+	let n: Int = clamp(trunc(d - 0.5), 1, 9990);
+	let fr = clamp(d - n, 0.0, 1.5);
+	let a = (1.0 - fr) / (1.0 + fr);
+	let tap = buf[ln * 10000 + ((wpos - n + 10000) % 10000)];
+	let ap = a * tap + apX1[ln] - a * apY1[ln];
+	apX1[ln] = tap;
+	apY1[ln] = ap;
+	return ap;
+}
+
+// Write line ln: input share plus damped feedback, returns the written value
+function writeLine(ln: Int, xin: number, fb: number, g: number, p: number): number {
+	lpS[ln] = (1.0 - p) * fb + p * lpS[ln];
+	let v = xin + g * lpS[ln];
+	buf[ln * 10000 + wpos] = v;
+	return v;
+}
+
+// Vectored comb, channel ch; d0..d3 line delays in samples
+function vcomb(ch: Int, x: number, d0: number, d1: number, d2: number, d3: number, g: number, p: number): number {
+	let b: Int = ch * 4;
+	let t0 = tapLine(b, d0);
+	let t1 = tapLine(b + 1, d1);
+	let t2 = tapLine(b + 2, d2);
+	let t3 = tapLine(b + 3, d3);
+	let m0 = 0.5 * (t0 + t1 + t2 + t3);
+	let m1 = 0.5 * (t0 - t1 + t2 - t3);
+	let m2 = 0.5 * (t0 + t1 - t2 - t3);
+	let m3 = 0.5 * (t0 - t1 - t2 + t3);
+	let xin = 0.5 * x;
+	let v0 = writeLine(b, xin, m0, g, p);
+	let v1 = writeLine(b + 1, xin, m1, g, p);
+	let v2 = writeLine(b + 2, xin, m2, g, p);
+	let v3 = writeLine(b + 3, xin, m3, g, p);
+	return 0.5 * (v0 + v1 + v2 + v3);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 root (held), in4 resonance, 5 ms smoothing ----------------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fMin = sr / 9990.0;
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), fMin, sr * 0.125);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+let g = 0.98 * resSm;
+let makeup = pow(1.0 - g, 0.6) * sqrt(1.0 + g);
+// fixed gentle loop damping (8 kHz)
+let p = exp(-2.0 * pi * minimum(8000.0, sr * 0.45) / sr);
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+
+// --- Line delays: period scaled by 2^(-spread * log2 ratio) ------------------
+let sp = clamp(spread, 0.0, 1.0);
+let r1 = exp2(-0.3219280949 * sp);
+let r2 = exp2(-0.5849625007 * sp);
+let r3 = exp2(0.0 - sp);
+let per = sr / fSm;
+let perD = sr / minimum(fSm * exp2(wd), sr * 0.125);
+
+// --- Comb: L, R, and a side copy on the mono sum tuned up to +1 octave ------
+let yL = vcomb(0, xL, per, per * r1, per * r2, per * r3, g, p);
+let yR = vcomb(1, xR, per, per * r1, per * r2, per * r3, g, p);
+let yD = vcomb(2, 0.5 * (xL + xR), perD, perD * r1, perD * r2, perD * r3, g, p);
+wpos = (wpos + 1) % 10000;
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

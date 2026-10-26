@@ -1,0 +1,98 @@
+// ============================================================================
+// comb_allpass_cascade.txt — first-order allpass chain inside a feedback
+//                            loop (a phaser driven into resonance): an
+//                            inharmonic comb of peaks bunched around the
+//                            in3 break frequency, metallic and vocal
+//
+// From: A. Huovilainen, "Enhanced Digital Models for Analog Modulation
+//       Effects", DAFx-05 P_155 §2 (analog phaser = cascade of first-order
+//       allpass stages, feedback from the last stage), §3 (OTA allpass
+//       stage difference equation);
+//       J. Pekonen, V. Välimäki, J. S. Abel, J. O. Smith, "Spectral Delay
+//       Filters with Feedback and Time-Varying Coefficients", DAFx-09
+//       paper 36 §2 (cascaded first-order allpass group delay), §3 (feedback
+//       around the chain gives resonances where the loop phase is 2 pi k);
+//       J. Kleimola, "Dispersion Modulation using Allpass Filters",
+//       DAFx-08 paper 36 §2.3 (first-order allpass dispersion).
+//
+// Signal (per channel):
+//   v   = x + g * y[n - 1]
+//   y   = AP_1(AP_2( ... AP_N(v)))           AP = (c + z^-1) / (1 + c z^-1),
+//                                            c = (t - 1)/(t + 1),
+//                                            t = tan(pi fb / sr): each stage
+//                                            -90 deg at fb
+//   out = v * (1 - g)^0.6 * (1 + g)^0.5      (g = 0.97 * in4)
+//   With N stages the loop phase runs 0 .. -(N+1) pi, so about N/2 peaks,
+//   densest near fb.
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: allpass break frequency in Hz (held when <= 1 Hz; 600 Hz at start)
+//   in4: resonance 0..1 (loop gain; 0 = dry signal straight through)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo filter, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Number of allpass stages (2..16; more = more, denser peaks)
+@param({ min: 2, max: 16 }) stages = 8;
+// Break frequency offset from in3 (semitones)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): detuned side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// allpass states: slot = channel * 16 + stage (0 L, 1 R, 2 side copy)
+@state apX1 = new FixedSampleArray(48);
+@state apY1 = new FixedSampleArray(48);
+@state yPrev = new FixedSampleArray(3);
+@state fHold = 600.0;
+@state fSm = 600.0;
+@state resSm = 0.0;
+
+// Resonant allpass chain, channel ch: ns stages with coefficient c, loop gain g
+function apLoop(ch: Int, x: number, ns: Int, c: number, g: number): number {
+	let v = x + g * yPrev[ch];
+	let z = v;
+	let b: Int = ch * 16;
+	for (let i: Int = 0; i < ns; i++) {
+		let k: Int = b + i;
+		let ap = c * z + apX1[k] - c * apY1[k];
+		apX1[k] = z;
+		apY1[k] = ap;
+		z = ap;
+	}
+	yPrev[ch] = z;
+	return v;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 break frequency (held), in4 resonance, 5 ms smoothing -----
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), 20.0, sr * 0.45);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+let ns: Int = clamp(trunc(stages + 0.5), 2, 16);
+let g = 0.97 * resSm;
+let makeup = pow(1.0 - g, 0.6) * sqrt(1.0 + g);
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+
+let t = tan(pi * fSm / sr);
+let c = (t - 1.0) / (t + 1.0);
+let tD = tan(pi * minimum(fSm * exp2(wd), sr * 0.45) / sr);
+let cD = (tD - 1.0) / (tD + 1.0);
+
+// --- Filter: L, R, and a side copy on the mono sum tuned up to +1 octave ----
+let yL = apLoop(0, xL, ns, c, g);
+let yR = apLoop(1, xR, ns, c, g);
+let yD = apLoop(2, 0.5 * (xL + xR), ns, cD, g);
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

@@ -1,0 +1,108 @@
+// ============================================================================
+// lp_cat_dual_svf_ladder.txt — Octave CAT style 24 dB/oct lowpass: two
+//                              2-pole state-variable sections in cascade
+//                              inside one global (saturated) feedback loop
+//
+// From: K. J. Werner, R. McClellan, "Moog Ladder Filter Generalizations Based
+//       on State Variable Filters", DAFx-20 paper 70: §2 Eq. 2-6 (Moog loop,
+//       passband gain gdc = 1/(1 + 4k)), §3.1 Eq. 9-10 (CAT = two SVF
+//       sections H = wc^2 / (s^2 + 2 r wc s + wc^2) with global feedback,
+//       "~CAT" equal damping r ~ 1.064);
+//       R. McClellan, "Stability Analysis of Time-Varying Virtual Analog
+//       Filters", DAFx-26 paper 28: §SVF and ladder sections (trapezoidal
+//       SVF stays stable under audio-rate cutoff / resonance changes).
+//
+// Signal (per channel):
+//   G, S       = TPT SVF lowpass as y = G x + S (per section, from its state)
+//   K          = 4 r^2 k             (self-oscillation exactly at k = 1)
+//   u          = x - K y_est          (zero-delay solve of the linear loop)
+//   u          = tanh(drive u) / drive
+//   y          = SVF(SVF(u))
+//   out        = y * sqrt(1 + K) * peakComp(r)
+//     sqrt(1 + K): makes up half of the passband loss (in dB) that the
+//     feedback causes, so turning resonance up never gets louder overall;
+//     peakComp undoes half of the section peaks when r < 0.707.
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: cutoff in Hz (held when <= 1 Hz; 600 Hz until the first value)
+//   in4: resonance 0..1 (k; 1 = edge of self-oscillation)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo filter, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Section damping r (low = peaky sections, 1.064 = original CAT)
+@param({ min: 0.2, max: 1.2 }) damping = 0.7;
+// Loop saturation drive (dB)
+@param({ min: 0, max: 24 }) drive_db = 6;
+// Cutoff offset from in3 (semitones)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): detuned side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// SVF integrator states: slot = channel * 2 + section (0 L, 1 R, 2 side copy)
+@state ic1 = new FixedSampleArray(6);
+@state ic2 = new FixedSampleArray(6);
+@state fHold = 600.0;
+@state fSm = 600.0;
+@state resSm = 0.0;
+
+// One TPT SVF lowpass step on state slot idx
+function svfLp(idx: Int, x: number, a1: number, a2: number, a3: number): number {
+	let v3 = x - ic2[idx];
+	let v1 = a1 * ic1[idx] + a2 * v3;
+	let v2 = ic2[idx] + a2 * ic1[idx] + a3 * v3;
+	ic1[idx] = 2.0 * v1 - ic1[idx];
+	ic2[idx] = 2.0 * v2 - ic2[idx];
+	return v2;
+}
+
+// Two SVF sections in a saturated global loop, channel ch
+function catLp(ch: Int, x: number, g: number, kd: number, kfb: number, drv: number): number {
+	let a1 = 1.0 / (1.0 + g * (g + kd));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let i0: Int = ch * 2;
+	let i1: Int = i0 + 1;
+	// each section is y = a3 x + s
+	let s1 = ic2[i0] * (1.0 - a3) + a2 * ic1[i0];
+	let s2 = ic2[i1] * (1.0 - a3) + a2 * ic1[i1];
+	let yEst = (a3 * a3 * x + a3 * s1 + s2) / (1.0 + kfb * a3 * a3);
+	let u = tanh(drv * (x - kfb * yEst)) / drv;
+	let y1 = svfLp(i0, u, a1, a2, a3);
+	return svfLp(i1, y1, a1, a2, a3);
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 cutoff (held), in4 resonance, 5 ms smoothing --------------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), 20.0, sr * 0.45);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+let r = clamp(damping, 0.2, 1.2);
+let kd = 2.0 * r;
+let kfb = 4.0 * r * r * resSm;
+let drv = dbtoa(clamp(drive_db, 0.0, 24.0));
+let peakComp = (r < 0.7071) ? 2.0 * r * sqrt(1.0 - r * r) : 1.0;
+let makeup = sqrt(1.0 + kfb) * peakComp;
+
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+let g = tan(pi * fSm / sr);
+let gD = tan(pi * minimum(fSm * exp2(wd), sr * 0.45) / sr);
+
+// --- Filter: L, R, and a side copy on the mono sum tuned up to +1 octave ----
+let yL = catLp(0, xL, g, kd, kfb, drv);
+let yR = catLp(1, xR, g, kd, kfb, drv);
+let yD = catLp(2, 0.5 * (xL + xR), gD, kd, kfb, drv);
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

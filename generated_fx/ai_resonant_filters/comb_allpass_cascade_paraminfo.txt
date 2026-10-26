@@ -1,0 +1,43 @@
+================================================================================
+comb_allpass_cascade — Parameter Information
+================================================================================
+
+WHAT IT IS
+A phaser driven into resonance: a chain of first-order allpass stages with
+feedback around it. Instead of the evenly spaced peaks of a delay comb, the
+peaks are inharmonic and bunch around the break frequency on in3, giving
+a metallic, vowel-ish, "talking pipe" resonance. Sweeping in3 gives the
+classic phaser swoosh with sharp resonant teeth.
+
+Source: Huovilainen, DAFx-05 P_155 §2–3 (phaser allpass cascade with
+feedback); Pekonen, Välimäki, Abel & Smith, DAFx-09 paper 36 §2–3
+(allpass chains with feedback); Kleimola, DAFx-08 paper 36 §2.3
+(first-order allpass dispersion).
+
+PARAMETERS (3)
+
+1. stages — 2…16, default 8 (rounded to a whole number)
+   Allpass stages in the loop. Each stage adds about half a resonant
+   peak: 2 = one broad formant-like peak, 16 = a dense, metallic cluster.
+
+2. freq_offset_st — -36…+36 semitones, default 0
+   Transposes the break frequency that arrives on in3.
+
+3. width — 0…100 %, default 50 %
+   Adds a side signal from a second chain tuned up to +1 octave (at
+   100 %). L+R is exactly the plain filter, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: allpass break frequency in Hz (each stage is -90° there). Values
+  <= 1 Hz are ignored (last value held, 600 Hz at start).
+- in4: resonance 0…1 = loop gain 0…0.97. 0 or unpatched = the dry signal
+  passes unchanged.
+
+NOTES
+- Gain staging: makeup (1 - g)^0.6 (1 + g)^0.5. With the test tuba,
+  resonance 0 to 1 raises the level by at most ~5 dB (mono) and usually
+  lowers it at full resonance (the inharmonic peaks seldom land on tuba
+  harmonics).
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

@@ -1,0 +1,101 @@
+// ============================================================================
+// lp_korg35_sallen_key.txt — Korg35 (MS-20 rev. 2) 12 dB/oct lowpass: two
+//                            one-pole stages and a diode-limited resonance
+//                            feedback amplifier
+//
+// From: M. Danish, S. Bilbao, M. Ducceschi, "Applications of Port Hamiltonian
+//       Methods to Non-Iterative Stable Simulations of the Korg35 and Moog
+//       4-Pole VCF", DAFx-21 paper 37: §3.1.1 Eq. 17-20 (scaled state
+//       equations x1' = w(-x1 - a x2 + eta(x2) - u),
+//       x2' = w(x1 + (a - 1) x2 - eta(x2)); diode pair clips the gain-4
+//       feedback amplifier, so the feedback slope falls from a to a/4);
+//       R. McClellan, "Stability Analysis of Time-Varying Virtual Analog
+//       Filters", DAFx-26 paper 28: §Sallen-Key (stable under modulation);
+//       R. Müller, T. Hélie, "A minimal passive model of the operational
+//       amplifier: application to Sallen-Key analog filters", DAFx-19 p6.
+//
+// Signal (per channel, scaled volts):
+//   fb(x2)  = a * (0.25 x2 + 0.75 tanh(x2))     (a x2 - eta: diode knee)
+//   x1      = LP(-u - fb(x2))                    (Eq. 19 rewritten as two
+//   x2      = LP(x1 + fb(x2))                     TPT one-poles, zero-delay
+//                                                linear solve for x2)
+//   linear: Q = 1 / (2 - a), unity DC gain; a = 2.05 * in4
+//   out     = -x2 / drive * (1.5 / (1 + min(Q, 8)))^(1/4)  (the diodes
+//             already cap the peak, so only a quarter-power makeup)
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: cutoff in Hz (held when <= 1 Hz; 600 Hz until the first value)
+//   in4: resonance 0..1 (1 = just past self-oscillation, diode-limited)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo filter, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Drive into the filter (dB): how hard the diodes clip the resonance
+@param({ min: 0, max: 24 }) drive_db = 9;
+// Cutoff offset from in3 (semitones)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): detuned side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// one-pole states: slot = channel * 2 + stage (0 L, 1 R, 2 side copy)
+@state s = new FixedSampleArray(6);
+@state fHold = 600.0;
+@state fSm = 600.0;
+@state resSm = 0.0;
+
+// TPT one-pole lowpass on slot idx, gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - s[idx]) * gg;
+	let y = v + s[idx];
+	s[idx] = y + v;
+	return y;
+}
+
+// Korg35 lowpass, channel ch; returns the (re-inverted) output x2
+function korg35(ch: Int, u: number, gg: number, a: number): number {
+	let i0: Int = ch * 2;
+	let i1: Int = i0 + 1;
+	// each stage is y = gg * in + (1 - gg) * s
+	let s1 = (1.0 - gg) * s[i0];
+	let s2 = (1.0 - gg) * s[i1];
+	let x2Est = (s2 + gg * s1 - gg * gg * u) / (1.0 - a * gg * (1.0 - gg));
+	let fbDiode = a * (0.25 * x2Est + 0.75 * tanh(x2Est));
+	let x1 = lp1(i0, 0.0 - u - fbDiode, gg);
+	let x2 = lp1(i1, x1 + fbDiode, gg);
+	return 0.0 - x2;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 cutoff (held), in4 resonance, 5 ms smoothing --------------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), 20.0, sr * 0.45);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+let a = 2.05 * resSm;
+let qLin = 1.0 / maximum(2.0 - a, 0.05);
+let drv = dbtoa(clamp(drive_db, 0.0, 24.0));
+let makeup = sqrt(sqrt(1.5 / (1.0 + minimum(qLin, 8.0)))) / drv;
+
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+let g = tan(pi * fSm / sr);
+let gg = g / (1.0 + g);
+let gD = tan(pi * minimum(fSm * exp2(wd), sr * 0.45) / sr);
+let ggD = gD / (1.0 + gD);
+
+// --- Filter: L, R, and a side copy on the mono sum tuned up to +1 octave ----
+let yL = korg35(0, xL * drv, gg, a);
+let yR = korg35(1, xR * drv, gg, a);
+let yD = korg35(2, 0.5 * (xL + xR) * drv, ggD, a);
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

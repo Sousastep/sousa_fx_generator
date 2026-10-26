@@ -1,0 +1,46 @@
+================================================================================
+comb_hadamard_vectored — Parameter Information
+================================================================================
+
+WHAT IT IS
+A "vectored" comb: four delay lines tuned from the in3 frequency, feeding
+back into each other through a Hadamard matrix, like a tiny pitched
+feedback delay network. Instead of one string ringing it sounds like a
+chord of sympathetic strings or a bell, depending on how far apart the
+lines are tuned.
+
+Source: Norilo, DAFx-14 §2–3 (vectored time-variant comb filter: delays
+and feedback vectored, feedback through a Hadamard matrix); DAFx-98
+tutorial (DUT52) §3 (comb with lowpass in the loop).
+
+PARAMETERS (3)
+
+1. spread — 0…1, default 0.3
+   Tuning of the four lines. 0 = all at the in3 period, which rings at f
+   plus a hollow sub-octave (the matrix adds the odd harmonics of f/2);
+   1 = root, major third, fifth and octave lines exchanging energy (a
+   chord). In between = inharmonic, bell-like.
+
+2. freq_offset_st — -36…+36 semitones, default 0
+   Transposes the root that arrives on in3.
+
+3. width — 0…100 %, default 50 %
+   Adds a side signal from a second network tuned up to +1 octave (at
+   100 %). L+R is exactly the plain comb, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: root frequency in Hz (sr/9990…sr/8). Values <= 1 Hz are ignored
+  (last value held, 600 Hz at start).
+- in4: resonance 0…1 = loop gain 0…0.98. 0 or unpatched = the dry signal
+  passes unchanged.
+
+NOTES
+- Gain staging: makeup (1 - g)^0.6 (1 + g)^0.5. With the test tuba
+  (58.7 Hz): rooted on the tuba's pitch, full resonance is at most ~7 dB
+  louder in mono (spread 0); roots that miss the tuba harmonics get
+  quieter (down to about -18 dB at full resonance). That is normal for a
+  comb.
+- A fixed 8 kHz lowpass in the loop takes the fizz off the ring.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

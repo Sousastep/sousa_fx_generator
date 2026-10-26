@@ -1,0 +1,50 @@
+================================================================================
+yoi_peaking_formants — Parameter Information
+================================================================================
+
+WHAT IT IS
+A formant EQ: three resonant peaking bells boost the first three formants
+of a vowel on top of the full signal, instead of filtering everything
+else away. The tuba keeps all of its body and low end while the vowel
+glides U -> O -> I with in3. Resonance raises the boost and narrows the
+bells together; at 0 the effect is a flat passthrough.
+
+Source: Liski & Välimäki, DAFx-17 paper 94 §2 (second-order peaking / bell
+filters); Traube & D'Alessandro, DAFx-05 P_104 §1.5 (vowels in the (F1, F2)
+plane).
+
+PARAMETERS (4)
+
+1. max_boost_db — 6…24 dB, default 15 dB
+   Formant boost at full resonance. 6 dB = a subtle vowel tint; 24 dB =
+   loud, whistling talk-box formants.
+
+2. formant_shift_st — -12…+12 semitones, default 0
+   Moves all three formants together without changing the vowel: down =
+   bigger, darker mouth; up = smaller, brighter.
+
+3. freq_offset_st — -36…+36 semitones, default 0
+   Offsets the vowel position that arrives on in3. 24 st moves from U to
+   O, 48 st from U to I.
+
+4. width — 0…100 %, default 50 %
+   Adds a side signal from a copy with its formants shifted up to +1 octave
+   (at 100 %). L+R is exactly the plain filter, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: vowel position as a frequency in Hz, log scale: 200 Hz or lower =
+  U, 800 Hz = O, 3200 Hz or higher = I. Values <= 1 Hz are ignored (last
+  value held, 800 Hz = O at start).
+- in4: resonance 0…1: boost = in4 × max_boost_db, bell Q = 1…8. 0 or
+  unpatched = flat, dry passthrough.
+
+NOTES
+- Formants (Hz): U 300 / 870 / 2240, O 570 / 840 / 2410, I 270 / 2290 /
+  3010, interpolated in log frequency; all three get the same boost.
+- Gain staging: the output takes back a fifth of the boost (about the
+  average boost the tuba actually receives, since the bells mostly miss
+  its strong low harmonics). With the test tuba, resonance 0 to 1 changes
+  the level by +2.4 dB (24 dB boost at U, mono) to -3.8 dB.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

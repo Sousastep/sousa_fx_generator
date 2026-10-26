@@ -1,0 +1,46 @@
+================================================================================
+lp_pole_mixing_ota — Parameter Information
+================================================================================
+
+WHAT IT IS
+A 4-stage OTA one-pole cascade with resonance feedback, Xpander style: the
+outputs of the five points along the cascade are mixed to give 24 dB
+lowpass, 12 dB lowpass, 12 dB bandpass or 12 dB highpass, all with the same
+resonance. One knob sweeps through them. The input stage saturates softly.
+
+Source: Trausmuth & Huovilainen, DAFx-05 P_293 (pole mixing of ladder stage
+outputs); Huovilainen, DAFx-04 P_061 §3–5 (input-stage saturation,
+feedback up to 4); McClellan, DAFx-26 paper 28 (time-varying stability).
+
+PARAMETERS (4)
+
+1. shape — 0…1, default 0
+   Response: 0 = LP4, 0.33 = LP2, 0.67 = BP2, 1 = HP2, crossfading in
+   between. Note that tuba has little energy up high, so the BP/HP end is
+   much quieter at high cutoffs. That is the filter working, not a level
+   bug.
+
+2. drive_db — 0…24 dB, default 3 dB
+   Saturation at the cascade input. Small-signal gain stays at unity.
+
+3. freq_offset_st — -36…+36 semitones, default 0
+   Transposes the cutoff that arrives on in3.
+
+4. width — 0…100 %, default 50 %
+   Adds a side signal from a copy of the filter tuned up to +1 octave (at
+   100 %). L+R is exactly the plain filter, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: cutoff in Hz. Values <= 1 Hz are ignored (last value held, 600 Hz at
+  start).
+- in4: resonance 0…1 (feedback k = 4 × in4, 1 = edge of self-oscillation).
+
+NOTES
+- Gain staging: feedback cuts the lowpass passband by up to 14 dB. LP4 gets
+  half of that back (sqrt(1 + k)), LP2 a quarter (its tap already rings
+  6 dB more), BP/HP none. With the test tuba, resonance 0 to 1 raises the
+  level by at most ~5 dB (LP4 with cutoff at 150 Hz) and lowers it at high
+  cutoffs.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

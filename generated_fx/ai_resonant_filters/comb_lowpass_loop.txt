@@ -1,0 +1,118 @@
+// ============================================================================
+// comb_lowpass_loop.txt — feedback comb tuned to in3 with a one-pole lowpass
+//                         in the loop (Karplus-Strong damping): harmonic
+//                         resonances at f, 2f, 3f ... whose upper partials
+//                         die away faster
+//
+// From: "Filters, Delays, Modulations and Demodulations: A Tutorial",
+//       DAFx-98 DUT52 §3 Fig. 6 (IIR comb, frequency-dependent decay from a
+//       first-order lowpass in the feedback loop);
+//       M. Laurson et al., DAFx-00 (laurson) §2 (loop gain g and loop
+//       filter coefficient a, both |.| < 1 for stability);
+//       D. Marttila et al., "Sound Matching with a Differentiable
+//       Karplus-Strong Algorithm", DAFx-26 paper 38 §2.1 (extended KS: loop
+//       delay + loss filter + fractional delay; tuning includes the loss
+//       filter's phase delay).
+//
+// Signal (per channel):
+//   y   = x + g * LP(AP(y[n - N]))          N integer, AP = first-order
+//                                           Thiran allpass (frac 0.5..1.5)
+//   N + frac + tauLP(f) = sr / f            (loop tuned, LP phase delay out)
+//   g   = 0.98 * in4                       (~6 s ring at 58 Hz)
+//   gE  = g * |LP(f)|                       (loop gain at the fundamental)
+//   out = y * (1 - gE)^0.7 * (1 + gE)^0.5  (between power and peak
+//                                           normalisation: a comb on the
+//                                           tuba harmonics barely gets
+//                                           louder, an off-pitch comb gets
+//                                           quieter)
+//
+// Inlets:
+//   in1 / in2: stereo audio
+//   in3: comb fundamental in Hz (held when <= 1 Hz; 600 Hz until the first)
+//   in4: resonance 0..1 (loop gain; 0 = dry signal straight through)
+// Outlets:
+//   out1 / out2: stereo (mono sum = plain stereo comb, see width)
+// No safety limiter, no metering.
+// ============================================================================
+
+// Loop damping (%): 0 bright, 100 dark (loop lowpass down to the fundamental)
+@param({ min: 0, max: 100 }) damping = 30;
+// Comb pitch offset from in3 (semitones)
+@param({ min: -36, max: 36 }) freq_offset_st = 0;
+// Width (%): detuned side copy, cancels exactly in mono
+@param({ min: 0, max: 100 }) width = 50;
+
+// ring buffers: 3 x 10000 samples (0 L, 1 R, 2 side copy)
+@state buf = new FixedSampleArray(30000);
+@state wpos: Int = 0;
+@state apX1 = new FixedSampleArray(3);
+@state apY1 = new FixedSampleArray(3);
+@state lpS = new FixedSampleArray(3);
+@state fHold = 600.0;
+@state fSm = 600.0;
+@state resSm = 0.0;
+
+// Comb channel ch: integer tap n, allpass coefficient a, loop gain g, LP pole p
+function comb(ch: Int, x: number, n: Int, a: number, g: number, p: number): number {
+	let base: Int = ch * 10000;
+	let ridx: Int = base + ((wpos - n + 10000) % 10000);
+	let tap = buf[ridx];
+	let ap = a * tap + apX1[ch] - a * apY1[ch];
+	apX1[ch] = tap;
+	apY1[ch] = ap;
+	lpS[ch] = (1.0 - p) * ap + p * lpS[ch];
+	let y = x + g * lpS[ch];
+	buf[base + wpos] = y;
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let xL = in1;
+let xR = in2;
+let aSm = 1.0 - exp(-200.0 / sr);
+
+// --- Controls: in3 pitch (held), in4 resonance, 5 ms smoothing ---------------
+if (in3 > 1.0) {
+	fHold = in3;
+}
+let fMin = sr / 9990.0;
+let fTarget = clamp(fHold * exp2(clamp(freq_offset_st, -36.0, 36.0) / 12.0), fMin, sr * 0.25);
+fSm = fSm + (fTarget - fSm) * aSm;
+resSm = resSm + (clamp(in4, 0.0, 1.0) - resSm) * aSm;
+
+let g = 0.98 * resSm;
+let wd = clamp(width, 0.0, 100.0) * 0.01;
+
+// loop lowpass: cutoff from sr/2 (0 %) down to the fundamental (100 %)
+let dmp = clamp(damping, 0.0, 100.0) * 0.01;
+let fcLp = minimum(fSm * exp2(9.0 * (1.0 - dmp)), sr * 0.49);
+let p = exp(-2.0 * pi * fcLp / sr);
+
+// --- Tuning: total loop delay sr/f minus the LP phase delay at f -------------
+let w = 2.0 * pi * fSm / sr;
+let dRem = sr / fSm - atan2(p * sin(w), 1.0 - p * cos(w)) / w;
+let n: Int = maximum(trunc(dRem - 0.5), 1);
+let fr = clamp(dRem - n, 0.0, 1.5);
+let a = (1.0 - fr) / (1.0 + fr);
+
+// makeup from the loop gain the fundamental actually sees (g * |LP(f)|)
+let lpMag = (1.0 - p) / sqrt(1.0 - 2.0 * p * cos(w) + p * p);
+let gEff = g * lpMag;
+let makeup = pow(1.0 - gEff, 0.7) * sqrt(1.0 + gEff);
+
+let fD = minimum(fSm * exp2(wd), sr * 0.25);
+let wD = 2.0 * pi * fD / sr;
+let dRemD = sr / fD - atan2(p * sin(wD), 1.0 - p * cos(wD)) / wD;
+let nD: Int = maximum(trunc(dRemD - 0.5), 1);
+let frD = clamp(dRemD - nD, 0.0, 1.5);
+let aD = (1.0 - frD) / (1.0 + frD);
+
+// --- Comb: L, R, and a side copy on the mono sum tuned up to +1 octave ------
+let yL = comb(0, xL, n, a, g, p);
+let yR = comb(1, xR, n, a, g, p);
+let yD = comb(2, 0.5 * (xL + xR), nD, aD, g, p);
+wpos = (wpos + 1) % 10000;
+let side = wd * (yD - 0.5 * (yL + yR));
+
+out1 = (yL + side) * makeup;
+out2 = (yR - side) * makeup;

@@ -1,0 +1,44 @@
+================================================================================
+yoi_parallel_formants — Parameter Information
+================================================================================
+
+WHAT IT IS
+The dubstep "yoi" as a clean formant filter: three bandpass filters in
+parallel at the first three formants of a vowel. As the frequency on in3
+rises, the vowel glides U ("oo") -> O ("aw") -> I ("ee"). Resonance makes
+the formants sharper and more vocal. Linear filters, no distortion.
+
+Source: Traube & D'Alessandro, DAFx-05 P_104 §1.5 (vowels in the (F1, F2)
+plane); Han, Na & Lee, NIME-12 (bandpass formants slid between vowels by
+one control); Pritchard & Fels, NIME-06 (parallel formant resonators).
+
+PARAMETERS (3)
+
+1. formant_shift_st — -12…+12 semitones, default 0
+   Moves all three formants together without changing the vowel: down =
+   bigger, darker mouth; up = smaller, brighter.
+
+2. freq_offset_st — -36…+36 semitones, default 0
+   Offsets the vowel position that arrives on in3. 24 st moves from U to
+   O, 48 st from U to I.
+
+3. width — 0…100 %, default 50 %
+   Adds a side signal from a copy with its formants shifted up to +1 octave
+   (at 100 %). L+R is exactly the plain filter, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: vowel position as a frequency in Hz, log scale: 200 Hz or lower =
+  U, 800 Hz = O, 3200 Hz or higher = I. Values <= 1 Hz are ignored (last
+  value held, 800 Hz = O at start).
+- in4: resonance 0…1 = formant Q 2…30 (log taper).
+
+NOTES
+- Formants (Hz): U 300 / 870 / 2240, O 570 / 840 / 2410, I 270 / 2290 /
+  3010, interpolated in log frequency. Levels F1 0 dB, F2 -6 dB, F3 -12 dB.
+- Gain staging: unity-peak bandpasses pass less energy as they narrow, so
+  the output is raised by sqrt(Q/2) (constant power). With the test tuba,
+  turning resonance up never raises the level; around O it drops up to
+  ~6 dB.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

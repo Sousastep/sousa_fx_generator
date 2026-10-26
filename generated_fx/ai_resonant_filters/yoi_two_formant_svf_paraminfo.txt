@@ -1,0 +1,51 @@
+================================================================================
+yoi_two_formant_svf — Parameter Information
+================================================================================
+
+WHAT IT IS
+The synth-patch "yoi": two classic state-variable filters with saturating
+band integrators. One is a resonant lowpass sitting on the first formant,
+the other a resonant bandpass on the second, and both glide U -> O -> I as
+in3 rises. Two formants are enough to hear the vowel. The saturation gives
+the gritty, rubbery tone of a hardware filter pushed hard.
+
+Source: Wise, DAFx-06 p053 §1–2 (Chamberlin SVF structure, lowpass and
+bandpass outputs, stability range); Han, Na & Lee, NIME-12 (two formants
+suffice for vowels); McClellan, DAFx-26 paper 28 §SVF.
+
+PARAMETERS (4)
+
+1. drive_db — 0…24 dB, default 6 dB
+   Level into the saturating integrators. More = grittier, more compressed
+   formants. The output is trimmed by 3/4 of the drive in dB.
+
+2. f1_level_db — -12…+6 dB, default 0 dB
+   Level of the F1 lowpass (which carries the tuba's body) against the F2
+   bandpass. Turn it down for a thin, nasal, talking-only sound (much
+   quieter overall, since tuba energy sits low).
+
+3. freq_offset_st — -36…+36 semitones, default 0
+   Offsets the vowel position that arrives on in3. 24 st moves from U to
+   O, 48 st from U to I.
+
+4. width — 0…100 %, default 50 %
+   Adds a side signal from a copy with both formants shifted up to +1
+   octave (at 100 %). L+R is exactly the plain filter, so mono is
+   unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: vowel position as a frequency in Hz, log scale: 200 Hz or lower =
+  U, 800 Hz = O, 3200 Hz or higher = I. Values <= 1 Hz are ignored (last
+  value held, 800 Hz = O at start).
+- in4: resonance 0…1 = Q 1…20 (log taper), both filters.
+
+NOTES
+- Formants (Hz): F1 / F2 = U 300 / 870, O 570 / 840, I 270 / 2290,
+  interpolated in log frequency.
+- Gain staging: the lowpass passband stays at unity and the saturated band
+  state caps its peak; the bandpass is unity-peak × sqrt(Q) (constant
+  power). With the test tuba, resonance 0 to 1 changes the level by at most
+  +2.3 dB at any drive.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.

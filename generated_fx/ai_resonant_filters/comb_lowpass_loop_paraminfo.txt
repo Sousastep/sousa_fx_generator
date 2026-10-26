@@ -1,0 +1,47 @@
+================================================================================
+comb_lowpass_loop — Parameter Information
+================================================================================
+
+WHAT IT IS
+A feedback comb filter tuned to the frequency on in3, with a one-pole
+lowpass inside the loop (Karplus-Strong damping). It resonates at f, 2f,
+3f… and the upper partials of the ring die away faster, so it sounds like a
+plucked or bowed string sympathetically ringing with the tuba. The loop is
+tuned with a fractional-delay allpass, so pitch is exact at any frequency.
+
+Source: DAFx-98 tutorial (DUT52) §3 Fig. 6 (comb with lowpass in the loop);
+Laurson, DAFx-00 §2 (loop gain and loop filter); Marttila et al., DAFx-26
+paper 38 §2.1 (extended Karplus-Strong tuning with loss filter and
+fractional delay).
+
+PARAMETERS (3)
+
+1. damping — 0…100 %, default 30 %
+   Loop lowpass. 0 % = bright, metallic ring; 100 % = the loop lowpass sits
+   on the fundamental, giving a dark, woody, short-lived ring.
+
+2. freq_offset_st — -36…+36 semitones, default 0
+   Transposes the comb pitch that arrives on in3 (try +12 or +19 with a
+   pitch tracker on in3).
+
+3. width — 0…100 %, default 50 %
+   Adds a side signal from a second comb tuned up to +1 octave (at 100 %).
+   L+R is exactly the plain comb, so mono is unaffected.
+
+INLETS / OUTLETS
+- in1 / in2: stereo audio.  out1 / out2: stereo.
+- in3: comb fundamental in Hz (sr/9990…sr/4). Values <= 1 Hz are ignored
+  (last value held, 600 Hz at start).
+- in4: resonance 0…1 = loop gain 0…0.98. 0 or unpatched = the dry signal
+  passes unchanged.
+
+NOTES
+- Gain staging: makeup is (1 - gE)^0.7 (1 + gE)^0.5, where gE is the loop
+  gain at the fundamental after damping, sitting between power and peak
+  normalisation. With the test tuba (58.7 Hz): a comb on the tuba's pitch
+  rises at most ~6 dB in mono at full resonance; a comb that misses the
+  tuba harmonics gets quieter (down to -20 dB at full resonance with low
+  damping). That is what a comb does. Feed it the tracked pitch, or a
+  multiple of it, for the loudest ring.
+- in3 / in4 are smoothed over 5 ms.
+- No safety limiter.
