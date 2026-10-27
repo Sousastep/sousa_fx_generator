@@ -55,6 +55,7 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 | `generated_fx/<Cat>/<name>.txt` | codebox~ source (tracked) |
 | `generated_fx/<Cat>/<name>_paraminfo.txt` | parameter docs, paired by filename |
 | `generated_maxpat/<Cat>/<name>.maxpat` | **generated, git-ignored** demo patcher |
+| `generated_rnbopat/<Cat>/ai.<name>.rnbopat` | **generated, git-ignored** RNBO abstraction (the `rnbo~` patcher inside the demo maxpat), written by `generate_maxpats.py` |
 | `generated_v8ui/<Cat>/<name>.js` | **generated** `v8ui` slider UI script per effect |
 | `tools/verify_codebox.js` | the acceptance test: real RNBO parse → codegen → C++ → `clang++ -fsyntax-only` |
 | `tools/generate_maxpats.py` | `.txt` → `.maxpat` (creates RNBO `param` + `setparam` objects and embeds the paraminfo text) |

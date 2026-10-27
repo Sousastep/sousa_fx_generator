@@ -10,6 +10,10 @@ Each effect lives as two files in ``generated_fx/<category>/``::
 Output mirrors that layout, so ``generated_fx/<category>/<name>.txt`` becomes
 ``generated_maxpat/<category>/<name>.maxpat``.
 
+The nested ``rnbo`` patcher is also written on its own as an RNBO abstraction,
+``generated_rnbopat/<category>/ai.<name>.rnbopat``, so the effect can be used
+inside other RNBO patchers.
+
 The generated ``.maxpat`` mirrors the structure of the hand-made examples in
 ``generated_maxpat/``: a top level demo patcher that wires ``receive~ inN`` /
 ``send~ outN`` pairs into a single embedded ``rnbo~`` object, whose nested
@@ -20,6 +24,7 @@ Usage::
 
     python3 tools/generate_maxpats.py                # all effects -> generated_maxpat/
     python3 tools/generate_maxpats.py --outdir build # custom destination
+    python3 tools/generate_maxpats.py --rnbopat-outdir build_rnbo  # custom .rnbopat destination
     python3 tools/generate_maxpats.py --only 01_harmonic_isolator 12_adaa_chebyshev_wavefolder
     python3 tools/generate_maxpats.py --list         # dry run, list discovered effects
 """
@@ -1424,6 +1429,10 @@ def build_maxpat(effect: Effect) -> dict[str, Any]:
     return {"patcher": build_top_patcher(effect)}
 
 
+def build_rnbopat(effect: Effect) -> dict[str, Any]:
+    return {"patcher": build_nested_patcher(effect)}
+
+
 # --------------------------------------------------------------------------- #
 # Discovery / CLI
 # --------------------------------------------------------------------------- #
@@ -1453,6 +1462,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--src", default="generated_fx", help="root of the effect .txt files")
     parser.add_argument("--outdir", default="generated_maxpat", help="destination directory")
+    parser.add_argument(
+        "--rnbopat-outdir", default="generated_rnbopat", help="destination directory for the .rnbopat abstractions"
+    )
     parser.add_argument("--only", nargs="*", default=None, help="only generate these effect names")
     parser.add_argument("--list", action="store_true", help="list discovered effects and exit")
     args = parser.parse_args(argv)
@@ -1476,6 +1488,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     os.makedirs(args.outdir, exist_ok=True)
+    os.makedirs(args.rnbopat_outdir, exist_ok=True)
 
     count = 0
     for txt, paraminfo, rel_dir in found:
@@ -1493,13 +1506,19 @@ def main(argv: list[str] | None = None) -> int:
         with open(out_path, "w", encoding="utf-8") as fh:
             json.dump(patcher, fh, indent=2)
             fh.write("\n")
+        rnbopat_dir = os.path.join(args.rnbopat_outdir, rel_dir)
+        os.makedirs(rnbopat_dir, exist_ok=True)
+        rnbopat_path = os.path.join(rnbopat_dir, f"ai.{effect.name}.rnbopat")
+        with open(rnbopat_path, "w", encoding="utf-8") as fh:
+            json.dump(build_rnbopat(effect), fh, indent=4)
+            fh.write("\n")
         count += 1
         print(
             f"  {effect.name}: {effect.n_in} in / {effect.n_out} out / "
-            f"{len(effect.params)} params -> {out_path}"
+            f"{len(effect.params)} params -> {out_path}, {rnbopat_path}"
         )
 
-    print(f"\nWrote {count} patcher(s) to {args.outdir}")
+    print(f"\nWrote {count} patcher(s) to {args.outdir} and {count} abstraction(s) to {args.rnbopat_outdir}")
     return 0
 
 
