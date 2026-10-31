@@ -1,0 +1,85 @@
+// ============================================================================
+// selector_ramp_24.txt — selector~ 24 @ramptime with a working linear ramp
+//
+// From: utility, no paper. Models Max/RNBO [selector~ 24 @ramptime <ms>], whose
+// ramptime is broken in RNBO. Choosing a new input crossfades linearly from
+// whatever is sounding now to the new input over ramp_ms.
+//
+// A change snapshots the current per-input gains and then moves every gain in a
+// straight line from its snapshot to its new target (1 for the selected input,
+// 0 for the others) with one shared ramp position. The gains therefore always
+// sum to 1 (or fall linearly to 0 when selecting 0 = off), and a change made
+// mid-ramp restarts a full ramp_ms crossfade from the current mix without a
+// jump.
+//
+// IO contract exception: this is a mono router, not a stereo effect.
+// Inlets:
+//   in1..in24: signal inputs 1..24
+// Outlets:
+//   out1: the selected input (crossfaded while ramping)
+// ============================================================================
+
+// Selected input (0 = off)
+@param({ min: 0, max: 24, steps: 25 }) selection = 1;
+// Ramp time
+@param({ min: 0.0, max: 5000.0, exponent: 3 }) ramp_ms = 200.0;
+
+@state gain = new FixedSampleArray(24);
+@state startGain = new FixedSampleArray(24);
+@state lastSel = -1;
+@state rampPos = 1.0;
+
+let sr = maximum(samplerate(), 1.0);
+let sel: Int = clamp(floor(selection + 0.5), 0, 24);
+
+if (sel != lastSel) {
+    if (lastSel < 0) {
+        // first sample: start on the selected input, no fade-in
+        for (let i: Int = 0; i < 24; i++) {
+            gain[i] = (i + 1 == sel) ? 1.0 : 0.0;
+        }
+        rampPos = 1.0;
+    } else {
+        for (let i: Int = 0; i < 24; i++) {
+            startGain[i] = gain[i];
+        }
+        rampPos = 0.0;
+    }
+    lastSel = sel;
+}
+
+if (rampPos < 1.0) {
+    let rampSamps = ramp_ms * 0.001 * sr;
+    let inc = rampSamps > 1.0 ? 1.0 / rampSamps : 1.0;
+    rampPos = minimum(rampPos + inc, 1.0);
+    for (let i: Int = 0; i < 24; i++) {
+        let tgt = (i + 1 == sel) ? 1.0 : 0.0;
+        let st = startGain[i];
+        gain[i] = st + (tgt - st) * rampPos;
+    }
+}
+
+out1 = gain[0] * in1
+     + gain[1] * in2
+     + gain[2] * in3
+     + gain[3] * in4
+     + gain[4] * in5
+     + gain[5] * in6
+     + gain[6] * in7
+     + gain[7] * in8
+     + gain[8] * in9
+     + gain[9] * in10
+     + gain[10] * in11
+     + gain[11] * in12
+     + gain[12] * in13
+     + gain[13] * in14
+     + gain[14] * in15
+     + gain[15] * in16
+     + gain[16] * in17
+     + gain[17] * in18
+     + gain[18] * in19
+     + gain[19] * in20
+     + gain[20] * in21
+     + gain[21] * in22
+     + gain[22] * in23
+     + gain[23] * in24;

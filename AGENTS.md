@@ -58,6 +58,8 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 | `generated_rnbopat/<Cat>/ai.<name>.rnbopat` | **generated, git-ignored** RNBO abstraction (the `rnbo~` patcher inside the demo maxpat), written by `generate_maxpats.py` |
 | `generated_v8ui/<Cat>/<name>.js` | **generated** `v8ui` slider UI script per effect |
 | `tools/verify_codebox.js` | the acceptance test: real RNBO parse → codegen → C++ → `clang++ -fsyntax-only` |
+| `tools/verify_codebox_event.js` | the same kind of check for event-domain `codebox` (no tilde), via the `rnbo-codebox-extension` validator |
+| `tools/rnbo-codebox-extension/` | git submodule: RNBO codebox language server; its compiled validator backs `verify_codebox_event.js` |
 | `tools/generate_maxpats.py` | `.txt` → `.maxpat` (creates RNBO `param` + `setparam` objects and embeds the paraminfo text) |
 | `tools/generate_v8uis.py` | `.txt` → `generated_v8ui/<Cat>/<name>.js` (`v8ui` compact slider UI; scripting name set at runtime with the `scripting_name` message, emits `<scripting_name>/<param_name> <value>`) |
 | `tools/search.py` | search/read the multi-corpus papers library (two-tier: index → full text) |
@@ -204,6 +206,22 @@ unless the code can tell them apart (range test, or an opt-in amount param with
 default 0), and treat a bar as running only for 100 ms after it last *moved* -
 `(moved || 0.001 < in4 < 0.999)` freezes on any held value.
 
+**Event-domain `codebox` (no tilde) has its own rules.** `verify_codebox.js`
+always builds a `codebox~`, so check these with `tools/verify_codebox_event.js`.
+Both errors below were hit in Max and are reproduced by that script:
+
+- Only inlet 1 runs the main body. To make another inlet hot, define an inlet
+  function, which **must take exactly one argument** (the incoming value):
+  `function in2(v) { ... }`. `function in2() { ... }` fails with "An inlet
+  function has to have exactly one argument."
+- `outN` is always a number. Send a list through `listoutN`
+  (`let r: list = [1, 2.5]; listout1 = r;`), and receive one through `listinN`.
+  `out1 = r;` fails the C++ stage with "no viable conversion from 'list' … to
+  'number'". The `N` is still the port position, so `listout1` and `out2` give
+  two outlets.
+- Any assignment to an outlet sends a message, so write right outlets before left
+  ones to keep Max's right-to-left order. `switch`/`case` is supported.
+
 ---
 
 ## 4. Effect conventions
@@ -331,6 +349,28 @@ confirmed that way:
 ```bash
 printf 'let x = max(in1, 0.0);\nout1 = x;\n' > /tmp/probe.txt
 node tools/verify_codebox.js /tmp/probe.txt      # PASS / FAIL + line:col
+```
+
+`verify_codebox_event.js` — the check for event-domain `codebox` sources (no
+tilde). It runs the `tools/rnbo-codebox-extension` validator in two passes: the
+extension's built-in diagnostics, then its Local Strict Mode, where Max's own
+`@rnbo/xam` parses the source as a `codebox`, generates C++ and checks it with
+`clang++ -fsyntax-only`. Strict-pass problems print as `WARN` but still fail the
+file.
+
+```bash
+node tools/verify_codebox_event.js file.txt [more…]       # check as codebox
+node tools/verify_codebox_event.js --kind codebox~ file.txt
+node tools/verify_codebox_event.js --no-strict file.txt   # built-in pass only
+```
+Exit status: `0` all pass, `1` at least one failure, `2` toolchain or validator
+not found. It needs the same Max/RNBO install as `verify_codebox.js` (override
+with `RNBO_PACKAGE_DIR`), plus the extension's compiled validator. Build that
+once (`server/out/` is the submodule's git-ignored build output):
+
+```bash
+git submodule update --init tools/rnbo-codebox-extension
+cd tools/rnbo-codebox-extension && npm install && npm run compile:validation
 ```
 
 `generate_maxpats.py` — `--src`, `--outdir`, `--only <names…>`, `--list`. Creates

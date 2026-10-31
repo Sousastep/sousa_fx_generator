@@ -1,0 +1,39 @@
+================================================================================
+selector_ramp_24 — Parameter Information
+================================================================================
+
+WHAT IT IS
+A stand-in for [selector~ 24 @ramptime <ms>], whose ramptime does not work in
+RNBO. 24 signal inlets, one signal outlet. Changing the selection crossfades
+linearly from whatever is sounding now to the newly selected input over
+ramp_ms. Selecting 0 fades everything out.
+
+A change made in the middle of a ramp starts a fresh ramp_ms crossfade from
+the current mix, so rapid switching never jumps or clicks from a discontinuity.
+The input gains always sum to 1 during a crossfade between inputs (linear, not
+equal-power: two uncorrelated inputs dip about 3 dB at the midpoint, the same
+as selector~/gate~ ramps).
+
+Source: utility, no paper. Models Max selector~ with @ramptime.
+
+IO (exception to the stereo IO contract: this is a mono router)
+  in1..in24: signal inputs 1..24
+  out1:      the selected input
+
+PARAMETERS (2)
+
+1. selection — 0…24 (integer), default 1
+   Which input is passed to the output. 0 = off (silence), like selector~.
+   Non-integer values are rounded. The first sample after load starts on this
+   input directly, with no fade-in.
+
+2. ramp_ms — 0…5000 ms, default 200 ms
+   Length of the linear crossfade after each selection change. 0 switches
+   instantly (one-sample step, like selector~ without ramptime). Exponential
+   taper (exponent 3) so the short, useful times get most of the slider.
+   Changing ramp_ms during a ramp changes the speed of the ramp in progress.
+
+NOTES
+- Unconnected inlets are silent, so patch only as many sources as you need.
+- CPU: 24 multiply-adds per sample when settled, plus a 24-gain update per
+  sample while a ramp is running.
