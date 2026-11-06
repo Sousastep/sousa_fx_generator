@@ -1,0 +1,114 @@
+================================================================================
+tuba_freq_tracker_v3 — Parameter Information
+================================================================================
+
+OVERVIEW
+A low-latency rewrite of tuba_freq_tracker_v2's pitch detection, tuned on six
+recorded tuba runs (two-octave F major scales at about 4 notes per second, and
+slow chromatic descents from Bb2 down to D1).
+
+How it works: every candidate period (lag) gets its own analysis window,
+window_periods times that lag long. A high note is therefore recognised from a
+few of its own cycles, instead of waiting for a window sized for pedal tones.
+Each lag keeps running sums that are updated at about 11 kHz, and the
+normalised square difference function (NSDF, from the YIN / McLeod family)
+picks the first strong peak. After that there is very little post-processing:
+small pitch moves go straight through, big jumps must hold for confirm_ms,
+exact octave jumps must hold for octave_ms, and the pitch is held between
+notes.
+
+Sources: von dem Knesebeck & Zoelzer, DAFx-10 (YIN, normalised
+autocorrelation, tracker latency); Derrien, DAFx-14 Sec. 2 (the latency floor
+is about one to two periods of the lowest note); McLeod & Wyvill, ICMC 2005
+(NSDF and key-maximum picking).
+
+Measured offline on the six recordings (149 notes; v2 in brackets). "Time to
+correct note" is how long the output takes to stay within +/-50 cents of the
+note's steady pitch:
+- time to correct note, median: 40 ms (73 ms)
+- time to correct note, slowest 10%: 88 ms (136 ms)
+- fast F-major runs: time 30 ms (54 ms), in-note accuracy 94% (72%)
+- octave errors: 0.0%
+Part of the remaining attack time is the player's own scoop into the note.
+The C++ prototype and this codebox produce the same out1 through the RNBO
+compiler. These numbers come from the recordings only; how it feels live is
+for you to judge.
+
+INLETS & OUTLETS
+- in1 / in2: stereo (or mono on in1) tuba input. Unlike v2 there is no pitch
+  hint inlet: averaging with fluid.pitch~ would bring its latency back.
+- out1: tracked f0 in Hz. It reads 58.27 Hz (Bb1) until the first note, then
+  holds the last valid pitch through rests. Patch it into the pitch (in3)
+  inlet of the effects.
+- out2: confidence [0..1], the NSDF peak height smoothed over 5 ms (0 below
+  the gate).
+- out3: phase-locked phasor [0..1) at f0 (drop-in for phasor~).
+- out4: phase-locked sine [-1..1] at f0, scaled by confidence.
+
+PARAMETERS (8)
+
+1. min_freq_hz
+   - Range: 24 to 120 Hz (default 27 Hz, just under pedal Bb0 at 29.1 Hz).
+   - The lowest pitch searched; the longest lag is set from this. Raising it
+     (to 38 Hz, say, if you never go below D1) shortens the lag loop and saves
+     CPU. Changing it restarts the analysis for about 0.15 s.
+
+2. max_freq_hz
+   - Range: 150 to 700 Hz (default 420 Hz).
+   - The highest pitch searched. Notes above it get read an octave low.
+
+3. gate_db
+   - Range: -70 to -20 dB (default -48 dB, measured on a 5 ms RMS after a
+     22 Hz highpass).
+   - Below this level the pitch is held and confidence drops to 0. On the
+     recordings, -50 to -40 dB worked and -55 dB or lower started latching
+     onto room noise and release noises. Set it just above your rig's noise
+     floor.
+
+4. voicing
+   - Range: 0.2 to 0.9 (default 0.4).
+   - How periodic the sound must be (NSDF peak height) before a pitch is
+     accepted. Lower values catch attacks sooner but let in more breathy
+     junk; above 0.6 the attacks get slower.
+
+5. window_periods
+   - Range: 1 to 5 (default 3).
+   - The analysis window for each candidate pitch, in periods of that pitch
+     (never shorter than 5 ms). Shorter is not faster in practice: at 1 to
+     1.5 periods the noisy start of each note produced more wrong picks, and
+     latency got worse. 2.5 to 4 is the sweet spot. Changing it restarts the
+     analysis for about one window.
+
+6. confirm_ms
+   - Range: 0 to 40 ms (default 10 ms).
+   - A jump of 1.5 semitones or more is only accepted once the new pitch has
+     held (within 0.35 semitone) for this long. Smaller moves (vibrato,
+     bends, scoops) pass immediately. Lower = snappier leaps but more
+     glitches from release noises; 6 to 10 ms tested best.
+
+7. octave_ms
+   - Range: 0 to 80 ms (default 25 ms).
+   - Extra hold for exact octave jumps (within 0.6 semitone of 12). This
+     stops the brief drop to the lower octave at tongue stops between fast
+     notes. Real octave leaps get up to this much extra delay, so lower it if
+     you play a lot of octave riddim patterns and can tolerate an occasional
+     wrong-octave blip.
+
+8. smooth_ms
+   - Range: 0 to 50 ms (default 1 ms).
+   - Glide on out1 in the log-frequency domain (0 = hard steps at the
+     ~0.36 ms analysis rate). Every ms added here adds delay to note changes.
+
+PORT NOTES
+- The C++ prototype is run with the same settings as the defaults above.
+  Through the RNBO-generated C++, out1 matches the prototype to float32
+  resolution at 44.1 kHz. At 48 kHz the scores are the same.
+- Decimation is automatic: about 11 kHz internal rate at any sample rate
+  (factor 4 at 44.1/48 kHz, 9 at 96 kHz).
+- CPU: about 25% more than v2 on the offline harness (indicative only; check
+  Max's CPU meter).
+- The phasor/sine section is v2's Hilbert phase lock, but its isolating
+  bandpass is now a linear TPT filter at Q ~ 3.3 instead of two saturating
+  svf~ stages at Q ~ 35. It settles in a few periods rather than hundreds of
+  milliseconds.
+================================================================================

@@ -1,0 +1,479 @@
+// ============================================================================
+// tuba_freq_tracker_v3.txt
+// Low-latency tuba pitch tracker: lag-adaptive sliding NSDF (YIN / McLeod
+// family) with key-maximum picking, jump confirmation and an octave guard,
+// plus the v2 phase-locked phasor / sine outputs.
+// ============================================================================
+// From:
+//   - von dem Knesebeck & Zoelzer, "Comparison of pitch trackers for real-time
+//     guitar effects", DAFx-10: Sec. 2.2 Eq. 9 (normalised autocorrelation /
+//     LTP), Sec. 2.4 Eqs. 13-14 (YIN difference function), Sec. 3.3 (latency is
+//     bounded by the observation frame, and post-processing adds to it).
+//   - Derrien, "A very low latency pitch tracker for audio to MIDI conversion",
+//     DAFx-14, Sec. 2: the algorithmic delay is bounded below by the longest
+//     period you want to see, and in practice needs about two periods.
+//   - McLeod & Wyvill, "A smarter way to find pitch", ICMC 2005 (not in the
+//     local corpus): NSDF n(tau) = 2 r(tau) / m(tau) and key-maximum picking.
+//
+// What is new against v2 (measured on tuba_recs/, 149 labelled notes):
+//   v2 used a fixed 28 ms YIN window for every lag, then several smoothers
+//   (median, IFT gate, 1.5..10 ms slews, confidence-scaled adaptation).
+//   v3 gives EACH lag tau its own window W(tau) = window_periods * tau
+//   (at least 5 ms), so a high note is resolved from a few of its own periods
+//   instead of waiting for a window sized for pedal tones. Each lag keeps two
+//   running sums over its own window, updated recursively at ~11 kHz:
+//       d(tau) = sum (x[n] - x[n-tau])^2
+//       m(tau) = sum (x[n]^2 + x[n-tau]^2)
+//       nsdf(tau) = 1 - d/m        (= 2r/m, scale-free, in [-1, 1])
+//   Because nsdf is normalised per lag, lags with different window lengths
+//   can be compared directly. Pitch = first key maximum >= 0.6 * best key
+//   maximum (after the first negative-going crossing), parabolic refinement.
+//   Post-processing is deliberately thin:
+//     - changes < 1.5 semitones are accepted immediately;
+//     - larger jumps must hold (within 0.35 st) for confirm_ms;
+//     - exact octave jumps must hold for octave_ms (kills the sub-octave
+//       flips at tongue stops, where long lags still remember the old note);
+//     - the pitch is held while the level is below gate_db or the nsdf peak
+//       is below voicing.
+//   Prototype: tools/pitch_lab/proto.cpp (line-for-line; keep them in step).
+//   Offline result (tools/pitch_lab, prototype == this file through RNBO):
+//   median time to reach +/-50 cents of the steady note 40 ms (v2: 73 ms),
+//   p90 88 ms (v2: 136 ms), in-note accuracy 96.4% (v2: 82.6%), octave
+//   errors 0.0%. Much of the remaining attack time is the player's own
+//   scoop into the note, not tracker delay.
+//
+// Cost: ~maxLag (about 410 at 44.1/48 kHz, fmin 27 Hz) running-sum updates per
+// decimated sample plus one nsdf scan every 4 decimated samples (~0.36 ms).
+//
+// Known limitations:
+//   - Release noises between notes (breath, valve clicks) can still be read as
+//     a pitch if they are periodic and above the gate; the held value then
+//     shows until the next note starts.
+//   - Changing window_periods or min_freq_hz restarts the running sums; lags
+//     come back as their windows refill (up to ~0.15 s for the longest lag).
+// ============================================================================
+// Inlets:
+//   in1: Left audio input (tuba)
+//   in2: Right audio input (if silent/unpatched, in1 is used alone)
+// Outlets:
+//   out1: Tracked fundamental frequency f0 in Hz (audio rate; 58.27 Hz until
+//         the first note is found, then the last valid pitch is held)
+//   out2: Pitch confidence / periodicity [0 .. 1] (nsdf peak, 5 ms smoothing)
+//   out3: Phase-locked phasor [0 .. 1) at f0 (drop-in for phasor~)
+//   out4: Phase-locked fundamental sine [-1 .. 1], scaled by confidence
+
+// Lowest pitch searched (Hz)
+@param({ min: 24.0, max: 120.0, exponent: 2 }) min_freq_hz = 27.0;
+// Highest pitch searched (Hz)
+@param({ min: 150.0, max: 700.0, exponent: 2 }) max_freq_hz = 420.0;
+// Level gate (dB): below this the pitch is held
+@param({ min: -70.0, max: -20.0 }) gate_db = -48.0;
+// Periodicity needed to accept a pitch (nsdf peak)
+@param({ min: 0.2, max: 0.9 }) voicing = 0.4;
+// Analysis window in periods of each candidate lag
+@param({ min: 1.0, max: 5.0 }) window_periods = 3.0;
+// Hold time a jump of >= 1.5 semitones needs before it is accepted (ms)
+@param({ min: 0.0, max: 40.0 }) confirm_ms = 10.0;
+// Hold time an exact octave jump needs before it is accepted (ms)
+@param({ min: 0.0, max: 80.0 }) octave_ms = 25.0;
+// Output glide in the log-frequency domain (ms, 0 = steps)
+@param({ min: 0.0, max: 50.0, exponent: 2 }) smooth_ms = 1.0;
+
+// --- Pre-conditioning: 2nd-order HP 22 Hz + 4th-order Butterworth LP 900 Hz
+// (RBJ biquads, transposed direct form II) ---
+@state hpB0 = 0.0;
+@state hpB1 = 0.0;
+@state hpB2 = 0.0;
+@state hpA1 = 0.0;
+@state hpA2 = 0.0;
+@state hpZ1 = 0.0;
+@state hpZ2 = 0.0;
+@state l1B0 = 0.0;
+@state l1B1 = 0.0;
+@state l1B2 = 0.0;
+@state l1A1 = 0.0;
+@state l1A2 = 0.0;
+@state l1Z1 = 0.0;
+@state l1Z2 = 0.0;
+@state l2B0 = 0.0;
+@state l2B1 = 0.0;
+@state l2B2 = 0.0;
+@state l2A1 = 0.0;
+@state l2A2 = 0.0;
+@state l2Z1 = 0.0;
+@state l2Z2 = 0.0;
+@state lastSr = 0.0;
+@state decFactor: Int = 4;
+@state dsr = 11025.0;
+@state env = 0.0;
+
+// --- Lag-adaptive sliding NSDF state (decimated domain, ~11 kHz) ---
+// buf: 4096-sample ring, enough for W(tau) + tau at window_periods 5.
+// dd/mm: running sums per lag; wTab: window length per lag; ns: nsdf scratch.
+@state buf = new FixedSampleArray(4096);
+@state dd = new FixedSampleArray(512);
+@state mm = new FixedSampleArray(512);
+@state ns = new FixedSampleArray(512);
+@state wTab = new FixedSampleArray(512);
+@state keyT = new FixedSampleArray(64);
+@state keyV = new FixedSampleArray(64);
+@state wIdx: Int = 0;
+@state fillN: Int = 0;
+@state decCount: Int = 0;
+@state hopCount: Int = 0;
+@state minLag: Int = 10;
+@state maxLag: Int = 400;
+@state lastWinP = -1.0;
+@state lastFmin = -1.0;
+@state lastFmax = -1.0;
+
+// --- Decision state ---
+@state f0 = 0.0;
+@state candF = 0.0;
+@state candCount: Int = 0;
+@state rawConf = 0.0;
+@state smoothConf = 0.0;
+@state hasPitch: Int = 0;
+@state logOut = 5.864186;   // log2(58.27 Hz), Bb1, until the first note
+
+// --- Phase-lock section (from v2, with a linear TPT bandpass, example26) ---
+@state ic1 = new FixedSampleArray(2);
+@state ic2 = new FixedSampleArray(2);
+@state hReX = new FixedSampleArray(8);
+@state hReY = new FixedSampleArray(8);
+@state hImX = new FixedSampleArray(8);
+@state hImY = new FixedSampleArray(8);
+@state hDelRe = 0.0;
+@state pllPhase = 0.0;
+
+// Unity-peak TPT state-variable bandpass, one stage (idx selects the state slot)
+function svfBp(idx: Int, x, g, kd) {
+	let a1 = 1.0 / (1.0 + g * (g + kd));
+	let a2 = g * a1;
+	let a3 = g * a2;
+	let v3 = x - ic2[idx];
+	let v1 = a1 * ic1[idx] + a2 * v3;
+	let v2 = ic2[idx] + a2 * ic1[idx] + a3 * v3;
+	ic1[idx] = 2.0 * v1 - ic1[idx];
+	ic2[idx] = 2.0 * v2 - ic2[idx];
+	return kd * v1;
+}
+
+let sr = maximum(samplerate(), 1.0);
+
+// ============================================================================
+// 0. SAMPLE-RATE DEPENDENT SETUP (filter coefficients, decimation factor)
+// ============================================================================
+if (sr != lastSr) {
+	// HP 22 Hz, Q 0.707
+	let w0 = 2.0 * pi * 22.0 / sr;
+	let cw = cos(w0);
+	let al = sin(w0) / (2.0 * 0.707);
+	let a0 = 1.0 + al;
+	hpB0 = (1.0 + cw) / 2.0 / a0;
+	hpB1 = (0.0 - (1.0 + cw)) / a0;
+	hpB2 = hpB0;
+	hpA1 = -2.0 * cw / a0;
+	hpA2 = (1.0 - al) / a0;
+	// LP 900 Hz, 4th-order Butterworth as two sections (Q 0.54, 1.31)
+	let w1 = 2.0 * pi * 900.0 / sr;
+	let cw1 = cos(w1);
+	let al1 = sin(w1) / (2.0 * 0.54);
+	let b1 = 1.0 + al1;
+	l1B0 = (1.0 - cw1) / 2.0 / b1;
+	l1B1 = (1.0 - cw1) / b1;
+	l1B2 = l1B0;
+	l1A1 = -2.0 * cw1 / b1;
+	l1A2 = (1.0 - al1) / b1;
+	let al2 = sin(w1) / (2.0 * 1.31);
+	let b2 = 1.0 + al2;
+	l2B0 = (1.0 - cw1) / 2.0 / b2;
+	l2B1 = (1.0 - cw1) / b2;
+	l2B2 = l2B0;
+	l2A1 = -2.0 * cw1 / b2;
+	l2A2 = (1.0 - al2) / b2;
+	// decimate to ~11 kHz (4 at 44.1/48 kHz, 8 at 88.2 kHz, 9 at 96 kHz)
+	decFactor = maximum(1, floor(sr / 11025.0 + 0.5));
+	dsr = sr / decFactor;
+	lastSr = sr;
+	lastWinP = -1.0;   // force the lag tables to rebuild
+}
+
+// ============================================================================
+// 1. INPUT, PRE-FILTER, LEVEL
+// ============================================================================
+let x = (abs(in2) > 0.0000001) ? (0.5 * (in1 + in2)) : in1;
+
+let hy = hpB0 * x + hpZ1;
+hpZ1 = hpB1 * x - hpA1 * hy + hpZ2;
+hpZ2 = hpB2 * x - hpA2 * hy;
+
+let ly1 = l1B0 * hy + l1Z1;
+l1Z1 = l1B1 * hy - l1A1 * ly1 + l1Z2;
+l1Z2 = l1B2 * hy - l1A2 * ly1;
+
+let ly2 = l2B0 * ly1 + l2Z1;
+l2Z1 = l2B1 * ly1 - l2A1 * ly2 + l2Z2;
+l2Z2 = l2B2 * ly1 - l2A2 * ly2;
+
+env += (hy * hy - env) * (1.0 - exp(-1.0 / (0.005 * sr)));
+
+// ============================================================================
+// 2. LAG TABLES (rebuilt when window_periods / min / max freq / sr change)
+// ============================================================================
+let winP = clamp(window_periods, 1.0, 5.0);
+let fLo = clamp(min_freq_hz, 24.0, 120.0);
+let fHi = clamp(max_freq_hz, 150.0, 700.0);
+if (winP != lastWinP || fLo != lastFmin || fHi != lastFmax) {
+	minLag = maximum(2, floor(dsr / fHi));
+	maxLag = minimum(510, ceil(dsr / fLo) + 1);
+	let wMin: Int = floor(0.005 * dsr);
+	for (let t: Int = 1; t <= maxLag + 1; t++) {
+		let ww: Int = floor(winP * t + 0.5);
+		if (ww < wMin) {
+			ww = wMin;
+		}
+		if (ww + t + 2 > 4096) {
+			ww = 4096 - t - 2;
+		}
+		wTab[t] = ww;
+	}
+	// The running sums are only valid for the window they were built with:
+	// restart them; each lag becomes usable again once its window refills.
+	if (winP != lastWinP || fLo != lastFmin) {
+		for (let i: Int = 0; i < 512; i++) {
+			dd[i] = 0.0;
+			mm[i] = 0.0;
+		}
+		fillN = 0;
+	}
+	lastWinP = winP;
+	lastFmin = fLo;
+	lastFmax = fHi;
+}
+
+// ============================================================================
+// 3. DECIMATED SLIDING NSDF + KEY-MAXIMUM PITCH PICKING
+// ============================================================================
+decCount = decCount + 1;
+if (decCount >= decFactor) {
+	decCount = 0;
+	wIdx = wIdx + 1;
+	if (wIdx >= 4096) {
+		wIdx = 0;
+	}
+	buf[wIdx] = ly2;
+	if (fillN < 1000000) {
+		fillN = fillN + 1;
+	}
+	let xn = ly2;
+	let top: Int = maxLag + 1;
+	for (let t: Int = 1; t <= top; t++) {
+		let iT: Int = wIdx - t;
+		if (iT < 0) {
+			iT += 4096;
+		}
+		let xt = buf[iT];
+		let a = xn - xt;
+		let ww: Int = wTab[t];
+		if (fillN > ww) {
+			let iO: Int = wIdx - ww;
+			if (iO < 0) {
+				iO += 4096;
+			}
+			let iOT: Int = iO - t;
+			if (iOT < 0) {
+				iOT += 4096;
+			}
+			let xo = buf[iO];
+			let xot = buf[iOT];
+			let b = xo - xot;
+			dd[t] += a * a - b * b;
+			mm[t] += xn * xn + xt * xt - xo * xo - xot * xot;
+		} else {
+			dd[t] += a * a;
+			mm[t] += xn * xn + xt * xt;
+		}
+	}
+
+	hopCount = hopCount + 1;
+	if (hopCount >= 4) {
+		hopCount = 0;
+		let rms = sqrt(maximum(env, 0.0));
+		let loud = (20.0 * log10(rms + 0.000000000001) > gate_db) ? 1 : 0;
+
+		for (let t: Int = 1; t <= top; t++) {
+			let mv = mm[t];
+			let wv: Int = wTab[t];
+			ns[t] = (mv > 0.000000000001 && fillN >= wv) ? (1.0 - dd[t] / mv) : 0.0;
+		}
+
+		// key maxima: the maximum of each positive region after the first
+		// negative-going crossing (lags below minLag are not candidates)
+		let nk: Int = 0;
+		let seenNeg: Int = 0;
+		let curMax = -2.0;
+		let curT: Int = -1;
+		for (let t: Int = 1; t <= maxLag; t++) {
+			let v = ns[t];
+			if (seenNeg == 0) {
+				if (v < 0.0) {
+					seenNeg = 1;
+				}
+			} else {
+				if (v > 0.0) {
+					if (v > curMax && t >= minLag) {
+						curMax = v;
+						curT = t;
+					}
+				} else if (curT > 0) {
+					if (nk < 64) {
+						keyT[nk] = curT;
+						keyV[nk] = curMax;
+						nk = nk + 1;
+					}
+					curMax = -2.0;
+					curT = -1;
+				}
+			}
+		}
+		if (curT > 0 && nk < 64 && curT < maxLag) {
+			keyT[nk] = curT;
+			keyV[nk] = curMax;
+			nk = nk + 1;
+		}
+		let gmax = -1.0;
+		for (let i: Int = 0; i < nk; i++) {
+			if (keyV[i] > gmax) {
+				gmax = keyV[i];
+			}
+		}
+		let bt: Int = -1;
+		let bv = 0.0;
+		let found: Int = 0;
+		for (let i: Int = 0; i < nk; i++) {
+			if (found == 0 && keyV[i] >= 0.6 * gmax) {
+				bt = keyT[i];
+				bv = keyV[i];
+				found = 1;
+			}
+		}
+
+		if (bt > 1 && loud == 1 && bv >= voicing) {
+			let y1 = ns[bt - 1];
+			let y2 = ns[bt];
+			let y3 = ns[bt + 1];
+			let den = y1 - 2.0 * y2 + y3;
+			let dl = (abs(den) > 0.000000000001) ? (0.5 * (y1 - y3) / den) : 0.0;
+			dl = clamp(dl, -0.5, 0.5);
+			let fNew = dsr / (bt + dl);
+
+			let hopsPerMs = 0.001 * dsr / 4.0;
+			let confirmN: Int = ceil(clamp(confirm_ms, 0.0, 40.0) * hopsPerMs);
+			let octN: Int = ceil(clamp(octave_ms, 0.0, 80.0) * hopsPerMs);
+
+			if (f0 <= 0.0) {
+				f0 = fNew;
+				candCount = 0;
+			} else {
+				let st = 12.0 * log2(fNew / f0);
+				if (abs(st) < 1.5) {
+					f0 = fNew;
+					candCount = 0;
+				} else {
+					if (candF > 0.0 && abs(12.0 * log2(fNew / candF)) < 0.35) {
+						candCount = candCount + 1;
+					} else {
+						candCount = 1;
+						candF = fNew;
+					}
+					let isOct = (abs(abs(st) - 12.0) < 0.6) ? 1 : 0;
+					let need: Int = (isOct == 1) ? maximum(confirmN, octN) : confirmN;
+					if (candCount >= need) {
+						f0 = fNew;
+						candCount = 0;
+					}
+				}
+			}
+			rawConf = bv;
+		} else {
+			rawConf = (loud == 1) ? bv * 0.5 : 0.0;
+			candCount = 0;
+		}
+	}
+}
+
+// ============================================================================
+// 4. OUTPUT GLIDE (log-frequency one-pole), CONFIDENCE
+// ============================================================================
+if (f0 > 0.0) {
+	let target = log2(f0);
+	if (hasPitch == 0) {
+		logOut = target;
+		hasPitch = 1;
+	}
+	let sm = clamp(smooth_ms, 0.0, 50.0);
+	let ga = (sm > 0.0) ? (1.0 - exp(-1.0 / (sm * 0.001 * sr))) : 1.0;
+	logOut += (target - logOut) * ga;
+}
+let fOut = exp2(logOut);
+smoothConf += (rawConf - smoothConf) * (1.0 - exp(-1.0 / (0.005 * sr)));
+
+// ============================================================================
+// 5. PHASE-LOCKED PHASOR (v2 design): isolate the fundamental with two linear
+// TPT bandpass stages at fOut (Q ~ 3.3), build the analytic signal with the
+// verified 4+4 z^-2 polyphase Hilbert pair, and pull a monotonic phase ramp
+// gently toward its phase. With a Q this low the bandpass settles in a few
+// periods; the ramp itself always runs at fOut.
+// ============================================================================
+let gBp = tan(pi * clamp(fOut, 20.0, sr * 0.45) / sr);
+let isoFund = svfBp(1, svfBp(0, hy, gBp, 0.3), gBp, 0.3);
+
+let cRe0 = 0.4794008656;
+let cRe1 = 0.8762184935;
+let cRe2 = 0.9765975895;
+let cRe3 = 0.9974992559;
+let cIm0 = 0.1617584983;
+let cIm1 = 0.7330289323;
+let cIm2 = 0.9453497003;
+let cIm3 = 0.9905991567;
+
+let sRe = isoFund;
+let yRe0 = cRe0 * (sRe + hReY[1]) - hReX[1];
+hReX[1] = hReX[0]; hReX[0] = sRe; hReY[1] = hReY[0]; hReY[0] = yRe0; sRe = yRe0;
+let yRe1 = cRe1 * (sRe + hReY[3]) - hReX[3];
+hReX[3] = hReX[2]; hReX[2] = sRe; hReY[3] = hReY[2]; hReY[2] = yRe1; sRe = yRe1;
+let yRe2 = cRe2 * (sRe + hReY[5]) - hReX[5];
+hReX[5] = hReX[4]; hReX[4] = sRe; hReY[5] = hReY[4]; hReY[4] = yRe2; sRe = yRe2;
+let yRe3 = cRe3 * (sRe + hReY[7]) - hReX[7];
+hReX[7] = hReX[6]; hReX[6] = sRe; hReY[7] = hReY[6]; hReY[6] = yRe3;
+let outRe = hDelRe;
+hDelRe = yRe3;
+
+let sIm = isoFund;
+let yIm0 = cIm0 * (sIm + hImY[1]) - hImX[1];
+hImX[1] = hImX[0]; hImX[0] = sIm; hImY[1] = hImY[0]; hImY[0] = yIm0; sIm = yIm0;
+let yIm1 = cIm1 * (sIm + hImY[3]) - hImX[3];
+hImX[3] = hImX[2]; hImX[2] = sIm; hImY[3] = hImY[2]; hImY[2] = yIm1; sIm = yIm1;
+let yIm2 = cIm2 * (sIm + hImY[5]) - hImX[5];
+hImX[5] = hImX[4]; hImX[4] = sIm; hImY[5] = hImY[4]; hImY[4] = yIm2; sIm = yIm2;
+let yIm3 = cIm3 * (sIm + hImY[7]) - hImX[7];
+hImX[7] = hImX[6]; hImX[6] = sIm; hImY[7] = hImY[6]; hImY[6] = yIm3;
+let outIm = yIm3;
+
+// the one-sample delay on the real path makes the pair rotate clockwise, so
+// the imaginary part is negated to get a phase that increases with time
+let theta = atan2(0.0 - outIm, outRe);
+let targetPh = wrap((theta + pi) / (2.0 * pi), 0.0, 1.0);
+let phErr = targetPh - pllPhase;
+if (phErr > 0.5) {
+	phErr -= 1.0;
+} else if (phErr < -0.5) {
+	phErr += 1.0;
+}
+pllPhase = wrap(pllPhase + fOut / sr + 0.015 * smoothConf * phErr, 0.0, 1.0);
+
+out1 = fOut;
+out2 = smoothConf;
+out3 = pllPhase;
+out4 = sin(2.0 * pi * pllPhase) * smoothConf;

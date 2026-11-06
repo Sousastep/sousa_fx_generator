@@ -60,6 +60,7 @@ plus `FMPD`, `Chorus`, `mrelwood`, `airwindows`.
 | `tools/verify_codebox.js` | the acceptance test: real RNBO parse → codegen → C++ → `clang++ -fsyntax-only` |
 | `tools/verify_codebox_event.js` | the same kind of check for event-domain `codebox` (no tilde), via the `rnbo-codebox-extension` validator |
 | `tools/rnbo-codebox-extension/` | git submodule: RNBO codebox language server; its compiled validator backs `verify_codebox_event.js` |
+| `tools/pitch_lab/` | offline tuba pitch-tracker bench: recordings in `tuba_recs/` → per-note ground truth, C++ prototype of `tuba_freq_tracker_v3`, harness that runs the **RNBO-generated C++** of any codebox~ over audio, latency/accuracy scoring (see its `README.md`; work files in git-ignored `tools/pitch_lab/work/`) |
 | `tools/generate_maxpats.py` | `.txt` → `.maxpat` (creates RNBO `param` + `setparam` objects and embeds the paraminfo text) |
 | `tools/generate_v8uis.py` | `.txt` → `generated_v8ui/<Cat>/<name>.js` (`v8ui` compact slider UI; scripting name set at runtime with the `scripting_name` message, emits `<scripting_name>/<param_name> <value>`) |
 | `tools/search.py` | search/read the multi-corpus papers library (two-tier: index → full text) |
@@ -350,6 +351,16 @@ confirmed that way:
 printf 'let x = max(in1, 0.0);\nout1 = x;\n' > /tmp/probe.txt
 node tools/verify_codebox.js /tmp/probe.txt      # PASS / FAIL + line:col
 ```
+
+To *run* a codebox~ offline rather than only compile it, use
+`tools/pitch_lab/lab.py build rnbo <file.txt>`. It links the `--keep` C++
+against RNBO's `CoreObject` (`rnbo_harness.cpp`), and the resulting binary
+processes a float32 file. This is the real generated code, not a hand
+translation, so it is also the right harness for numeric proofs (§5). One
+catch: in this bare build RNBO **constant-folds every `@param`** (they have no
+inlet), so the C++ ignores run-time values. Test other values with
+`--set name=value` (bakes a default in) or `--dyn name` (reads that param from
+in3).
 
 `verify_codebox_event.js` — the check for event-domain `codebox` sources (no
 tilde). It runs the `tools/rnbo-codebox-extension` validator in two passes: the
