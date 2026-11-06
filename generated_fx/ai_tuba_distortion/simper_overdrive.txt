@@ -1,0 +1,244 @@
+// ============================================================================
+// simper_overdrive.txt — op-amp overdrive with antiparallel diodes in the
+//                        feedback loop, solved exactly every sample, with
+//                        level-matched gain staging
+//
+// Port of repos/simper_overdrive.txt (gen~ codebox): circuit from a lecture
+// by Andrew Simper (Cytomic), gen~ implementation by quails, solver
+// hardening by sousastep (freebuff & claude). The 4x polyphase-IIR
+// oversampling of the original is intentionally NOT ported: this runs at 1x.
+//
+// From: D. T. Yeh, J. S. Abel, J. O. Smith, "Simplified, Physically-Informed
+//       Models of Distortion and Overdrive Guitar Effects Pedals", DAFx-07
+//       p189: §4.2 (non-inverting op amp with the diode limiter across Zf:
+//       the minus input sits at Vin, so Vout = Vin + diode voltage, and the
+//       ground leg's current is set by Vin alone), eq. 17 (diode
+//       Id = Is(e^(V/Vt) - 1)), Fig. 10 (antiparallel pair I = 2 Is sinh);
+//       D. Albertini, A. Bernardini, A. Sarti, "Antiderivative Antialiasing
+//       Techniques in Nonlinear Wave Digital Structures", JAES 2021, §7.2
+//       (Tube Screamer clipping stage, asymmetric diode string in the
+//       feedback loop).
+//
+// Circuit (Vin at the + input; R1 [+ C1] from - input to ground; R2 in
+// parallel with D1/D2 from the output back to the - input):
+//
+//   KCL at the - input (it is held at Vin), vd = Vout - Vin:
+//     vd/R2 + Is(e^(vd/(n2 Vt)) - 1) - Is(e^(-vd/Vt) - 1) = iLeg
+//     iLeg = hp(Vin, tight_hz) / R1      (C1 in series with R1 makes the
+//                                         leg a first-order high-pass;
+//                                         tight_hz = 10 is the original)
+//   Vout = railClip(Vin + vd)            (added: soft op-amp rails at
+//                                         +-4.5 V, 9 V supply; the original
+//                                         had unbounded output, so past
+//                                         ~0 dB drive the unclipped Vin
+//                                         term buried the diodes and the
+//                                         stage got cleaner, not dirtier)
+//
+// R1 = 10k, R2 = gain * 10k, Is = 1e-15 A, Vt = 26 mV, as in the original.
+// n2 = 1 + asym: number of diodes in series on the positive side.
+//
+// Solver: warm-started, bracketed (safeguarded) Newton on vd, one warm seed
+// per channel, early exit on convergence; same fixed point as the original.
+//
+// Gain staging:
+//   volts in   = x * dbtoa(drive_db)          (1 V per full scale at 0 dB)
+//   wet out    = Vout * makeup
+//   makeup     = A_REF / peak(Vout | input peak A_REF at F_REF)
+//                solved from the same static circuit whenever drive, gain,
+//                tight or asym change, so a -12 dBFS note at 200 Hz comes out
+//                at -12 dBFS whatever the knobs do: drive/gain change the
+//                amount of clipping, not the loudness, and mix is
+//                level-matched. output_db is the final trim.
+//
+// Inlets:
+//   in1 / in2: stereo tuba
+// Outlets:
+//   out1 / out2: stereo
+// in3 (pitch) and in4 (bar phasor) are not used. No limiter, no metering.
+// ============================================================================
+
+// Drive into the circuit (dB)
+@param({ min: -24, max: 36 }) drive_db = 0;
+// Op-amp gain, 20*log10(1 + R2/R1) (dB)
+@param({ min: 0, max: 40 }) gain_db = 20;
+// Gain-leg high-pass (Hz)
+@param({ min: 10, max: 1000, exponent: 3 }) tight_hz = 10;
+// Extra series diodes on the positive side (%)
+@param({ min: 0, max: 100 }) asym = 0;
+// Tone lowpass (Hz)
+@param({ min: 500, max: 20000, exponent: 3 }) tone_hz = 20000;
+// Dry/wet (%)
+@param({ min: 0, max: 100 }) mix = 100;
+// Output trim after level matching (dB)
+@param({ min: -24, max: 24 }) output_db = 0;
+
+// TPT one-pole states: 0/1 gain-leg hp, 2/3 tone lp, 4/5 output coupling cap
+@state zs = new FixedSampleArray(6);
+// previous converged diode voltage per channel (warm start)
+@state vdPrev = new FixedSampleArray(2);
+// level matching: last parameters solved for, and the resulting makeup
+@state lastDrive = -999;
+@state lastGain = -999;
+@state lastTight = -999;
+@state lastAsym = -999;
+@state makeupTarget = 1;
+// smoothed gains
+@state sDrive = 1;
+@state sMakeup = 1;
+@state sOut = 1;
+@state sMix = 1;
+@state started = 0;
+
+// TPT one-pole lowpass on state slot idx; gg = g / (1 + g)
+function lp1(idx: Int, x: number, gg: number): number {
+	let v = (x - zs[idx]) * gg;
+	let y = v + zs[idx];
+	zs[idx] = y + v;
+	return y;
+}
+
+// Solve vd*gF + Is(e^(vd/(n2 Vt)) - 1) - Is(e^(-vd/Vt) - 1) = iLeg for vd.
+// The left side is strictly increasing in vd, so the root is bracketed by
+// [-VD_CLAMP, n2 * VD_CLAMP]; Newton steps are taken only inside the
+// shrinking bracket, otherwise the bracket midpoint.
+function diodeSolve(iLeg: number, seed: number, gF: number, n2: number, maxIter: number): number {
+	let IS = 0.000000000000001;
+	let VT = 0.026;
+	let VD_CLAMP = 1.2;
+	let EXP_CLAMP = 85.0;
+	let STEP_TOL = 0.000000000001;
+	let invVt = 1.0 / VT;
+	let invVt2 = invVt / n2;
+	let lo = 0.0 - VD_CLAMP;
+	let hi = VD_CLAMP * n2;
+	let vd = clamp(seed, lo, hi);
+	let ePos = exp(clamp(vd * invVt2, 0.0 - EXP_CLAMP, EXP_CLAMP));
+	let eNeg = exp(clamp(0.0 - vd * invVt, 0.0 - EXP_CLAMP, EXP_CLAMP));
+	let f = vd * gF + IS * (ePos - 1.0) - IS * (eNeg - 1.0) - iLeg;
+	for (let i = 0; i < maxIter; i++) {
+		if (f > 0.0) {
+			hi = vd;
+		} else {
+			lo = vd;
+		}
+		let df = gF + IS * ePos * invVt2 + IS * eNeg * invVt;
+		let vdNew = vd - f / df;
+		if (!(vdNew > lo && vdNew < hi)) {
+			vdNew = 0.5 * (lo + hi);
+		}
+		let step = abs(vdNew - vd);
+		vd = vdNew;
+		ePos = exp(clamp(vd * invVt2, 0.0 - EXP_CLAMP, EXP_CLAMP));
+		eNeg = exp(clamp(0.0 - vd * invVt, 0.0 - EXP_CLAMP, EXP_CLAMP));
+		f = vd * gF + IS * (ePos - 1.0) - IS * (eNeg - 1.0) - iLeg;
+		if (step < STEP_TOL) {
+			break;
+		}
+	}
+	return vd;
+}
+
+// Op-amp output swing on a 9 V supply: linear to RAIL_KNEE, then a tanh
+// shoulder that reaches RAIL. Only engaged once drive pushes Vin past ~3 V.
+function railClip(v: number): number {
+	let RAIL = 4.5;
+	let RAIL_KNEE = 3.2;
+	let a = abs(v);
+	let y = v;
+	if (a > RAIL_KNEE) {
+		let span = RAIL - RAIL_KNEE;
+		y = (RAIL_KNEE + span * tanh((a - RAIL_KNEE) / span)) * (v < 0.0 ? -1.0 : 1.0);
+	}
+	return y;
+}
+
+let sr = maximum(samplerate(), 1.0);
+let R1 = 10000.0;
+let gG = 1.0 / R1;
+let A_REF = 0.25;
+let F_REF = 200.0;
+
+let driveDb = clamp(drive_db, -24.0, 36.0);
+let gainDb = clamp(gain_db, 0.0, 40.0);
+let tightHz = clamp(tight_hz, 10.0, 1000.0);
+let asymPct = clamp(asym, 0.0, 100.0);
+let n2 = 1.0 + asymPct * 0.01;
+let opGain = maximum(dbtoa(gainDb) - 1.0, 0.01);
+let gF = 1.0 / (opGain * R1);
+let driveLin = dbtoa(driveDb);
+
+// --- Level matching: static solve at the reference level, on change ---------
+if (driveDb != lastDrive || gainDb != lastGain || tightHz != lastTight || asymPct != lastAsym) {
+	lastDrive = driveDb;
+	lastGain = gainDb;
+	lastTight = tightHz;
+	lastAsym = asymPct;
+	let aRef = A_REF * driveLin;
+	let hpMag = F_REF / sqrt(F_REF * F_REF + tightHz * tightHz);
+	let iRef = aRef * hpMag * gG;
+	let vdP = diodeSolve(iRef, 0.0, gF, n2, 60);
+	let vdN = diodeSolve(0.0 - iRef, 0.0, gF, n2, 60);
+	let peakOut = 0.5 * (railClip(aRef + vdP) - railClip(0.0 - aRef + vdN));
+	makeupTarget = A_REF / maximum(peakOut, 0.000001);
+}
+
+// --- Parameter smoothing (~20 ms) --------------------------------------------
+let outTarget = dbtoa(clamp(output_db, -24.0, 24.0));
+let mixTarget = clamp(mix, 0.0, 100.0) * 0.01;
+if (started == 0) {
+	started = 1;
+	sDrive = driveLin;
+	sMakeup = makeupTarget;
+	sOut = outTarget;
+	sMix = mixTarget;
+}
+let kSm = 1.0 - exp(-1.0 / (0.02 * sr));
+sDrive = sDrive + (driveLin - sDrive) * kSm;
+sMakeup = sMakeup + (makeupTarget - sMakeup) * kSm;
+sOut = sOut + (outTarget - sOut) * kSm;
+sMix = sMix + (mixTarget - sMix) * kSm;
+
+let gHp = tan(pi * minimum(tightHz, sr * 0.45) / sr);
+let ggHp = gHp / (1.0 + gHp);
+let gTone = tan(pi * minimum(clamp(tone_hz, 500.0, 20000.0), sr * 0.45) / sr);
+let ggTone = gTone / (1.0 + gTone);
+let gDc = tan(pi * 10.0 / sr);
+let ggDc = gDc / (1.0 + gDc);
+
+let xL = in1;
+let xR = in2;
+
+// --- Input level: digital full scale -> volts -------------------------------
+let vL = xL * sDrive;
+let vR = xR * sDrive;
+
+// --- Ground-leg current (R1, high-passed by C1) ------------------------------
+let iL = (vL - lp1(0, vL, ggHp)) * gG;
+let iR = (vR - lp1(1, vR, ggHp)) * gG;
+
+// --- Diode feedback network ----------------------------------------------------
+let vdL = diodeSolve(iL, vdPrev[0], gF, n2, 20);
+let vdR = diodeSolve(iR, vdPrev[1], gF, n2, 20);
+if (!(abs(vdL) < 10.0)) {
+	vdL = 0.0;
+}
+if (!(abs(vdR) < 10.0)) {
+	vdR = 0.0;
+}
+vdPrev[0] = vdL;
+vdPrev[1] = vdR;
+
+// --- Op-amp output, back to digital, level matched ---------------------------
+let wetL = railClip(vL + vdL) * sMakeup;
+let wetR = railClip(vR + vdR) * sMakeup;
+
+// --- Tone stage ----------------------------------------------------------------
+wetL = lp1(2, wetL, ggTone);
+wetR = lp1(3, wetR, ggTone);
+
+// --- Output coupling cap (10 Hz): asym makes DC -------------------------------
+wetL = wetL - lp1(4, wetL, ggDc);
+wetR = wetR - lp1(5, wetR, ggDc);
+
+out1 = linearinterp(sMix, xL, wetL) * sOut;
+out2 = linearinterp(sMix, xR, wetR) * sOut;

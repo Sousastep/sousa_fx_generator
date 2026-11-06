@@ -1,0 +1,78 @@
+================================================================================
+simper_overdrive — Parameter Information
+================================================================================
+
+WHAT IT IS
+Op-amp overdrive with two antiparallel diodes in the feedback loop (the
+Tube Screamer topology). The diode network is solved exactly every sample
+instead of being approximated by tanh, so the knee is the real
+exponential diode curve. The clean horn always passes and the diodes add
+at most a diode drop (~0.7 V) on top of it. Push the drive hard and the
+op amp runs into its 9 V rails as well.
+
+Port of a gen~ codebox by quails, from a lecture by Andrew Simper (Cytomic),
+with solver hardening by sousastep. The original's 4x oversampling is not
+ported: this runs at 1x, so expect some aliasing at high gain and use
+tone_hz to tame it.
+
+Source: Yeh, Abel & Smith, DAFx-07 p189 §4.2 (non-inverting op amp with diode
+limiter), eq. 17 / Fig. 10 (diode model); Albertini, Bernardini & Sarti,
+JAES 2021 §7.2 (Tube Screamer clipping stage, asymmetric diodes).
+
+GAIN STAGING
+The effect is level-matched. Whenever drive_db, gain_db, tight_hz or asym
+change, it solves the circuit for a -12 dBFS, 200 Hz reference and sets a
+makeup gain so that reference comes out at -12 dBFS. Drive and gain change
+how much it clips, not how loud it is, so mix blends at matched level.
+Quieter playing comes up and louder playing is held back, which is the
+compression you hear. Use output_db for the final level.
+
+PARAMETERS (7)
+
+1. drive_db — -24…36 dB, default 0 dB
+   Input level into the circuit (0 dB = 1 V per digital full scale, as in
+   the original). Around 0 dB: diode overdrive. Above ~+12 dB: the op amp
+   also hits its rails, which sounds harder and fuzzier. Below 0 dB: cleaner,
+   only the peaks break up.
+
+2. gain_db — 0…40 dB, default 20 dB
+   Op-amp gain, 20·log10(1 + R2/R1), the pedal's Drive knob and the
+   original's `in2` gain (gain 9 = 20 dB). 0 dB = clean.
+
+3. tight_hz — 10…1000 Hz, default 10 Hz
+   Corner of the capacitor in the op amp's ground leg. Only content above it
+   reaches the diodes; below it the horn passes clean. 10 Hz = the original
+   (full-range clipping, fat). A real Tube Screamer sits at ~720 Hz: the
+   fundamental stays round and only the bark clips.
+
+4. asym — 0…100 %, default 0 %
+   Adds series diodes on the positive side (100 % = two diodes against one).
+   The positive half then clips later than the negative half, which adds
+   even harmonics for a warmer, more tube-like sound. 0 % = the original
+   (symmetric). A 10 Hz coupling cap removes the DC this creates.
+
+5. tone_hz — 500…20000 Hz, default 20000 Hz
+   Lowpass after the clipper. 20 kHz ≈ off (the original). Turn it down to
+   darken the sound and to hide aliasing at high gain.
+
+6. mix — 0…100 %, default 100 %
+   Dry/wet, level-matched at the reference (see GAIN STAGING). Parallel
+   overdrive (30–60 %) keeps the tuba's attack and low end.
+
+7. output_db — -24…24 dB, default 0 dB
+   Final trim after the level matching.
+
+PORT NOTES
+- Same circuit and fixed point as the gen~ original (Is = 1e-15 A,
+  Vt = 26 mV, R1 = 10k, R2 = gain·10k), solved for the diode voltage with a
+  warm-started, bracketed Newton solve. It stops early once a step is below
+  1e-12 V (20 iterations max, 60 for the cold level-matching solve).
+- Stereo: each channel keeps its own warm-start seed.
+- Added to the circuit: the ground-leg capacitor (tight_hz), asymmetric
+  diodes (asym), soft ±4.5 V op-amp rails, and the tone lowpass.
+- The gen~ dcblock is replaced by a 10 Hz one-pole high-pass (output coupling
+  cap).
+- Level matching is static: it assumes the reference sits in the gain leg's
+  passband scaled by the tight_hz response at 200 Hz. With high tight_hz
+  settings, very low notes come out a little quieter than the reference.
+- in3 (pitch) and in4 (bar phasor) are not used.
