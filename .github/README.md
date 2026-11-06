@@ -45,7 +45,7 @@ not constitute an endorsement or affiliation.
 
 # :lock_with_ink_pen: Licenses
 
-All fx ported from others maintain their original license, of course.
+All fx ported from others maintain their original license.
 
 With respect to any other code in this repo, in place of a legal notice, here is a blessing:
 
@@ -56,4 +56,13 @@ With respect to any other code in this repo, in place of a legal notice, here is
 > May you share freely, never taking more than you give.
 
 
-<a href="#studio_microphone-introduction">![rainbow](./media/rainbow.png)</a>
+<a href="#house_with_garden-repositories">![rainbow](./media/rainbow.png)</a>
+
+# :house_with_garden: Repositories
+
+- [SousaFX-rnbo](https://github.com/Sousastep/SousaFX-rnbo): 				audio effects
+- [SousaFX-rnbo-docs](https://github.com/Sousastep/SousaFX-rnbo-docs): 		documentation
+- [sousaFX-rpi-scripts](https://github.com/Sousastep/sousaFX-rpi-scripts): 	raspberry pi scripts
+- [sousaVFX-teensy](https://github.com/Sousastep/sousaVFX-teensy): 			visual effects
+- [SousaPlayback-rnbo](https://github.com/Sousastep/SousaPlayback-rnbo): 	ableton project
+- [sousa_fx_generator](https://github.com/Sousastep/sousa_fx_generator): 	rnbo codebox~ generator
