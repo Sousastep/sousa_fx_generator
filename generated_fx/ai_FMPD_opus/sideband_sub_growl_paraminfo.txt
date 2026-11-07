@@ -22,20 +22,20 @@ PARAMETERS (7 + output gain)
 2. index — 0…6, default 2
    FM index (scaled 40–100 % by the envelope). 0 = clean.
 
-3. low_high — -100…+100 %, default -60 %
+3. low_high — -100…+100 %, default 100 %
    - = keep lower sidebands (sub, dark), + = keep upper (bright, screech),
    0 = both (plain FM).
 
-4. odd_even — -100…+100 %, default 0 %
+4. odd_even — -100…+100 %, default -100 %
    - = odd sidebands only (hollow), + = even only (octave-y, smooth).
 
-5. bar_morph — 0…100 %, default 50 %
+5. bar_morph — 0…100 %, default 0 %
    Bar swing of low_high (sine, ± this amount).
 
 6. morph_div — 1…16 (stepped), default 2
    Morphs per bar.
 
-7. blend — 0…100 %, default 100 %
+7. blend — 0…100 %, default 80 %
    Dry/wet. The dry comes from the same Hilbert network, so they never comb.
 
 8. out_gain_db — -24…+12 dB, default 0 dB

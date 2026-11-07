@@ -18,7 +18,7 @@ At mix = 1 the tuba itself is gone; the voice follows the horn's envelope
 
 PARAMETERS (7 + output gain)
 
-1. detune — 0…100 cents, default 30 cents
+1. detune — 0…100 cents, default 20 cents
    Inter-voice detune. The value snaps to the nearest 5-limit comma:
    <10.7 = unison, 21.5 = 81/80, 41.1 = 128/125, 70.7 = 25/24, and
    91.2–100 = 16/15 (111.7 cents, the top of the range).
@@ -28,11 +28,11 @@ PARAMETERS (7 + output gain)
    Depth of the bar-locked tone sweep. 0 is a static stack; higher opens and
    closes the filter once per bar for the slow liquid bass movement.
 
-3. tone_hz — 200…12000 Hz, default 5000 Hz
+3. tone_hz — 200…12000 Hz, default 7000 Hz
    Cutoff of the two-pole lowpass on the stack. Low values give the dark,
    rounded deep-dubstep saw; high values let the buzz through.
 
-4. glide_ms — 0…200 ms, default 20 ms
+4. glide_ms — 0…200 ms, default 9 ms
    Pitch-glide time for f0 changes. Short keeps the tuba's articulation;
    long turns it into a portamento synth.
 

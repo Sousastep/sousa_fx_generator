@@ -32,17 +32,17 @@
 // ============================================================================
 
 // Inflection x (d)
-@param({ min: 0.05, max: 0.95 }) d = 0.3;
+@param({ min: 0.05, max: 0.95 }) d = 0.653;
 // Inflection y (v): formant height
-@param({ min: 0.5, max: 4 }) v = 2;
+@param({ min: 0.5, max: 4 }) v = 3.121;
 // Orbit depth
-@param({ min: 0, max: 100 }) orbit = 35;
+@param({ min: 0, max: 100 }) orbit = 100;
 // Orbit rate: 1/4, 1/2, 1, 2, 3, 4 cycles per bar (snaps)
 @param({ min: 0.25, max: 4 }) orbit_per_bar = 1;
 // Lissajous ratio (v axis turns this many times per d-axis turn)
 @param({ min: 1, max: 4 }) lissajous_ratio = 2;
 // Tone (2-pole lowpass)
-@param({ min: 200, max: 12000 }) tone_hz = 4000;
+@param({ min: 200, max: 12000 }) tone_hz = 7000;
 // Wet
 @param({ min: 0, max: 100 }) wet = 100;
 // Output gain

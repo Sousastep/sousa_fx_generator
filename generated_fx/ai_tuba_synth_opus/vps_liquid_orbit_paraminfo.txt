@@ -15,14 +15,14 @@ Pekonen & Välimäki, DAFx-09 (adaptive phase distortion).
 
 PARAMETERS (7 + output gain)
 
-1. d — 0.05…0.95, default 0.30
+1. d — 0.05…0.95, default 0.653
    Horizontal bend point. 0.5 = symmetric; towards 0 or 1 = brighter, buzzier.
 
-2. v — 0.5…4, default 2.0
+2. v — 0.5…4, default 3.121
    Vertical bend point. 0.5 = plain; 1 = pulse-like; 1.5–4 = a formant at
    about (2v − 1) × f0, the vocal "liquid" peak.
 
-3. orbit — 0…100 %, default 35 %
+3. orbit — 0…100 %, default 100 %
    Size of the Lissajous orbit around (d, v). 0 = static timbre.
 
 4. orbit_per_bar — 0.25…4, default 1
@@ -33,7 +33,7 @@ PARAMETERS (7 + output gain)
    How many times v moves for each turn of d. 1 = ellipse, 2 = figure-eight,
    3–4 = knotted, more vowel changes per cycle.
 
-6. tone_hz — 200…12000 Hz, default 4000 Hz
+6. tone_hz — 200…12000 Hz, default 7000 Hz
    Two-pole lowpass on the voice.
 
 7. wet — 0…100 %, default 100 %

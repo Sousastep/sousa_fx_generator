@@ -40,19 +40,19 @@
 // ============================================================================
 
 // Barberpole cycles per bar (- = falling)
-@param({ min: -8, max: 8 }) cycles_per_bar = 1;
+@param({ min: -8, max: 8 }) cycles_per_bar = 2;
 // Comb delay in f0 periods
-@param({ min: 0.5, max: 4 }) comb_ratio = 1;
+@param({ min: 0.5, max: 4 }) comb_ratio = 3.414;
 // Loop feedback
-@param({ min: 0, max: 95 }) feedback = 60;
+@param({ min: 0, max: 95 }) feedback = 88.72;
 // Notch warp (allpass dispersion)
 @param({ min: 0, max: 90 }) warp = 40;
 // Stereo width (100 = L up / R down)
-@param({ min: 0, max: 100 }) width = 100;
+@param({ min: 0, max: 100 }) width = 2;
 // Dry/wet (50 = phaser sum)
-@param({ min: 0, max: 100 }) blend = 50;
+@param({ min: 0, max: 100 }) blend = 100;
 // Output gain
-@param({ min: -24, max: 12 }) out_gain_db = 0;
+@param({ min: -24, max: 12 }) out_gain_db = -4.5;
 
 @state f0Smooth = 55.0;
 @state f0Held = 55.0;

@@ -15,8 +15,8 @@
 //   out1: Left Asymmetric AdFM Output
 //   out2: Right Asymmetric AdFM Output
 
-@param({ min: 0.25, max: 4.0 }) cm_ratio = 1.0;
-@param({ min: 0.0, max: 6.0 }) mod_index = 2.0;
+@param({ min: 0.25, max: 4.0 }) cm_ratio = 2.001;
+@param({ min: 0.0, max: 6.0 }) mod_index = 1.111;
 @param({ min: -1.0, max: 1.0 }) symmetry_r = 0.35;
 @param({ min: 0.0, max: 1.0 }) bessel_mode = 1.0;
 

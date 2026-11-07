@@ -18,27 +18,27 @@ No dry/wet control, no limiter.
 
 PARAMETERS (6)
 
-1. sweep_ms — 0.05…12 ms, default 2.2 ms
+1. sweep_ms — 0.05…12 ms, default 10.10 ms
    Half-spread of the two taps. Small = tight metallic sheen on the midrange;
    large = slow, wide whoosh that reaches down into the low bass. This is the
    "size of the jet".
 
-2. sweep_rate_hz — 0.02…2 Hz, default 0.14 Hz
+2. sweep_rate_hz — 0.02…2 Hz, default 0.1 Hz
    Speed of the sweep: one through-zero "slam" per cycle. Below 0.1 Hz it becomes a texture you hear as movement
    rather than as an LFO — good under long dubstep notes.
 
-3. feedback — -0.95…+0.95, default -0.55
+3. feedback — -0.95…+0.95, default -0.9
    Loop gain around the delay line. Negative is the classic hollow,
    out-of-phase flange; positive is thicker and more resonant. Values near
    ±0.9 whistle — that is the flanger on the edge, use it deliberately.
 
-4. stereo_offset — 0…1, default 0.25
+4. stereo_offset — 0…1, default 1.0
    Phase offset between the left and right sweep (1 = half a cycle, 0.25 =
    an eighth). At 0 the two channels are identical and the effect sits in the
    middle; higher values make the two sides hit their zero crossings at
    different moments.
 
-5. tone_hz — 800…14000 Hz, default 7000 Hz
+5. tone_hz — 800…14000 Hz, default 8000 Hz
    One-pole damping inside the feedback loop. Lower keeps the resonance dark
    and dubby; higher lets the metal ring.
 

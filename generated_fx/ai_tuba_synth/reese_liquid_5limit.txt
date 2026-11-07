@@ -26,10 +26,10 @@
 // No safety limiter, no metering.
 // ============================================================================
 
-@param({ min: 0, max: 100 }) detune = 30;             // detune (5-limit comma)
+@param({ min: 0, max: 100 }) detune = 20;             // detune (5-limit comma)
 @param({ min: 0, max: 1 }) motion = 0.35;             // liquid motion
-@param({ min: 200, max: 12000 }) tone_hz = 5000;      // tone
-@param({ min: 0, max: 200 }) glide_ms = 20;           // glide
+@param({ min: 200, max: 12000 }) tone_hz = 7000;      // tone
+@param({ min: 0, max: 200 }) glide_ms = 9;           // glide
 @param({ min: 0, max: 1 }) stereo = 0.4;              // stereo spread
 @param({ min: 0, max: 1 }) mix = 1;                   // dry/wet
 @param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain

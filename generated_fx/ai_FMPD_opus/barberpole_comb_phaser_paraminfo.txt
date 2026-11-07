@@ -16,29 +16,29 @@ Parents: barberpole_comb_ssb_flanger, 11_bode_ssb_freq_shifter.
 
 PARAMETERS (6 + output gain)
 
-1. cycles_per_bar — -8…+8, default 1
+1. cycles_per_bar — -8…+8, default 2
    Barberpole speed in cycles per bar (+ = rising, - = falling, 0 = a
    static comb). Follows the tempo of the in4 phasor.
 
-2. comb_ratio — 0.5…4 f0 periods, default 1
+2. comb_ratio — 0.5…4 f0 periods, default 3.414
    Comb length. 1 = resonances on the harmonics (in key); 2 = also on the
    half-harmonics (sub shimmer); 0.5 = every other harmonic.
 
-3. feedback — 0…95 %, default 60 %
+3. feedback — 0…95 %, default 88.72 %
    Resonance. High = ringing, metallic, long tails.
 
 4. warp — 0…90 %, default 40 %
    Allpass dispersion in the loop: squeezes the resonances together at the
    bottom and spreads them at the top. The comb stays tuned on f0.
 
-5. width — 0…100 %, default 100 %
+5. width — 0…100 %, default 2 %
    100 = L rises while R falls; 0 = both move the same way.
 
-6. blend — 0…100 %, default 50 %
+6. blend — 0…100 %, default 100 %
    Dry/wet. 50 % = the classic phaser sum (deepest notches); 100 % = only
    the shifted resonant comb.
 
-7. out_gain_db — -24…+12 dB, default 0 dB
+7. out_gain_db — -24…+12 dB, default -4.5 dB
    Final trim. Does not count toward the parameter limit.
 
 INLETS / OUTLETS

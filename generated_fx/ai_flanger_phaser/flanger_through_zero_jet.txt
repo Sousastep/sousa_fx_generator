@@ -36,11 +36,11 @@
 // No dry/wet control, no limiter, no metering.
 // ============================================================================
 
-@param({ min: 0.05, max: 12 }) sweep_ms = 2.2;      // sweep span
-@param({ min: 0.02, max: 2 }) sweep_rate_hz = 0.14; // sweep rate
-@param({ min: -0.95, max: 0.95 }) feedback = -0.55; // feedback
-@param({ min: 0, max: 1 }) stereo_offset = 0.25;    // stereo offset
-@param({ min: 800, max: 14000 }) tone_hz = 7000;    // loop damping
+@param({ min: 0.05, max: 12 }) sweep_ms = 10.10;      // sweep span
+@param({ min: 0.02, max: 2 }) sweep_rate_hz = 0.1; // sweep rate
+@param({ min: -0.95, max: 0.95 }) feedback = -0.9; // feedback
+@param({ min: 0, max: 1 }) stereo_offset = 1.0;    // stereo offset
+@param({ min: 800, max: 14000 }) tone_hz = 8000;    // loop damping
 @param({ min: -24, max: 12 }) out_gain_db = 0;      // output gain
 
 @state bufL = new FixedSampleArray(4096);

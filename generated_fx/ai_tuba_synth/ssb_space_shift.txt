@@ -24,11 +24,11 @@
 // No safety limiter, no metering.
 // ============================================================================
 
-@param({ min: 0, max: 4, steps: 5 }) interval = 2;     // shift (1/4…3/4 of f0)
-@param({ min: 0, max: 1, steps: 2 }) direction = 0;    // 0 = down, 1 = up
-@param({ min: 0, max: 1 }) glide = 0.2;               // shift glide
-@param({ min: 0, max: 0.7 }) feedback = 0;            // regeneration
-@param({ min: 0, max: 1 }) mix = 0.6;                 // dry/wet
+@param({ min: 0, max: 4, steps: 5 }) interval = 0;    // shift (1/4…3/4 of f0)
+@param({ min: 0, max: 1, steps: 2 }) direction = 1;   // 0 = down, 1 = up
+@param({ min: 0, max: 1 }) glide = 0.0;               // shift glide
+@param({ min: 0, max: 0.7 }) feedback = 0.555;        // regeneration
+@param({ min: 0, max: 1 }) mix = 1.0;                 // dry/wet
 @param({ min: -24, max: 12 }) out_gain_db = 0;        // output gain
 
 @state lReX = new FixedSampleArray(4);

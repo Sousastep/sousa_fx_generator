@@ -39,15 +39,15 @@
 // FM index
 @param({ min: 0, max: 6 }) index = 2;
 // Lower (-) / upper (+) sidebands
-@param({ min: -100, max: 100 }) low_high = -60;
+@param({ min: -100, max: 100 }) low_high = 100;
 // Odd (-) / even (+) sidebands
-@param({ min: -100, max: 100 }) odd_even = 0;
+@param({ min: -100, max: 100 }) odd_even = -100;
 // Bar morph of low/high
-@param({ min: 0, max: 100 }) bar_morph = 50;
+@param({ min: 0, max: 100 }) bar_morph = 0;
 // Morphs per bar
 @param({ min: 1, max: 16 }) morph_div = 2;
 // Dry/wet (phase-aligned dry)
-@param({ min: 0, max: 100 }) blend = 100;
+@param({ min: 0, max: 100 }) blend = 80;
 // Output gain
 @param({ min: -24, max: 12 }) out_gain_db = 0;
 
