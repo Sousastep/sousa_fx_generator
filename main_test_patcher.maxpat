@@ -9,10 +9,20 @@
             "modernui": 1
         },
         "classnamespace": "box",
-        "rect": [ 39.0, 91.0, 1724.0, 889.0 ],
+        "rect": [ 492.0, 352.0, 1724.0, 889.0 ],
         "openinpresentation": 1,
         "isolateaudio": 1,
         "boxes": [
+            {
+                "box": {
+                    "id": "obj-46",
+                    "maxclass": "live.scope~",
+                    "numinlets": 2,
+                    "numoutlets": 1,
+                    "outlettype": [ "bang" ],
+                    "patching_rect": [ 1048.0, 270.0, 184.0, 68.0 ]
+                }
+            },
             {
                 "box": {
                     "id": "obj-79",
@@ -233,10 +243,10 @@
                                     "patching_rect": [ 30.0, 110.0, 620.0, 360.0 ],
                                     "rnbo_classname": "codebox~",
                                     "rnbo_extra_attributes": {
-                                        "safemath": 1,
-                                        "code": "// ============================================================================\n// vu_ppm_meter_env.txt — moving-coil meter ballistics envelope\n//\n// From: P. Dutilleux, DAFx-98, §5.3-5.4 (VU meter = AM detector; PPM =\n//       full-wave rectifier + AR-averager, 10 ms integration / 1500 ms release,\n//       DIN 45406).\n//       esskov, \"Real-time Visualisation of Loudness along Different Time\n//       Scales\", DAFx-07, §2.1 (VU full-wave rectified with a slow, symmetric\n//       time constant and a mechanical needle; PPM peak with a long decay).\n//\n// Full-wave rectification feeds an attack/release averager, and the averaged\n// level drives a damped second-order needle model (a Chamberlin state-variable\n// lowpass at the needle resonance). The needle is the analog part: it has mass,\n// so it overshoots and rings briefly on a hard tuba attack instead of stopping\n// dead. At the defaults (300/300 ms) this is a slow VU-style body envelope; set\n// 10/1500 ms for the PPM attack/decay, or lower needle_hz for a heavier needle.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: needle deflection, 0..1 (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 5.0, max: 500.0 }) attack_ms = 300.0;   // meter integration (rise)\n@param({ min: 5.0, max: 3000.0 }) release_ms = 300.0; // meter decay\n@param({ min: 5.0, max: 30.0 }) needle_hz = 12.0;     // needle resonance\n@param({ min: 0.3, max: 1.5 }) damping = 0.7;         // needle damping (zeta)\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;       // output level\n\n@state avgLevel = 0.0;\n@state needleLp = 0.0;\n@state needleBp = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet tAtt = maximum(attack_ms, 5.0) * 0.001;\nlet tRel = maximum(release_ms, 5.0) * 0.001;\nlet cAtt = exp(0.0 - 1.0 / (tAtt * sr));\nlet cRel = exp(0.0 - 1.0 / (tRel * sr));\n\nlet x = abs(in1);\nlet coef = (x > avgLevel) ? cAtt : cRel;\navgLevel = x + coef * (avgLevel - x);\n\n// Chamberlin SVF lowpass: needle mass-spring-damper, Q = 1/(2*zeta)\nlet fNeedle = 2.0 * sin(pi * clamp(needle_hz, 5.0, 30.0) / sr);\nlet qNeedle = 2.0 * maximum(damping, 0.3);\nneedleLp = needleLp + fNeedle * needleBp;\nlet needleHp = avgLevel - needleLp - qNeedle * needleBp;\nneedleBp = needleBp + fNeedle * needleHp;\n\nout1 = needleLp * dbtoa(clamp(out_db, -24.0, 24.0));\n",
+                                        "nocache": 0,
                                         "expr": "",
-                                        "nocache": 0
+                                        "safemath": 1,
+                                        "code": "// ============================================================================\n// vu_ppm_meter_env.txt — moving-coil meter ballistics envelope\n//\n// From: P. Dutilleux, DAFx-98, §5.3-5.4 (VU meter = AM detector; PPM =\n//       full-wave rectifier + AR-averager, 10 ms integration / 1500 ms release,\n//       DIN 45406).\n//       esskov, \"Real-time Visualisation of Loudness along Different Time\n//       Scales\", DAFx-07, §2.1 (VU full-wave rectified with a slow, symmetric\n//       time constant and a mechanical needle; PPM peak with a long decay).\n//\n// Full-wave rectification feeds an attack/release averager, and the averaged\n// level drives a damped second-order needle model (a Chamberlin state-variable\n// lowpass at the needle resonance). The needle is the analog part: it has mass,\n// so it overshoots and rings briefly on a hard tuba attack instead of stopping\n// dead. At the defaults (300/300 ms) this is a slow VU-style body envelope; set\n// 10/1500 ms for the PPM attack/decay, or lower needle_hz for a heavier needle.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: needle deflection, 0..1 (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 5.0, max: 500.0 }) attack_ms = 300.0;   // meter integration (rise)\n@param({ min: 5.0, max: 3000.0 }) release_ms = 300.0; // meter decay\n@param({ min: 5.0, max: 30.0 }) needle_hz = 12.0;     // needle resonance\n@param({ min: 0.3, max: 1.5 }) damping = 0.7;         // needle damping (zeta)\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;       // output level\n\n@state avgLevel = 0.0;\n@state needleLp = 0.0;\n@state needleBp = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet tAtt = maximum(attack_ms, 5.0) * 0.001;\nlet tRel = maximum(release_ms, 5.0) * 0.001;\nlet cAtt = exp(0.0 - 1.0 / (tAtt * sr));\nlet cRel = exp(0.0 - 1.0 / (tRel * sr));\n\nlet x = abs(in1);\nlet coef = (x > avgLevel) ? cAtt : cRel;\navgLevel = x + coef * (avgLevel - x);\n\n// Chamberlin SVF lowpass: needle mass-spring-damper, Q = 1/(2*zeta)\nlet fNeedle = 2.0 * sin(pi * clamp(needle_hz, 5.0, 30.0) / sr);\nlet qNeedle = 2.0 * maximum(damping, 0.3);\nneedleLp = needleLp + fNeedle * needleBp;\nlet needleHp = avgLevel - needleLp - qNeedle * needleBp;\nneedleBp = needleBp + fNeedle * needleHp;\n\nout1 = needleLp * dbtoa(clamp(out_db, -24.0, 24.0));\n"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -620,11 +630,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_attack_ms",
@@ -699,17 +709,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 1,
@@ -1128,11 +1138,11 @@
                                     "patching_rect": [ 970.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_release_ms",
@@ -1207,17 +1217,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 2,
@@ -1636,11 +1646,11 @@
                                     "patching_rect": [ 1252.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "value_needle_hz",
@@ -1715,17 +1725,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 3,
@@ -2144,11 +2154,11 @@
                                     "patching_rect": [ 1508.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "value_damping",
@@ -2223,17 +2233,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 4,
@@ -2652,11 +2662,11 @@
                                     "patching_rect": [ 700.0, 230.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 5,
                                     "rnbo_uniqueid": "value_out_db",
@@ -2731,17 +2741,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 5,
@@ -3264,23 +3274,23 @@
                             "isEnum": 0,
                             "parsestring": ""
                         },
-                        "release_ms": {
-                            "label": "release_ms",
-                            "isEnum": 0,
-                            "parsestring": ""
-                        },
                         "out_db": {
                             "label": "out_db",
                             "isEnum": 0,
                             "parsestring": ""
                         },
-                        "needle_hz": {
-                            "label": "needle_hz",
+                        "release_ms": {
+                            "label": "release_ms",
                             "isEnum": 0,
                             "parsestring": ""
                         },
                         "attack_ms": {
                             "label": "attack_ms",
+                            "isEnum": 0,
+                            "parsestring": ""
+                        },
+                        "needle_hz": {
+                            "label": "needle_hz",
                             "isEnum": 0,
                             "parsestring": ""
                         }
@@ -3435,10 +3445,10 @@
                                     "patching_rect": [ 30.0, 110.0, 620.0, 360.0 ],
                                     "rnbo_classname": "codebox~",
                                     "rnbo_extra_attributes": {
-                                        "safemath": 1,
-                                        "code": "// ============================================================================\n// vactrol_opto_env.txt — vactrol LED + CdS photoresistor envelope\n//\n// From: J. Najnudel, R. Müller, T. Hélie & D. Roze, \"Power-Balanced Dynamic\n//       Modeling of Vactrols: Application to a VTL5C3/2\", DAFx-23, paper 50,\n//       §1 (LDR turn-on is fast, turn-off is hundreds of ms and slows after\n//       sustained light), §3 Eqs. 3-4 (photocarrier storage and recombination),\n//       §5 (identified VTL5C3/2 resistance law).\n//\n// This is a reduced signal-level model of that cell, not the full port-\n// Hamiltonian circuit: rectified audio drives the LED, the LDR conductance\n// follows light^gamma, and the release time is stretched by a short exposure\n// memory so a sustained note leaves the cell \"charged\" and slower to fall.\n// The attack shortens as the LED gets brighter, which is the vactrol's\n// characteristic program dependence. Output is normalized photoconductance:\n// 0 = dark (R_dark), 1 = full light (R_light).\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: normalized LDR conductance, 0..1 (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: -24.0, max: 24.0 }) sensitivity_db = 0.0; // LED drive trim\n@param({ min: 20.0, max: 2000.0 }) release_ms = 300.0;  // dark decay\n@param({ min: 0.0, max: 1.0 }) program = 0.6;           // exposure memory depth\n@param({ min: 0.5, max: 1.5 }) curve = 0.8;             // LDR gamma\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;         // output level\n\n@state ldrCond = 0.0;\n@state exposure = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet drive = minimum(abs(in1) * dbtoa(clamp(sensitivity_db, -24.0, 24.0)), 1.0);\nlet target = pow(drive, clamp(curve, 0.5, 1.5));\n\n// 0.8 s exposure memory: how much light the cell has recently seen\nexposure = drive + exp(0.0 - 1.0 / (0.8 * sr)) * (exposure - drive);\nlet prog = clamp(program, 0.0, 1.0) * clamp(exposure * 2.0, 0.0, 1.0);\n\n// Attack shortens with brightness; release stretches after sustained light\nlet attMs = 8.0 / (1.0 + 6.0 * drive);\nlet relMs = maximum(release_ms, 20.0) * (1.0 + 4.0 * prog);\nlet tauMs = (target > ldrCond) ? attMs : relMs;\nldrCond = target + exp(0.0 - 1.0 / (tauMs * 0.001 * sr)) * (ldrCond - target);\n\nout1 = ldrCond * dbtoa(clamp(out_db, -24.0, 24.0));\n",
+                                        "nocache": 0,
                                         "expr": "",
-                                        "nocache": 0
+                                        "safemath": 1,
+                                        "code": "// ============================================================================\n// vactrol_opto_env.txt — vactrol LED + CdS photoresistor envelope\n//\n// From: J. Najnudel, R. Müller, T. Hélie & D. Roze, \"Power-Balanced Dynamic\n//       Modeling of Vactrols: Application to a VTL5C3/2\", DAFx-23, paper 50,\n//       §1 (LDR turn-on is fast, turn-off is hundreds of ms and slows after\n//       sustained light), §3 Eqs. 3-4 (photocarrier storage and recombination),\n//       §5 (identified VTL5C3/2 resistance law).\n//\n// This is a reduced signal-level model of that cell, not the full port-\n// Hamiltonian circuit: rectified audio drives the LED, the LDR conductance\n// follows light^gamma, and the release time is stretched by a short exposure\n// memory so a sustained note leaves the cell \"charged\" and slower to fall.\n// The attack shortens as the LED gets brighter, which is the vactrol's\n// characteristic program dependence. Output is normalized photoconductance:\n// 0 = dark (R_dark), 1 = full light (R_light).\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: normalized LDR conductance, 0..1 (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: -24.0, max: 24.0 }) sensitivity_db = 0.0; // LED drive trim\n@param({ min: 20.0, max: 2000.0 }) release_ms = 300.0;  // dark decay\n@param({ min: 0.0, max: 1.0 }) program = 0.6;           // exposure memory depth\n@param({ min: 0.5, max: 1.5 }) curve = 0.8;             // LDR gamma\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;         // output level\n\n@state ldrCond = 0.0;\n@state exposure = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet drive = minimum(abs(in1) * dbtoa(clamp(sensitivity_db, -24.0, 24.0)), 1.0);\nlet target = pow(drive, clamp(curve, 0.5, 1.5));\n\n// 0.8 s exposure memory: how much light the cell has recently seen\nexposure = drive + exp(0.0 - 1.0 / (0.8 * sr)) * (exposure - drive);\nlet prog = clamp(program, 0.0, 1.0) * clamp(exposure * 2.0, 0.0, 1.0);\n\n// Attack shortens with brightness; release stretches after sustained light\nlet attMs = 8.0 / (1.0 + 6.0 * drive);\nlet relMs = maximum(release_ms, 20.0) * (1.0 + 4.0 * prog);\nlet tauMs = (target > ldrCond) ? attMs : relMs;\nldrCond = target + exp(0.0 - 1.0 / (tauMs * 0.001 * sr)) * (ldrCond - target);\n\nout1 = ldrCond * dbtoa(clamp(out_db, -24.0, 24.0));\n"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -3822,11 +3832,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_sensitivity_db",
@@ -3901,17 +3911,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 1,
@@ -4330,11 +4340,11 @@
                                     "patching_rect": [ 996.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_release_ms",
@@ -4409,17 +4419,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 2,
@@ -4838,11 +4848,11 @@
                                     "patching_rect": [ 1285.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "value_program",
@@ -4917,17 +4927,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 3,
@@ -5346,11 +5356,11 @@
                                     "patching_rect": [ 1529.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "value_curve",
@@ -5425,17 +5435,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 4,
@@ -5854,11 +5864,11 @@
                                     "patching_rect": [ 700.0, 230.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 5,
                                     "rnbo_uniqueid": "value_out_db",
@@ -5933,17 +5943,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 5,
@@ -6466,23 +6476,23 @@
                             "isEnum": 0,
                             "parsestring": ""
                         },
-                        "release_ms": {
-                            "label": "release_ms",
-                            "isEnum": 0,
-                            "parsestring": ""
-                        },
-                        "curve": {
-                            "label": "curve",
-                            "isEnum": 0,
-                            "parsestring": ""
-                        },
                         "out_db": {
                             "label": "out_db",
                             "isEnum": 0,
                             "parsestring": ""
                         },
+                        "release_ms": {
+                            "label": "release_ms",
+                            "isEnum": 0,
+                            "parsestring": ""
+                        },
                         "sensitivity_db": {
                             "label": "sensitivity_db",
+                            "isEnum": 0,
+                            "parsestring": ""
+                        },
+                        "curve": {
+                            "label": "curve",
                             "isEnum": 0,
                             "parsestring": ""
                         }
@@ -6637,10 +6647,10 @@
                                     "patching_rect": [ 30.0, 110.0, 620.0, 360.0 ],
                                     "rnbo_classname": "codebox~",
                                     "rnbo_extra_attributes": {
-                                        "safemath": 1,
-                                        "code": "// ============================================================================\n// rms_true_follower.txt — true-RMS energy envelope\n//\n// From: F. Floru, \"Attack and Release Time Constants in RMS-Based Feedback\n//       Compressors\", AES 104th Convention 1998, preprint 4703, §1-2\n//       (true RMS detector, linear- vs log-domain output).\n//       P. Dutilleux, DAFx-98, §5.1-5.2, §5.4 (squarer detector + averager;\n//       RMS detector + AR-averager as the preferred amplitude follower).\n//\n// Square the input, average the power with a symmetric RMS window, take the\n// square root, then let an attack/release smoother shape how fast the reading\n// is allowed to move. The symmetric window is what makes it true RMS: an\n// attack/release average of the square is actually a peak-biased detector at\n// low frequencies (a 100 Hz sine with 10/500 ms reads about +2.7 dB high).\n// The AR stage after the root gives the musical ballistics without that bias.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: RMS envelope control signal, 0..1 linear (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 5.0, max: 500.0 }) rms_ms = 50.0;       // RMS measurement window\n@param({ min: 0.5, max: 200.0 }) attack_ms = 5.0;    // reading attack\n@param({ min: 10.0, max: 4000.0 }) release_ms = 500.0; // reading release\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;      // output level\n\n@state powerAvg = 0.0;\n@state rmsSm = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet tRms = maximum(rms_ms, 5.0) * 0.001;\nlet cRms = exp(0.0 - 1.0 / (tRms * sr));\n\nlet x = in1;\nlet p = x * x;\npowerAvg = p + cRms * (powerAvg - p);\nlet rmsRaw = sqrt(maximum(powerAvg, 0.0));\n\nlet tAtt = maximum(attack_ms, 0.05) * 0.001;\nlet tRel = maximum(release_ms, 0.05) * 0.001;\nlet cAtt = exp(0.0 - 1.0 / (tAtt * sr));\nlet cRel = exp(0.0 - 1.0 / (tRel * sr));\nlet coef = (rmsRaw > rmsSm) ? cAtt : cRel;\nrmsSm = rmsRaw + coef * (rmsSm - rmsRaw);\n\nout1 = rmsSm * dbtoa(clamp(out_db, -24.0, 24.0));\n",
+                                        "nocache": 0,
                                         "expr": "",
-                                        "nocache": 0
+                                        "safemath": 1,
+                                        "code": "// ============================================================================\n// rms_true_follower.txt — true-RMS energy envelope\n//\n// From: F. Floru, \"Attack and Release Time Constants in RMS-Based Feedback\n//       Compressors\", AES 104th Convention 1998, preprint 4703, §1-2\n//       (true RMS detector, linear- vs log-domain output).\n//       P. Dutilleux, DAFx-98, §5.1-5.2, §5.4 (squarer detector + averager;\n//       RMS detector + AR-averager as the preferred amplitude follower).\n//\n// Square the input, average the power with a symmetric RMS window, take the\n// square root, then let an attack/release smoother shape how fast the reading\n// is allowed to move. The symmetric window is what makes it true RMS: an\n// attack/release average of the square is actually a peak-biased detector at\n// low frequencies (a 100 Hz sine with 10/500 ms reads about +2.7 dB high).\n// The AR stage after the root gives the musical ballistics without that bias.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: RMS envelope control signal, 0..1 linear (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 5.0, max: 500.0 }) rms_ms = 50.0;       // RMS measurement window\n@param({ min: 0.5, max: 200.0 }) attack_ms = 5.0;    // reading attack\n@param({ min: 10.0, max: 4000.0 }) release_ms = 500.0; // reading release\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;      // output level\n\n@state powerAvg = 0.0;\n@state rmsSm = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet tRms = maximum(rms_ms, 5.0) * 0.001;\nlet cRms = exp(0.0 - 1.0 / (tRms * sr));\n\nlet x = in1;\nlet p = x * x;\npowerAvg = p + cRms * (powerAvg - p);\nlet rmsRaw = sqrt(maximum(powerAvg, 0.0));\n\nlet tAtt = maximum(attack_ms, 0.05) * 0.001;\nlet tRel = maximum(release_ms, 0.05) * 0.001;\nlet cAtt = exp(0.0 - 1.0 / (tAtt * sr));\nlet cRel = exp(0.0 - 1.0 / (tRel * sr));\nlet coef = (rmsRaw > rmsSm) ? cAtt : cRel;\nrmsSm = rmsRaw + coef * (rmsSm - rmsRaw);\n\nout1 = rmsSm * dbtoa(clamp(out_db, -24.0, 24.0));\n"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -7011,11 +7021,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_rms_ms",
@@ -7090,17 +7100,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 1,
@@ -7519,11 +7529,11 @@
                                     "patching_rect": [ 944.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_attack_ms",
@@ -7598,17 +7608,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 2,
@@ -8027,11 +8037,11 @@
                                     "patching_rect": [ 1214.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "value_release_ms",
@@ -8106,17 +8116,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 3,
@@ -8535,11 +8545,11 @@
                                     "patching_rect": [ 1503.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "value_out_db",
@@ -8614,17 +8624,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 4,
@@ -9124,8 +9134,8 @@
                     },
                     "patching_rect": [ 1466.0, 469.66666666666674, 321.0, 22.0 ],
                     "rnboattrcache": {
-                        "release_ms": {
-                            "label": "release_ms",
+                        "rms_ms": {
+                            "label": "rms_ms",
                             "isEnum": 0,
                             "parsestring": ""
                         },
@@ -9134,8 +9144,8 @@
                             "isEnum": 0,
                             "parsestring": ""
                         },
-                        "rms_ms": {
-                            "label": "rms_ms",
+                        "release_ms": {
+                            "label": "release_ms",
                             "isEnum": 0,
                             "parsestring": ""
                         },
@@ -9289,10 +9299,10 @@
                                     "patching_rect": [ 30.0, 110.0, 620.0, 360.0 ],
                                     "rnbo_classname": "codebox~",
                                     "rnbo_extra_attributes": {
-                                        "safemath": 1,
-                                        "code": "// ============================================================================\n// peak_ar_follower.txt — full-wave peak envelope with independent attack/release\n//\n// From: F. Floru, \"Attack and Release Time Constants in RMS-Based Feedback\n//       Compressors\", AES 104th Convention 1998, preprint 4703, §1-2\n//       (peak vs average vs true-RMS detectors).\n//       P. Dutilleux, \"Filters, Delays, Modulations and Demodulations:\n//       A Tutorial\", DAFx-98, §5.1-5.2 (half/full-wave detectors and the\n//       AR-averager with McNally's two fixed coefficients).\n//\n// The detector is a full-wave rectifier followed by one exponential averager\n// whose coefficient is chosen per sample from the attack/release pair. Output\n// is the linear peak envelope, the fast and literal reading of the tuba's\n// loudness; the release is the only memory. No look-ahead, no limiter.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: envelope control signal, 0..1 linear (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 0.1, max: 100.0 }) attack_ms = 5.0;    // attack time\n@param({ min: 5.0, max: 2000.0 }) release_ms = 250.0; // release time\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;      // output level\n\n@state envPeak = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet tAtt = maximum(attack_ms, 0.05) * 0.001;\nlet tRel = maximum(release_ms, 0.05) * 0.001;\nlet cAtt = exp(0.0 - 1.0 / (tAtt * sr));\nlet cRel = exp(0.0 - 1.0 / (tRel * sr));\n\nlet x = abs(in1);\nlet coef = (x > envPeak) ? cAtt : cRel;\nenvPeak = x + coef * (envPeak - x);\n\nout1 = envPeak * dbtoa(clamp(out_db, -24.0, 24.0));\n",
+                                        "nocache": 0,
                                         "expr": "",
-                                        "nocache": 0
+                                        "safemath": 1,
+                                        "code": "// ============================================================================\n// peak_ar_follower.txt — full-wave peak envelope with independent attack/release\n//\n// From: F. Floru, \"Attack and Release Time Constants in RMS-Based Feedback\n//       Compressors\", AES 104th Convention 1998, preprint 4703, §1-2\n//       (peak vs average vs true-RMS detectors).\n//       P. Dutilleux, \"Filters, Delays, Modulations and Demodulations:\n//       A Tutorial\", DAFx-98, §5.1-5.2 (half/full-wave detectors and the\n//       AR-averager with McNally's two fixed coefficients).\n//\n// The detector is a full-wave rectifier followed by one exponential averager\n// whose coefficient is chosen per sample from the attack/release pair. Output\n// is the linear peak envelope, the fast and literal reading of the tuba's\n// loudness; the release is the only memory. No look-ahead, no limiter.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: envelope control signal, 0..1 linear (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 0.1, max: 100.0 }) attack_ms = 5.0;    // attack time\n@param({ min: 5.0, max: 2000.0 }) release_ms = 250.0; // release time\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;      // output level\n\n@state envPeak = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet tAtt = maximum(attack_ms, 0.05) * 0.001;\nlet tRel = maximum(release_ms, 0.05) * 0.001;\nlet cAtt = exp(0.0 - 1.0 / (tAtt * sr));\nlet cRel = exp(0.0 - 1.0 / (tRel * sr));\n\nlet x = abs(in1);\nlet coef = (x > envPeak) ? cAtt : cRel;\nenvPeak = x + coef * (envPeak - x);\n\nout1 = envPeak * dbtoa(clamp(out_db, -24.0, 24.0));\n"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -9650,11 +9660,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_attack_ms",
@@ -9729,17 +9739,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 1,
@@ -10158,11 +10168,11 @@
                                     "patching_rect": [ 970.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_release_ms",
@@ -10237,17 +10247,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 2,
@@ -10666,11 +10676,11 @@
                                     "patching_rect": [ 1252.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "value_out_db",
@@ -10745,17 +10755,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 3,
@@ -11237,13 +11247,13 @@
                     },
                     "patching_rect": [ 1466.0, 412.50000000000006, 317.0, 22.0 ],
                     "rnboattrcache": {
-                        "release_ms": {
-                            "label": "release_ms",
+                        "out_db": {
+                            "label": "out_db",
                             "isEnum": 0,
                             "parsestring": ""
                         },
-                        "out_db": {
-                            "label": "out_db",
+                        "release_ms": {
+                            "label": "release_ms",
                             "isEnum": 0,
                             "parsestring": ""
                         },
@@ -11391,10 +11401,10 @@
                                     "patching_rect": [ 30.0, 110.0, 620.0, 360.0 ],
                                     "rnbo_classname": "codebox~",
                                     "rnbo_extra_attributes": {
-                                        "safemath": 1,
-                                        "code": "// ============================================================================\n// log_db_follower.txt — envelope followed in the decibel domain\n//\n// From: F. Floru, \"Attack and Release Time Constants in RMS-Based Feedback\n//       Compressors\", AES 104th Convention 1998, preprint 4703, §2.2.1-2.2.2\n//       (logarithmic-output RMS detector and dB-linear integrator) and §4.3\n//       (the log filter's diode gives a slower attack than a linear RC filter).\n//       P. Dutilleux, DAFx-98, §5.2 (one-pole averager time constant).\n//\n// Rectify, convert to dB, run the attack/release one-pole on the dB value, then\n// convert back. Because the averaging happens in dB, the release falls at a\n// constant number of dB per second instead of a constant fraction of the\n// amplitude: a long tuba note fades like a fader or an opto cell, not like an\n// RC discharge. The floor_db clamp keeps log(0) out of the math and subtracts\n// the floor so silence is exactly zero on out1.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: envelope control signal, 0..1 linear (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 0.5, max: 500.0 }) attack_ms = 5.0;     // dB attack time\n@param({ min: 10.0, max: 5000.0 }) release_ms = 500.0; // dB release time\n@param({ min: -90.0, max: -20.0 }) floor_db = -60.0;   // silence floor\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;        // output level\n\n@state envDb = -120.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet tAtt = maximum(attack_ms, 0.05) * 0.001;\nlet tRel = maximum(release_ms, 0.05) * 0.001;\nlet cAtt = exp(0.0 - 1.0 / (tAtt * sr));\nlet cRel = exp(0.0 - 1.0 / (tRel * sr));\n\nlet x = maximum(abs(in1), 0.000001);\nlet xDb = log(x) * 8.685889638;   // 20 * log10(x)\nlet flrDb = clamp(floor_db, -90.0, -20.0);\nlet target = maximum(xDb, flrDb);\n\nlet coef = (target > envDb) ? cAtt : cRel;\nenvDb = target + coef * (envDb - target);\n\nlet flrAmp = dbtoa(flrDb);\nlet amp = maximum(0.0, dbtoa(envDb) - flrAmp);\nout1 = amp * dbtoa(clamp(out_db, -24.0, 24.0));\n",
+                                        "nocache": 0,
                                         "expr": "",
-                                        "nocache": 0
+                                        "safemath": 1,
+                                        "code": "// ============================================================================\n// log_db_follower.txt — envelope followed in the decibel domain\n//\n// From: F. Floru, \"Attack and Release Time Constants in RMS-Based Feedback\n//       Compressors\", AES 104th Convention 1998, preprint 4703, §2.2.1-2.2.2\n//       (logarithmic-output RMS detector and dB-linear integrator) and §4.3\n//       (the log filter's diode gives a slower attack than a linear RC filter).\n//       P. Dutilleux, DAFx-98, §5.2 (one-pole averager time constant).\n//\n// Rectify, convert to dB, run the attack/release one-pole on the dB value, then\n// convert back. Because the averaging happens in dB, the release falls at a\n// constant number of dB per second instead of a constant fraction of the\n// amplitude: a long tuba note fades like a fader or an opto cell, not like an\n// RC discharge. The floor_db clamp keeps log(0) out of the math and subtracts\n// the floor so silence is exactly zero on out1.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: envelope control signal, 0..1 linear (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 0.5, max: 500.0 }) attack_ms = 5.0;     // dB attack time\n@param({ min: 10.0, max: 5000.0 }) release_ms = 500.0; // dB release time\n@param({ min: -90.0, max: -20.0 }) floor_db = -60.0;   // silence floor\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;        // output level\n\n@state envDb = -120.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet tAtt = maximum(attack_ms, 0.05) * 0.001;\nlet tRel = maximum(release_ms, 0.05) * 0.001;\nlet cAtt = exp(0.0 - 1.0 / (tAtt * sr));\nlet cRel = exp(0.0 - 1.0 / (tRel * sr));\n\nlet x = maximum(abs(in1), 0.000001);\nlet xDb = log(x) * 8.685889638;   // 20 * log10(x)\nlet flrDb = clamp(floor_db, -90.0, -20.0);\nlet target = maximum(xDb, flrDb);\n\nlet coef = (target > envDb) ? cAtt : cRel;\nenvDb = target + coef * (envDb - target);\n\nlet flrAmp = dbtoa(flrDb);\nlet amp = maximum(0.0, dbtoa(envDb) - flrAmp);\nout1 = amp * dbtoa(clamp(out_db, -24.0, 24.0));\n"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -11765,11 +11775,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_attack_ms",
@@ -11844,17 +11854,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 1,
@@ -12273,11 +12283,11 @@
                                     "patching_rect": [ 970.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_release_ms",
@@ -12352,17 +12362,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 2,
@@ -12781,11 +12791,11 @@
                                     "patching_rect": [ 1259.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "value_floor_db",
@@ -12860,17 +12870,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 3,
@@ -13289,11 +13299,11 @@
                                     "patching_rect": [ 1535.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "value_out_db",
@@ -13368,17 +13378,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 4,
@@ -13878,8 +13888,8 @@
                     },
                     "patching_rect": [ 1466.0, 355.33333333333337, 309.0, 22.0 ],
                     "rnboattrcache": {
-                        "floor_db": {
-                            "label": "floor_db",
+                        "out_db": {
+                            "label": "out_db",
                             "isEnum": 0,
                             "parsestring": ""
                         },
@@ -13888,8 +13898,8 @@
                             "isEnum": 0,
                             "parsestring": ""
                         },
-                        "out_db": {
-                            "label": "out_db",
+                        "floor_db": {
+                            "label": "floor_db",
                             "isEnum": 0,
                             "parsestring": ""
                         },
@@ -14043,10 +14053,10 @@
                                     "patching_rect": [ 30.0, 110.0, 620.0, 360.0 ],
                                     "rnbo_classname": "codebox~",
                                     "rnbo_extra_attributes": {
-                                        "safemath": 1,
-                                        "code": "// ============================================================================\n// hilbert_envelope.txt — analytic-signal (Hilbert) amplitude envelope\n//\n// From: P. Dutilleux, \"Filters, Delays, Modulations and Demodulations:\n//       A Tutorial\", DAFx-98, §5.1 (instantaneous envelope detector\n//       d_i2(t) = sqrt(x^2 + x_hat^2), the magnitude of the analytic signal)\n//       and §5.4 (the instantaneous detector without an averager follows the\n//       amplitude with the finest resolution, at the cost of audio-band ripple).\n//\n// Four one-pole allpass sections per branch form a quadrature pair; the\n// magnitude sqrt(re^2 + im^2) is the instantaneous amplitude, with no rectifier\n// and no threshold. This is the lowest-latency envelope in the batch and the\n// only one that is polarity-independent by construction, which makes it the\n// best choice for transient-accurate modulation of pitch or cutoff.\n//\n// Caveat: |analytic| is exactly the envelope of a narrowband (sine-like)\n// signal. A tuba is a harmonic stack, so its analytic magnitude also contains\n// the waveform's intra-cycle shape, especially at 30-60 Hz; raise smooth_ms to\n// 30-50 ms for a loudness-like contour, or use the peak/RMS/cascade followers\n// for that job. At 5 ms a pure 30 Hz sine ripples 5.8%; a three-harmonic 30 Hz\n// tone ripples far more because the ripple is the waveform, not quadrature\n// error.\n//\n// The allpass is the pole-at-c form\n//     y[n] = c*(x[n] + y[n-1]) - x[n-1]     H(z) = (c - z^-1)/(1 - c z^-1)\n// which is the recursion the cR/cI coefficient sets below were fitted for.\n// The `c*(x[n] - y[n-1]) + x[n-1]` form is a different allpass (pole at -c)\n// and is not in quadrature with these coefficients.\n// The coefficients assume 44.1-48 kHz; at 96 kHz the quadrature drifts at the\n// bottom of the tuba range.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: analytic amplitude, 0..1 (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 0.5, max: 50.0 }) smooth_ms = 10.0;  // de-ripple time\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;    // output level\n\n// Per-section x[n-1] and y[n-1] for each of four allpass stages\n@state reX = new FixedSampleArray(4);\n@state reY = new FixedSampleArray(4);\n@state imX = new FixedSampleArray(4);\n@state imY = new FixedSampleArray(4);\n@state envSm = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\n\n// Quadrature allpass coefficients (one set per branch)\nlet cR0 = 0.4794008656; let cR1 = 0.8762184935;\nlet cR2 = 0.9765975895; let cR3 = 0.9974992559;\nlet cI0 = 0.1617584983; let cI1 = 0.7330289323;\nlet cI2 = 0.9453497003; let cI3 = 0.9905991567;\n\n// Real branch\nlet re = in1;\nlet t = cR0 * (re + reY[0]) - reX[0]; reX[0] = re; reY[0] = t; re = t;\nt = cR1 * (re + reY[1]) - reX[1]; reX[1] = re; reY[1] = t; re = t;\nt = cR2 * (re + reY[2]) - reX[2]; reX[2] = re; reY[2] = t; re = t;\nt = cR3 * (re + reY[3]) - reX[3]; reX[3] = re; reY[3] = t; re = t;\n\n// Imaginary (Hilbert) branch\nlet im = in1;\nt = cI0 * (im + imY[0]) - imX[0]; imX[0] = im; imY[0] = t; im = t;\nt = cI1 * (im + imY[1]) - imX[1]; imX[1] = im; imY[1] = t; im = t;\nt = cI2 * (im + imY[2]) - imX[2]; imX[2] = im; imY[2] = t; im = t;\nt = cI3 * (im + imY[3]) - imX[3]; imX[3] = im; imY[3] = t; im = t;\n\n// Analytic magnitude, then a short de-ripple (the 2f residue of quadrature)\nlet analytic = sqrt(re * re + im * im);\nlet cSm = exp(0.0 - 1.0 / (maximum(smooth_ms, 0.5) * 0.001 * sr));\nenvSm = analytic + cSm * (envSm - analytic);\n\nout1 = envSm * dbtoa(clamp(out_db, -24.0, 24.0));\n",
+                                        "nocache": 0,
                                         "expr": "",
-                                        "nocache": 0
+                                        "safemath": 1,
+                                        "code": "// ============================================================================\n// hilbert_envelope.txt — analytic-signal (Hilbert) amplitude envelope\n//\n// From: P. Dutilleux, \"Filters, Delays, Modulations and Demodulations:\n//       A Tutorial\", DAFx-98, §5.1 (instantaneous envelope detector\n//       d_i2(t) = sqrt(x^2 + x_hat^2), the magnitude of the analytic signal)\n//       and §5.4 (the instantaneous detector without an averager follows the\n//       amplitude with the finest resolution, at the cost of audio-band ripple).\n//\n// Four one-pole allpass sections per branch form a quadrature pair; the\n// magnitude sqrt(re^2 + im^2) is the instantaneous amplitude, with no rectifier\n// and no threshold. This is the lowest-latency envelope in the batch and the\n// only one that is polarity-independent by construction, which makes it the\n// best choice for transient-accurate modulation of pitch or cutoff.\n//\n// Caveat: |analytic| is exactly the envelope of a narrowband (sine-like)\n// signal. A tuba is a harmonic stack, so its analytic magnitude also contains\n// the waveform's intra-cycle shape, especially at 30-60 Hz; raise smooth_ms to\n// 30-50 ms for a loudness-like contour, or use the peak/RMS/cascade followers\n// for that job. At 5 ms a pure 30 Hz sine ripples 5.8%; a three-harmonic 30 Hz\n// tone ripples far more because the ripple is the waveform, not quadrature\n// error.\n//\n// The allpass is the pole-at-c form\n//     y[n] = c*(x[n] + y[n-1]) - x[n-1]     H(z) = (c - z^-1)/(1 - c z^-1)\n// which is the recursion the cR/cI coefficient sets below were fitted for.\n// The `c*(x[n] - y[n-1]) + x[n-1]` form is a different allpass (pole at -c)\n// and is not in quadrature with these coefficients.\n// The coefficients assume 44.1-48 kHz; at 96 kHz the quadrature drifts at the\n// bottom of the tuba range.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: analytic amplitude, 0..1 (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 0.5, max: 50.0 }) smooth_ms = 10.0;  // de-ripple time\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;    // output level\n\n// Per-section x[n-1] and y[n-1] for each of four allpass stages\n@state reX = new FixedSampleArray(4);\n@state reY = new FixedSampleArray(4);\n@state imX = new FixedSampleArray(4);\n@state imY = new FixedSampleArray(4);\n@state envSm = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\n\n// Quadrature allpass coefficients (one set per branch)\nlet cR0 = 0.4794008656; let cR1 = 0.8762184935;\nlet cR2 = 0.9765975895; let cR3 = 0.9974992559;\nlet cI0 = 0.1617584983; let cI1 = 0.7330289323;\nlet cI2 = 0.9453497003; let cI3 = 0.9905991567;\n\n// Real branch\nlet re = in1;\nlet t = cR0 * (re + reY[0]) - reX[0]; reX[0] = re; reY[0] = t; re = t;\nt = cR1 * (re + reY[1]) - reX[1]; reX[1] = re; reY[1] = t; re = t;\nt = cR2 * (re + reY[2]) - reX[2]; reX[2] = re; reY[2] = t; re = t;\nt = cR3 * (re + reY[3]) - reX[3]; reX[3] = re; reY[3] = t; re = t;\n\n// Imaginary (Hilbert) branch\nlet im = in1;\nt = cI0 * (im + imY[0]) - imX[0]; imX[0] = im; imY[0] = t; im = t;\nt = cI1 * (im + imY[1]) - imX[1]; imX[1] = im; imY[1] = t; im = t;\nt = cI2 * (im + imY[2]) - imX[2]; imX[2] = im; imY[2] = t; im = t;\nt = cI3 * (im + imY[3]) - imX[3]; imX[3] = im; imY[3] = t; im = t;\n\n// Analytic magnitude, then a short de-ripple (the 2f residue of quadrature)\nlet analytic = sqrt(re * re + im * im);\nlet cSm = exp(0.0 - 1.0 / (maximum(smooth_ms, 0.5) * 0.001 * sr));\nenvSm = analytic + cSm * (envSm - analytic);\n\nout1 = envSm * dbtoa(clamp(out_db, -24.0, 24.0));\n"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -14391,11 +14401,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_smooth_ms",
@@ -14470,17 +14480,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 1,
@@ -14899,11 +14909,11 @@
                                     "patching_rect": [ 970.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_out_db",
@@ -14978,17 +14988,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 2,
@@ -15452,13 +15462,13 @@
                     },
                     "patching_rect": [ 1466.0, 298.1666666666667, 313.0, 22.0 ],
                     "rnboattrcache": {
-                        "smooth_ms": {
-                            "label": "smooth_ms",
+                        "out_db": {
+                            "label": "out_db",
                             "isEnum": 0,
                             "parsestring": ""
                         },
-                        "out_db": {
-                            "label": "out_db",
+                        "smooth_ms": {
+                            "label": "smooth_ms",
                             "isEnum": 0,
                             "parsestring": ""
                         }
@@ -15595,10 +15605,10 @@
                                     "patching_rect": [ 30.0, 110.0, 620.0, 360.0 ],
                                     "rnbo_classname": "codebox~",
                                     "rnbo_extra_attributes": {
-                                        "safemath": 1,
-                                        "code": "// ============================================================================\n// cascade_env_follower.txt — cascaded exponential-smoother envelope\n//\n// From: D. Sanfilippo, \"Envelope Following via Cascaded Exponential Smoothers\n//       for Low-Distortion Peak Limiting and Maximisation\", SMC-22, §2.2\n//       Eqs. 2-4 (M cascaded one-poles with per-stage attack/release) and\n//       §2.4 (overshoot / THD of the cascaded attack-release smoother).\n//\n// One attack/release one-pole has a corner in its slope at every attack-to-\n// release transition. Cascading M identical stages makes the envelope\n// continuous in its derivatives up to order M-1, so when this control signal\n// multiplies a gain, a filter cutoff or a pitch it produces far less sideband\n// splatter than a single-stage follower. The paper normalizes the stages by\n// their cutoff (C_M); here the stages are normalized by step time instead, so\n// attack_ms/release_ms are the *composite* 63% times a musician expects:\n// q_M = 1.0, 2.15, 3.26, 4.35, 5.43, 6.51, 7.57, 8.64 for M = 1..8.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: envelope control signal, 0..1 linear (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 0.1, max: 100.0 }) attack_ms = 5.0;    // composite attack time\n@param({ min: 5.0, max: 2000.0 }) release_ms = 300.0; // composite release time\n@param({ min: 2, max: 8, steps: 7 }) stages = 4;      // cascade order\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;      // output level\n\n@state casc = new FixedSampleArray(8);\n@state qTab = new FixedFloat32Array([1.0, 2.1457, 3.2577, 4.3513, 5.4333, 6.5072, 7.5748, 8.6377]);\n\nlet sr = maximum(samplerate(), 1.0);\nlet tAtt = maximum(attack_ms, 0.05) * 0.001;\nlet tRel = maximum(release_ms, 0.05) * 0.001;\n\nlet nSt: Int = clamp(floor(stages + 0.5), 2, 8);\nlet qM = qTab[nSt - 1];\nlet aAtt = exp(0.0 - qM / (tAtt * sr));\nlet aRel = exp(0.0 - qM / (tRel * sr));\n\nlet x = abs(in1);\nfor (let i: Int = 0; i < nSt; i++) {\n    let s = casc[i];\n    let a = (x > s) ? aAtt : aRel;\n    s = x + a * (s - x);\n    casc[i] = s;\n    x = s;\n}\n\nout1 = x * dbtoa(clamp(out_db, -24.0, 24.0));\n",
+                                        "nocache": 0,
                                         "expr": "",
-                                        "nocache": 0
+                                        "safemath": 1,
+                                        "code": "// ============================================================================\n// cascade_env_follower.txt — cascaded exponential-smoother envelope\n//\n// From: D. Sanfilippo, \"Envelope Following via Cascaded Exponential Smoothers\n//       for Low-Distortion Peak Limiting and Maximisation\", SMC-22, §2.2\n//       Eqs. 2-4 (M cascaded one-poles with per-stage attack/release) and\n//       §2.4 (overshoot / THD of the cascaded attack-release smoother).\n//\n// One attack/release one-pole has a corner in its slope at every attack-to-\n// release transition. Cascading M identical stages makes the envelope\n// continuous in its derivatives up to order M-1, so when this control signal\n// multiplies a gain, a filter cutoff or a pitch it produces far less sideband\n// splatter than a single-stage follower. The paper normalizes the stages by\n// their cutoff (C_M); here the stages are normalized by step time instead, so\n// attack_ms/release_ms are the *composite* 63% times a musician expects:\n// q_M = 1.0, 2.15, 3.26, 4.35, 5.43, 6.51, 7.57, 8.64 for M = 1..8.\n//\n// Inlets:\n//   in1: tuba audio (mono)\n// Outlets:\n//   out1: envelope control signal, 0..1 linear (audio-rate), scaled by out_db\n// ============================================================================\n\n@param({ min: 0.1, max: 100.0 }) attack_ms = 5.0;    // composite attack time\n@param({ min: 5.0, max: 2000.0 }) release_ms = 300.0; // composite release time\n@param({ min: 2, max: 8, steps: 7 }) stages = 4;      // cascade order\n@param({ min: -24.0, max: 24.0 }) out_db = 0.0;      // output level\n\n@state casc = new FixedSampleArray(8);\n@state qTab = new FixedFloat32Array([1.0, 2.1457, 3.2577, 4.3513, 5.4333, 6.5072, 7.5748, 8.6377]);\n\nlet sr = maximum(samplerate(), 1.0);\nlet tAtt = maximum(attack_ms, 0.05) * 0.001;\nlet tRel = maximum(release_ms, 0.05) * 0.001;\n\nlet nSt: Int = clamp(floor(stages + 0.5), 2, 8);\nlet qM = qTab[nSt - 1];\nlet aAtt = exp(0.0 - qM / (tAtt * sr));\nlet aRel = exp(0.0 - qM / (tRel * sr));\n\nlet x = abs(in1);\nfor (let i: Int = 0; i < nSt; i++) {\n    let s = casc[i];\n    let a = (x > s) ? aAtt : aRel;\n    s = x + a * (s - x);\n    casc[i] = s;\n    x = s;\n}\n\nout1 = x * dbtoa(clamp(out_db, -24.0, 24.0));\n"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -15969,11 +15979,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_attack_ms",
@@ -16048,17 +16058,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 1,
@@ -16477,11 +16487,11 @@
                                     "patching_rect": [ 970.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_release_ms",
@@ -16556,17 +16566,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 2,
@@ -16985,11 +16995,11 @@
                                     "patching_rect": [ 1252.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "value_stages",
@@ -17064,17 +17074,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 3,
@@ -17493,11 +17503,11 @@
                                     "patching_rect": [ 1476.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "value_out_db",
@@ -17572,17 +17582,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 4,
@@ -18082,23 +18092,23 @@
                     },
                     "patching_rect": [ 1466.0, 241.0, 344.0, 22.0 ],
                     "rnboattrcache": {
-                        "release_ms": {
-                            "label": "release_ms",
-                            "isEnum": 0,
-                            "parsestring": ""
-                        },
                         "out_db": {
                             "label": "out_db",
                             "isEnum": 0,
                             "parsestring": ""
                         },
-                        "attack_ms": {
-                            "label": "attack_ms",
+                        "stages": {
+                            "label": "stages",
                             "isEnum": 0,
                             "parsestring": ""
                         },
-                        "stages": {
-                            "label": "stages",
+                        "release_ms": {
+                            "label": "release_ms",
+                            "isEnum": 0,
+                            "parsestring": ""
+                        },
+                        "attack_ms": {
+                            "label": "attack_ms",
                             "isEnum": 0,
                             "parsestring": ""
                         }
@@ -18289,10 +18299,10 @@
                                     "patching_rect": [ 30.0, 110.0, 620.0, 360.0 ],
                                     "rnbo_classname": "codebox~",
                                     "rnbo_extra_attributes": {
-                                        "safemath": 1,
-                                        "code": "// ============================================================================\n// 00_tuba_freq_tracker.txt\n// Hybrid IFT (Instantaneous Frequency Tracking) + Recursive YIN (CMNDF)\n// + Phase-Locked Loop (PLL) Pitch & Analytic Phasor Tracker for Live Tuba\n// ============================================================================\n// Design rationale (vs. a standalone YinFFT such as fluid.pitch~):\n//   1. YinFFT needs a 2048-to-4096 sample FFT window (~46 to 93 ms at 44.1/48k)\n//      to resolve a 29 Hz pedal Bb0, and only updates once per hop.\n//   2. This tracker combines TWO complementary real-time engines:\n//      (A) YIN (de Cheveigne & Kawahara 2002) whose difference function is\n//          updated recursively over a sliding window (add the newest sample's\n//          term, subtract the term leaving the window) instead of being\n//          recomputed from scratch. Cost per decimated sample is O(maxLag)\n//          (up to ~430 lags), NOT O(1). The CMNDF search is evaluated every\n//          32 audio samples (~0.7 ms hop) with parabolic sub-sample\n//          interpolation and a first-dip search that reduces octave errors.\n//      (B) IFT: an adaptive narrowband SVF pair isolates the fundamental, a\n//          4-stage quadrature IIR Hilbert pair makes the analytic signal, and\n//          d(theta)/dt is taken EVERY SAMPLE, so there is no frame/hop latency\n//          for fast lip bends and vibrato. NOTE: \"no frame latency\" is not\n//          \"zero latency\": the narrow isolating bandpass filters still add\n//          group delay, which grows as the tracked pitch gets lower.\n//   3. A confidence-weighted complementary fusion blends the unambiguous YIN\n//      coarse fundamental with the fast IFT instantaneous frequency, and a\n//      Type-II-style PLL phasor locks to the analytic phase. Outputs are Hz,\n//      confidence, a locked [0..1) phasor, and a fundamental sine wave.\n//\n// What this is NOT:\n//   - It is not a Kalman filter or HMM. There is no covariance, no motion\n//     model and no uncertainty propagation. It is a state-carrying cascade of\n//     smoothers and gates. Confidence scales how fast the fused pitch adapts\n//     (soft ramp), but nothing is propagated as a variance.\n//   - It has no valve or breath priors. The only external prior is the\n//     optional in3 hint, which is averaged 50/50 with YIN. in3 (or a\n//     constraint on the candidate lags) is the natural place to add a\n//     fingering-derived harmonic-series prior later.\n//\n// Known limitations:\n//   - Onset latency at the low end: the default 28 ms YIN window is shorter\n//     than one period of a 28 Hz pedal tone (~36 ms), so the lowest notes are\n//     partly a guess at onset. yin_window_ms can be raised to ~36-40 ms for\n//     more reliable pedal tones, at the cost of extra latency/smoothing. The\n//     window is capped so that window + maxLag fits the 1024-sample buffer\n//     (about 49 ms at 48 kHz with min_freq_hz = 28).\n//   - Sample rates above 48 kHz: decimation is fixed at 4x and maxLag is\n//     capped at 430, so at 96 kHz the lowest trackable pitch rises to roughly\n//     55 Hz. Use 44.1/48 kHz, or raise the buffer sizes and the maxLag cap.\n//   - Changing yin_window_ms while audio runs resets the running sums, so\n//     expect a brief (~one window) dropout in confidence while they refill.\n// ============================================================================\n// Inlets:\n//   in1: Left Audio Input (Tuba)\n//   in2: Right Audio Input (Tuba; if unpatched, mono in1 is used automatically)\n//   in3: Optional External Pitch Hint in Hz (e.g. fluid.pitch~; if 20..1000 Hz,\n//        averaged 50/50 with YIN)\n// Outlets:\n//   out1: Tracked Fundamental Frequency f0 in Hz (audio-rate)\n//   out2: Pitch Confidence / Periodicity [0.0 .. 1.0]\n//   out3: Phase-Locked Tuba Phasor [0.0 .. 1.0) (drop-in replacement for phasor~)\n//   out4: Phase-Locked Fundamental Sine Wave [-1.0 .. 1.0], scaled by confidence\n\n@param({ min: 24.0, max: 120.0 }) min_freq_hz = 28.0;\n@param({ min: 150.0, max: 700.0 }) max_freq_hz = 420.0;\n@param({ min: 0.0, max: 1.0 }) IFT_speed = 0.65;\n@param({ min: -60.0, max: -18.0 }) gate_thresh_db = -42.0;\n@param({ min: 10.0, max: 60.0 }) yin_window_ms = 28.0;\n\n// --- Pre-Conditioning Filters (Isolate 25..450 Hz brass fundamental region) ---\n@state preHp = new svf();\n@state preLp1 = new onepole();\n@state preLp2 = new onepole();\n\n// --- Recursive Sliding YIN (CMNDF) State ---\n// Downsampled by 4x (e.g. 12 kHz at 48 kHz SR) so lags up to 430 cover 28 Hz\n// and up. yinBuf is a 1024-sample circular buffer (window + maxLag must fit).\n@state yinBuf = new FixedSampleArray(1024);\n@state runDiff = new FixedSampleArray(440);\n@state yinWrite: Int = 0;\n@state decCount: Int = 0;\n@state hopCount: Int = 0;\n@state lastWinSize: Int = 0;\n@state yinFreq = 58.27; // Default Bb1\n@state yinConf = 0.0;\n\n// 3-point Median filter history on YIN pitch to reject transient tongue clicks\n@state med0 = 58.27;\n@state med1 = 58.27;\n@state med2 = 58.27;\n\n// --- IFT (Instantaneous Frequency Tracking) State ---\n// Adaptive narrowband SVF tracks the fundamental, followed by a 4-stage Hilbert pair.\n// Each allpass stage is second order in z^-2, so it keeps two past inputs and\n// two past outputs: indices [2k] = value at n-1, [2k+1] = value at n-2.\n@state IFTSvf1 = new svf();\n@state IFTSvf2 = new svf();\n@state hReX = new FixedSampleArray(8);\n@state hReY = new FixedSampleArray(8);\n@state hImX = new FixedSampleArray(8);\n@state hImY = new FixedSampleArray(8);\n@state hDelRe = 0.0;\n@state prevTheta = 0.0;\n@state IFTInstHz = 58.27;\n\n// --- Fusion & Phase-Locked Loop (PLL) State ---\n@state fusedF0 = 58.27;\n@state smoothConf = 0.0;\n@state envRms = 0.0;\n@state pllPhase = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet xL = in1;\nlet xR = in2;\nlet extHint = in3;\n\n// Sum stereo (or mono if in2 is silent)\nlet rawMono = (abs(xR) > 0.0000001) ? (0.5 * (xL + xR)) : xL;\n\n// ============================================================================\n// 1. RMS ENVELOPE & SILENCE GATE\n// ============================================================================\nlet envCoeff = 1.0 - exp(-1.0 / (0.008 * sr));\nenvRms += (rawMono * rawMono - envRms) * envCoeff;\nlet rmsAmp = sqrt(maximum(envRms, 0.0));\nlet threshLin = dbtoa(clamp(gate_thresh_db, -60.0, -18.0));\nlet isPlaying = (rmsAmp > threshLin) ? 1.0 : 0.0;\n\n// ============================================================================\n// 2. PRE-CONDITIONING FOR RECURSIVE YIN\n// Highpass at 22 Hz (remove breath thumps/DC) + 2-stage lowpass at 260 Hz\n// ============================================================================\nlet hpSig = preHp.next(rawMono, 22.0, 0.707)[1];\nlet condSig = preLp2.next(preLp1.next(hpSig, 260.0), 260.0);\n\n// ============================================================================\n// 3. 4x DECIMATED RECURSIVE YIN (CMNDF) ENGINE\n// ============================================================================\ndecCount = (decCount + 1) % 4;\nif (decCount == 0) {\n\tlet dSr = sr * 0.25;\n\tlet minLag: Int = floor(clamp(dSr / clamp(max_freq_hz, 150.0, 700.0), 12.0, 120.0));\n\tlet maxLag: Int = floor(clamp(dSr / clamp(min_freq_hz, 24.0, 120.0), 130.0, 430.0));\n\n\t// Integration window (yin_window_ms). Capped so winSize + maxLag stays\n\t// inside the 1024-sample circular buffer. Cost is O(maxLag) per decimated\n\t// sample regardless of window length.\n\tlet winSize: Int = floor(clamp(dSr * 0.001 * clamp(yin_window_ms, 10.0, 60.0), 128.0, 1020.0 - maxLag));\n\n\t// The recursive sums are only valid for a fixed window length, so reset\n\t// them if the window length changes (parameter edit or sample-rate change).\n\tif (winSize != lastWinSize) {\n\t\tfor (let i: Int = 0; i < 440; i++) {\n\t\t\trunDiff[i] = 0.0;\n\t\t}\n\t\tlastWinSize = winSize;\n\t}\n\n\tyinBuf[yinWrite] = condSig;\n\tlet oldIdx: Int = (yinWrite - winSize + 1024) % 1024;\n\tlet xNew = condSig;\n\tlet xOld = yinBuf[oldIdx];\n\n\t// Update running squared difference d_t(tau) recursively (O(maxLag) loop)\n\tfor (let tau: Int = 1; tau <= maxLag; tau++) {\n\t\tlet idxNewTau: Int = (yinWrite - tau + 1024) % 1024;\n\t\tlet idxOldTau: Int = (oldIdx - tau + 1024) % 1024;\n\t\tlet diffNew = xNew - yinBuf[idxNewTau];\n\t\tlet diffOld = xOld - yinBuf[idxOldTau];\n\t\tlet updated = runDiff[tau] + diffNew * diffNew - diffOld * diffOld;\n\t\trunDiff[tau] = maximum(updated, 0.0);\n\t}\n\n\t// Evaluate Cumulative Mean Normalized Difference Function d'(tau) every 8 decimated samples (32 audio samples = ~0.7 ms)\n\thopCount = (hopCount + 1) % 8;\n\tif (hopCount == 0 && isPlaying > 0.5) {\n\t\tlet cumSum = 0.0;\n\t\tlet bestTau: Int = minLag;\n\t\tlet bestVal = 10.0;\n\t\tlet thresh = 0.14; // YIN absolute threshold for first subharmonic dip\n\t\tlet foundDip: Int = 0;\n\n\t\tfor (let tau: Int = 1; tau <= maxLag; tau++) {\n\t\t\tcumSum += runDiff[tau];\n\t\t\tlet cmndf = (cumSum > 0.0000001) ? (runDiff[tau] * tau / cumSum) : 1.0;\n\n\t\t\tif (tau >= minLag) {\n\t\t\t\tif (foundDip == 0) {\n\t\t\t\t\tif (cmndf < bestVal) {\n\t\t\t\t\t\tbestVal = cmndf;\n\t\t\t\t\t\tbestTau = tau;\n\t\t\t\t\t}\n\t\t\t\t\t// Once we enter a dip below threshold and start rising, lock to this fundamental!\n\t\t\t\t\t// This favors the first dip over the 2*tau sub-octave while rejecting the 0.5*tau 2nd harmonic\n\t\t\t\t\tif (bestVal < thresh && cmndf > bestVal + 0.02) {\n\t\t\t\t\t\tfoundDip = 1;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\n\t\t// Parabolic interpolation around bestTau for sub-sample accuracy\n\t\tlet tauM1: Int = maximum(bestTau - 1, 1);\n\t\tlet tauP1: Int = minimum(bestTau + 1, maxLag);\n\t\tlet y1 = runDiff[tauM1];\n\t\tlet y2 = runDiff[bestTau];\n\t\tlet y3 = runDiff[tauP1];\n\t\tlet denom = 2.0 * (2.0 * y2 - y1 - y3);\n\t\tlet delta = (abs(denom) > 0.0000001) ? clamp((y1 - y3) / denom, -0.5, 0.5) : 0.0;\n\n\t\tlet refinedLag = bestTau + delta;\n\t\tlet rawYinHz = clamp(dSr / refinedLag, min_freq_hz, max_freq_hz);\n\t\tlet rawConf = clamp(1.0 - bestVal, 0.0, 1.0);\n\n\t\t// 3-point median filter to strip brass valve/tongue transient spikes\n\t\tif (rawConf > 0.45) {\n\t\t\tmed2 = med1;\n\t\t\tmed1 = med0;\n\t\t\tmed0 = rawYinHz;\n\t\t\tlet a = med0; let b = med1; let c = med2;\n\t\t\tlet medianHz = maximum(minimum(a, b), minimum(maximum(a, b), c));\n\t\t\tyinFreq = medianHz;\n\t\t}\n\t\tyinConf = rawConf;\n\t}\n\tyinWrite = (yinWrite + 1) % 1024;\n}\n\n// Optional blend with external fluid.pitch~ hint on in3 if user patches it.\n// (Currently a fixed 50/50 average; a fingering-derived prior could replace this.)\nlet anchorHz = (extHint > 20.0 && extHint < 1000.0) ? linearinterp(0.5, yinFreq, extHint) : yinFreq;\n\n// ============================================================================\n// 4. IFT (Instantaneous FREQUENCY TRACKING) ENGINE\n// Isolates the fundamental partial using a dual-stage SVF centered at fusedF0,\n// extracts the analytic signal via a 4-stage quadrature Hilbert transform,\n// and differentiates instantaneous phase d(theta)/dt every single sample.\n// (Per-sample update = no hop latency, but the isolating filters add group delay.)\n// ============================================================================\nlet trackCenter = clamp(fusedF0, min_freq_hz, max_freq_hz);\nlet bp1 = IFTSvf1.next(hpSig, trackCenter, 0.86)[2];\nlet isoFund = IFTSvf2.next(bp1, trackCenter, 0.86)[2];\n\n// 4-Stage Quadrature IIR Hilbert Allpass Pair (polyphase design).\n// Coefficients are the squared values of a standard 4+4 polyphase IIR Hilbert\n// set. They MUST be used in a z^-2 allpass, H(z) = (c - z^-2) / (1 - c*z^-2),\n// i.e. y[n] = c*(x[n] + y[n-2]) - x[n-2], with the real path delayed by one\n// sample. (A z^-1 section, or the opposite sign, gives ~0 degrees of phase\n// difference between the two paths at 28..420 Hz, i.e. no quadrature at all.)\n// Verified numerically at 44.1/48 kHz: phase difference is -90 deg +/- ~1 deg\n// across 28..420 Hz, and recovered frequency matches the input sine.\nlet cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;\nlet cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;\n\n// Real path (delayed one sample at the end)\nlet sRe = isoFund;\nlet yRe0 = cRe0 * (sRe + hReY[1]) - hReX[1];\nhReX[1] = hReX[0]; hReX[0] = sRe; hReY[1] = hReY[0]; hReY[0] = yRe0; sRe = yRe0;\nlet yRe1 = cRe1 * (sRe + hReY[3]) - hReX[3];\nhReX[3] = hReX[2]; hReX[2] = sRe; hReY[3] = hReY[2]; hReY[2] = yRe1; sRe = yRe1;\nlet yRe2 = cRe2 * (sRe + hReY[5]) - hReX[5];\nhReX[5] = hReX[4]; hReX[4] = sRe; hReY[5] = hReY[4]; hReY[4] = yRe2; sRe = yRe2;\nlet yRe3 = cRe3 * (sRe + hReY[7]) - hReX[7];\nhReX[7] = hReX[6]; hReX[6] = sRe; hReY[7] = hReY[6]; hReY[6] = yRe3;\nlet outRe = hDelRe; hDelRe = yRe3;\n\n// Imaginary path\nlet sIm = isoFund;\nlet yIm0 = cIm0 * (sIm + hImY[1]) - hImX[1];\nhImX[1] = hImX[0]; hImX[0] = sIm; hImY[1] = hImY[0]; hImY[0] = yIm0; sIm = yIm0;\nlet yIm1 = cIm1 * (sIm + hImY[3]) - hImX[3];\nhImX[3] = hImX[2]; hImX[2] = sIm; hImY[3] = hImY[2]; hImY[2] = yIm1; sIm = yIm1;\nlet yIm2 = cIm2 * (sIm + hImY[5]) - hImX[5];\nhImX[5] = hImX[4]; hImX[4] = sIm; hImY[5] = hImY[4]; hImY[4] = yIm2; sIm = yIm2;\nlet yIm3 = cIm3 * (sIm + hImY[7]) - hImX[7];\nhImX[7] = hImX[6]; hImX[6] = sIm; hImY[7] = hImY[6]; hImY[6] = yIm3;\nlet outIm = yIm3;\n\n// With the one-sample delay on the real path, the pair rotates clockwise\n// (theta decreases for positive frequencies), so the imaginary part is negated\n// to make theta increase with time and the frequency estimate positive.\nlet pol = cartopol(outRe, -outIm);\nlet instAmp = pol[0];\nlet theta = pol[1];\n\n// Unwrap single-sample phase difference dTheta in [-pi, pi]\nlet dTheta = theta - prevTheta;\nif (dTheta < -pi) { dTheta += 2.0 * pi; }\nelse if (dTheta > pi) { dTheta -= 2.0 * pi; }\nprevTheta = theta;\n\n// Instantaneous frequency f_inst(t) = (dTheta / (2*pi)) * sr\nlet rawInstHz = (dTheta / (2.0 * pi)) * sr;\n\n// Gate IFT instantaneous frequency: only trust when within +/- 18% of the YIN octave anchor.\n// This follows vibrato/glissandi at the sample rate while making octave errors impossible.\nlet devRatio = abs(rawInstHz - anchorHz) / maximum(anchorHz, 20.0);\nif (devRatio < 0.18 && instAmp > 0.0002) {\n\tlet IFTSlew = 1.0 - exp(-1.0 / (0.0018 * sr));\n\tIFTInstHz += (rawInstHz - IFTInstHz) * IFTSlew;\n} else {\n\tlet anchorSlew = 1.0 - exp(-1.0 / (0.006 * sr));\n\tIFTInstHz += (anchorHz - IFTInstHz) * anchorSlew;\n}\n\n// ============================================================================\n// 5. YIN + IFT CONFIDENCE-WEIGHTED FUSION & PHASE-LOCKED LOOP (PLL) OSCILLATOR\n// (Complementary blend, not a Kalman filter: fixed IFT_speed mix, with YIN\n// confidence scaling how quickly the fused pitch adapts.)\n// ============================================================================\nlet speed = clamp(IFT_speed, 0.0, 1.0);\nlet targetF0 = linearinterp(speed, anchorHz, IFTInstHz);\n\n// Soft confidence weight: 0 at yinConf <= 0.35, ramping to 1 at yinConf >= 0.75.\n// Replaces the old hard yinConf > 0.35 gate so adaptation fades in smoothly.\nlet confW = clamp((yinConf - 0.35) / 0.4, 0.0, 1.0);\n\n// Hold last valid pitch when player stops blowing or confidence is low\n// (no pitch drop on note release).\nif (isPlaying > 0.5 && confW > 0.0) {\n\tlet trackSlew = (1.0 - exp(-1.0 / ((0.010 - 0.0085 * speed) * sr))) * confW;\n\tfusedF0 += (targetF0 - fusedF0) * trackSlew;\n}\nfusedF0 = clamp(fusedF0, min_freq_hz, max_freq_hz);\n\n// Smooth confidence output [0..1]\nlet targetConf = isPlaying * yinConf;\nsmoothConf += (targetConf - smoothConf) * (1.0 - exp(-1.0 / (0.010 * sr)));\n\n// Advance PLL Phasor & gently phase-lock to the analytic phase of the tuba fundamental\nlet targetPh = wrap((theta + pi) / (2.0 * pi), 0.0, 1.0);\nlet phErr = targetPh - pllPhase;\nif (phErr > 0.5) { phErr -= 1.0; }\nelse if (phErr < -0.5) { phErr += 1.0; }\n\nlet pllLockStrength = 0.015 * smoothConf;\npllPhase = wrap(pllPhase + (fusedF0 / sr) + pllLockStrength * phErr, 0.0, 1.0);\n\nout1 = fusedF0;\nout2 = smoothConf;\nout3 = pllPhase;\nout4 = sin(2.0 * pi * pllPhase) * smoothConf;",
+                                        "nocache": 0,
                                         "expr": "",
-                                        "nocache": 0
+                                        "safemath": 1,
+                                        "code": "// ============================================================================\n// 00_tuba_freq_tracker.txt\n// Hybrid IFT (Instantaneous Frequency Tracking) + Recursive YIN (CMNDF)\n// + Phase-Locked Loop (PLL) Pitch & Analytic Phasor Tracker for Live Tuba\n// ============================================================================\n// Design rationale (vs. a standalone YinFFT such as fluid.pitch~):\n//   1. YinFFT needs a 2048-to-4096 sample FFT window (~46 to 93 ms at 44.1/48k)\n//      to resolve a 29 Hz pedal Bb0, and only updates once per hop.\n//   2. This tracker combines TWO complementary real-time engines:\n//      (A) YIN (de Cheveigne & Kawahara 2002) whose difference function is\n//          updated recursively over a sliding window (add the newest sample's\n//          term, subtract the term leaving the window) instead of being\n//          recomputed from scratch. Cost per decimated sample is O(maxLag)\n//          (up to ~430 lags), NOT O(1). The CMNDF search is evaluated every\n//          32 audio samples (~0.7 ms hop) with parabolic sub-sample\n//          interpolation and a first-dip search that reduces octave errors.\n//      (B) IFT: an adaptive narrowband SVF pair isolates the fundamental, a\n//          4-stage quadrature IIR Hilbert pair makes the analytic signal, and\n//          d(theta)/dt is taken EVERY SAMPLE, so there is no frame/hop latency\n//          for fast lip bends and vibrato. NOTE: \"no frame latency\" is not\n//          \"zero latency\": the narrow isolating bandpass filters still add\n//          group delay, which grows as the tracked pitch gets lower.\n//   3. A confidence-weighted complementary fusion blends the unambiguous YIN\n//      coarse fundamental with the fast IFT instantaneous frequency, and a\n//      Type-II-style PLL phasor locks to the analytic phase. Outputs are Hz,\n//      confidence, a locked [0..1) phasor, and a fundamental sine wave.\n//\n// What this is NOT:\n//   - It is not a Kalman filter or HMM. There is no covariance, no motion\n//     model and no uncertainty propagation. It is a state-carrying cascade of\n//     smoothers and gates. Confidence scales how fast the fused pitch adapts\n//     (soft ramp), but nothing is propagated as a variance.\n//   - It has no valve or breath priors. The only external prior is the\n//     optional in3 hint, which is averaged 50/50 with YIN. in3 (or a\n//     constraint on the candidate lags) is the natural place to add a\n//     fingering-derived harmonic-series prior later.\n//\n// Known limitations:\n//   - Onset latency at the low end: the default 28 ms YIN window is shorter\n//     than one period of a 28 Hz pedal tone (~36 ms), so the lowest notes are\n//     partly a guess at onset. yin_window_ms can be raised to ~36-40 ms for\n//     more reliable pedal tones, at the cost of extra latency/smoothing. The\n//     window is capped so that window + maxLag fits the 1024-sample buffer\n//     (about 49 ms at 48 kHz with min_freq_hz = 28).\n//   - Sample rates above 48 kHz: decimation is fixed at 4x and maxLag is\n//     capped at 430, so at 96 kHz the lowest trackable pitch rises to roughly\n//     55 Hz. Use 44.1/48 kHz, or raise the buffer sizes and the maxLag cap.\n//   - Changing yin_window_ms while audio runs resets the running sums, so\n//     expect a brief (~one window) dropout in confidence while they refill.\n// ============================================================================\n// Inlets:\n//   in1: Left Audio Input (Tuba)\n//   in2: Right Audio Input (Tuba; if unpatched, mono in1 is used automatically)\n//   in3: Optional External Pitch Hint in Hz (e.g. fluid.pitch~; if 20..1000 Hz,\n//        averaged 50/50 with YIN)\n// Outlets:\n//   out1: Tracked Fundamental Frequency f0 in Hz (audio-rate)\n//   out2: Pitch Confidence / Periodicity [0.0 .. 1.0]\n//   out3: Phase-Locked Tuba Phasor [0.0 .. 1.0) (drop-in replacement for phasor~)\n//   out4: Phase-Locked Fundamental Sine Wave [-1.0 .. 1.0], scaled by confidence\n\n@param({ min: 24.0, max: 120.0 }) min_freq_hz = 28.0;\n@param({ min: 150.0, max: 700.0 }) max_freq_hz = 420.0;\n@param({ min: 0.0, max: 1.0 }) IFT_speed = 0.65;\n@param({ min: -60.0, max: -18.0 }) gate_thresh_db = -42.0;\n@param({ min: 10.0, max: 60.0 }) yin_window_ms = 28.0;\n\n// --- Pre-Conditioning Filters (Isolate 25..450 Hz brass fundamental region) ---\n@state preHp = new svf();\n@state preLp1 = new onepole();\n@state preLp2 = new onepole();\n\n// --- Recursive Sliding YIN (CMNDF) State ---\n// Downsampled by 4x (e.g. 12 kHz at 48 kHz SR) so lags up to 430 cover 28 Hz\n// and up. yinBuf is a 1024-sample circular buffer (window + maxLag must fit).\n@state yinBuf = new FixedSampleArray(1024);\n@state runDiff = new FixedSampleArray(440);\n@state yinWrite: Int = 0;\n@state decCount: Int = 0;\n@state hopCount: Int = 0;\n@state lastWinSize: Int = 0;\n@state yinFreq = 58.27; // Default Bb1\n@state yinConf = 0.0;\n\n// 3-point Median filter history on YIN pitch to reject transient tongue clicks\n@state med0 = 58.27;\n@state med1 = 58.27;\n@state med2 = 58.27;\n\n// --- IFT (Instantaneous Frequency Tracking) State ---\n// Adaptive narrowband SVF tracks the fundamental, followed by a 4-stage Hilbert pair.\n// Each allpass stage is second order in z^-2, so it keeps two past inputs and\n// two past outputs: indices [2k] = value at n-1, [2k+1] = value at n-2.\n@state IFTSvf1 = new svf();\n@state IFTSvf2 = new svf();\n@state hReX = new FixedSampleArray(8);\n@state hReY = new FixedSampleArray(8);\n@state hImX = new FixedSampleArray(8);\n@state hImY = new FixedSampleArray(8);\n@state hDelRe = 0.0;\n@state prevTheta = 0.0;\n@state IFTInstHz = 58.27;\n\n// --- Fusion & Phase-Locked Loop (PLL) State ---\n@state fusedF0 = 58.27;\n@state smoothConf = 0.0;\n@state envRms = 0.0;\n@state pllPhase = 0.0;\n\nlet sr = maximum(samplerate(), 1.0);\nlet xL = in1;\nlet xR = in2;\nlet extHint = in3;\n\n// Sum stereo (or mono if in2 is silent)\nlet rawMono = (abs(xR) > 0.0000001) ? (0.5 * (xL + xR)) : xL;\n\n// ============================================================================\n// 1. RMS ENVELOPE & SILENCE GATE\n// ============================================================================\nlet envCoeff = 1.0 - exp(-1.0 / (0.008 * sr));\nenvRms += (rawMono * rawMono - envRms) * envCoeff;\nlet rmsAmp = sqrt(maximum(envRms, 0.0));\nlet threshLin = dbtoa(clamp(gate_thresh_db, -60.0, -18.0));\nlet isPlaying = (rmsAmp > threshLin) ? 1.0 : 0.0;\n\n// ============================================================================\n// 2. PRE-CONDITIONING FOR RECURSIVE YIN\n// Highpass at 22 Hz (remove breath thumps/DC) + 2-stage lowpass at 260 Hz\n// ============================================================================\nlet hpSig = preHp.next(rawMono, 22.0, 0.707)[1];\nlet condSig = preLp2.next(preLp1.next(hpSig, 260.0), 260.0);\n\n// ============================================================================\n// 3. 4x DECIMATED RECURSIVE YIN (CMNDF) ENGINE\n// ============================================================================\ndecCount = (decCount + 1) % 4;\nif (decCount == 0) {\n\tlet dSr = sr * 0.25;\n\tlet minLag: Int = floor(clamp(dSr / clamp(max_freq_hz, 150.0, 700.0), 12.0, 120.0));\n\tlet maxLag: Int = floor(clamp(dSr / clamp(min_freq_hz, 24.0, 120.0), 130.0, 430.0));\n\n\t// Integration window (yin_window_ms). Capped so winSize + maxLag stays\n\t// inside the 1024-sample circular buffer. Cost is O(maxLag) per decimated\n\t// sample regardless of window length.\n\tlet winSize: Int = floor(clamp(dSr * 0.001 * clamp(yin_window_ms, 10.0, 60.0), 128.0, 1020.0 - maxLag));\n\n\t// The recursive sums are only valid for a fixed window length, so reset\n\t// them if the window length changes (parameter edit or sample-rate change).\n\tif (winSize != lastWinSize) {\n\t\tfor (let i: Int = 0; i < 440; i++) {\n\t\t\trunDiff[i] = 0.0;\n\t\t}\n\t\tlastWinSize = winSize;\n\t}\n\n\tyinBuf[yinWrite] = condSig;\n\tlet oldIdx: Int = (yinWrite - winSize + 1024) % 1024;\n\tlet xNew = condSig;\n\tlet xOld = yinBuf[oldIdx];\n\n\t// Update running squared difference d_t(tau) recursively (O(maxLag) loop)\n\tfor (let tau: Int = 1; tau <= maxLag; tau++) {\n\t\tlet idxNewTau: Int = (yinWrite - tau + 1024) % 1024;\n\t\tlet idxOldTau: Int = (oldIdx - tau + 1024) % 1024;\n\t\tlet diffNew = xNew - yinBuf[idxNewTau];\n\t\tlet diffOld = xOld - yinBuf[idxOldTau];\n\t\tlet updated = runDiff[tau] + diffNew * diffNew - diffOld * diffOld;\n\t\trunDiff[tau] = maximum(updated, 0.0);\n\t}\n\n\t// Evaluate Cumulative Mean Normalized Difference Function d'(tau) every 8 decimated samples (32 audio samples = ~0.7 ms)\n\thopCount = (hopCount + 1) % 8;\n\tif (hopCount == 0 && isPlaying > 0.5) {\n\t\tlet cumSum = 0.0;\n\t\tlet bestTau: Int = minLag;\n\t\tlet bestVal = 10.0;\n\t\tlet thresh = 0.14; // YIN absolute threshold for first subharmonic dip\n\t\tlet foundDip: Int = 0;\n\n\t\tfor (let tau: Int = 1; tau <= maxLag; tau++) {\n\t\t\tcumSum += runDiff[tau];\n\t\t\tlet cmndf = (cumSum > 0.0000001) ? (runDiff[tau] * tau / cumSum) : 1.0;\n\n\t\t\tif (tau >= minLag) {\n\t\t\t\tif (foundDip == 0) {\n\t\t\t\t\tif (cmndf < bestVal) {\n\t\t\t\t\t\tbestVal = cmndf;\n\t\t\t\t\t\tbestTau = tau;\n\t\t\t\t\t}\n\t\t\t\t\t// Once we enter a dip below threshold and start rising, lock to this fundamental!\n\t\t\t\t\t// This favors the first dip over the 2*tau sub-octave while rejecting the 0.5*tau 2nd harmonic\n\t\t\t\t\tif (bestVal < thresh && cmndf > bestVal + 0.02) {\n\t\t\t\t\t\tfoundDip = 1;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\n\t\t// Parabolic interpolation around bestTau for sub-sample accuracy\n\t\tlet tauM1: Int = maximum(bestTau - 1, 1);\n\t\tlet tauP1: Int = minimum(bestTau + 1, maxLag);\n\t\tlet y1 = runDiff[tauM1];\n\t\tlet y2 = runDiff[bestTau];\n\t\tlet y3 = runDiff[tauP1];\n\t\tlet denom = 2.0 * (2.0 * y2 - y1 - y3);\n\t\tlet delta = (abs(denom) > 0.0000001) ? clamp((y1 - y3) / denom, -0.5, 0.5) : 0.0;\n\n\t\tlet refinedLag = bestTau + delta;\n\t\tlet rawYinHz = clamp(dSr / refinedLag, min_freq_hz, max_freq_hz);\n\t\tlet rawConf = clamp(1.0 - bestVal, 0.0, 1.0);\n\n\t\t// 3-point median filter to strip brass valve/tongue transient spikes\n\t\tif (rawConf > 0.45) {\n\t\t\tmed2 = med1;\n\t\t\tmed1 = med0;\n\t\t\tmed0 = rawYinHz;\n\t\t\tlet a = med0; let b = med1; let c = med2;\n\t\t\tlet medianHz = maximum(minimum(a, b), minimum(maximum(a, b), c));\n\t\t\tyinFreq = medianHz;\n\t\t}\n\t\tyinConf = rawConf;\n\t}\n\tyinWrite = (yinWrite + 1) % 1024;\n}\n\n// Optional blend with external fluid.pitch~ hint on in3 if user patches it.\n// (Currently a fixed 50/50 average; a fingering-derived prior could replace this.)\nlet anchorHz = (extHint > 20.0 && extHint < 1000.0) ? linearinterp(0.5, yinFreq, extHint) : yinFreq;\n\n// ============================================================================\n// 4. IFT (Instantaneous FREQUENCY TRACKING) ENGINE\n// Isolates the fundamental partial using a dual-stage SVF centered at fusedF0,\n// extracts the analytic signal via a 4-stage quadrature Hilbert transform,\n// and differentiates instantaneous phase d(theta)/dt every single sample.\n// (Per-sample update = no hop latency, but the isolating filters add group delay.)\n// ============================================================================\nlet trackCenter = clamp(fusedF0, min_freq_hz, max_freq_hz);\nlet bp1 = IFTSvf1.next(hpSig, trackCenter, 0.86)[2];\nlet isoFund = IFTSvf2.next(bp1, trackCenter, 0.86)[2];\n\n// 4-Stage Quadrature IIR Hilbert Allpass Pair (polyphase design).\n// Coefficients are the squared values of a standard 4+4 polyphase IIR Hilbert\n// set. They MUST be used in a z^-2 allpass, H(z) = (c - z^-2) / (1 - c*z^-2),\n// i.e. y[n] = c*(x[n] + y[n-2]) - x[n-2], with the real path delayed by one\n// sample. (A z^-1 section, or the opposite sign, gives ~0 degrees of phase\n// difference between the two paths at 28..420 Hz, i.e. no quadrature at all.)\n// Verified numerically at 44.1/48 kHz: phase difference is -90 deg +/- ~1 deg\n// across 28..420 Hz, and recovered frequency matches the input sine.\nlet cRe0 = 0.4794008656; let cRe1 = 0.8762184935; let cRe2 = 0.9765975895; let cRe3 = 0.9974992559;\nlet cIm0 = 0.1617584983; let cIm1 = 0.7330289323; let cIm2 = 0.9453497003; let cIm3 = 0.9905991567;\n\n// Real path (delayed one sample at the end)\nlet sRe = isoFund;\nlet yRe0 = cRe0 * (sRe + hReY[1]) - hReX[1];\nhReX[1] = hReX[0]; hReX[0] = sRe; hReY[1] = hReY[0]; hReY[0] = yRe0; sRe = yRe0;\nlet yRe1 = cRe1 * (sRe + hReY[3]) - hReX[3];\nhReX[3] = hReX[2]; hReX[2] = sRe; hReY[3] = hReY[2]; hReY[2] = yRe1; sRe = yRe1;\nlet yRe2 = cRe2 * (sRe + hReY[5]) - hReX[5];\nhReX[5] = hReX[4]; hReX[4] = sRe; hReY[5] = hReY[4]; hReY[4] = yRe2; sRe = yRe2;\nlet yRe3 = cRe3 * (sRe + hReY[7]) - hReX[7];\nhReX[7] = hReX[6]; hReX[6] = sRe; hReY[7] = hReY[6]; hReY[6] = yRe3;\nlet outRe = hDelRe; hDelRe = yRe3;\n\n// Imaginary path\nlet sIm = isoFund;\nlet yIm0 = cIm0 * (sIm + hImY[1]) - hImX[1];\nhImX[1] = hImX[0]; hImX[0] = sIm; hImY[1] = hImY[0]; hImY[0] = yIm0; sIm = yIm0;\nlet yIm1 = cIm1 * (sIm + hImY[3]) - hImX[3];\nhImX[3] = hImX[2]; hImX[2] = sIm; hImY[3] = hImY[2]; hImY[2] = yIm1; sIm = yIm1;\nlet yIm2 = cIm2 * (sIm + hImY[5]) - hImX[5];\nhImX[5] = hImX[4]; hImX[4] = sIm; hImY[5] = hImY[4]; hImY[4] = yIm2; sIm = yIm2;\nlet yIm3 = cIm3 * (sIm + hImY[7]) - hImX[7];\nhImX[7] = hImX[6]; hImX[6] = sIm; hImY[7] = hImY[6]; hImY[6] = yIm3;\nlet outIm = yIm3;\n\n// With the one-sample delay on the real path, the pair rotates clockwise\n// (theta decreases for positive frequencies), so the imaginary part is negated\n// to make theta increase with time and the frequency estimate positive.\nlet pol = cartopol(outRe, -outIm);\nlet instAmp = pol[0];\nlet theta = pol[1];\n\n// Unwrap single-sample phase difference dTheta in [-pi, pi]\nlet dTheta = theta - prevTheta;\nif (dTheta < -pi) { dTheta += 2.0 * pi; }\nelse if (dTheta > pi) { dTheta -= 2.0 * pi; }\nprevTheta = theta;\n\n// Instantaneous frequency f_inst(t) = (dTheta / (2*pi)) * sr\nlet rawInstHz = (dTheta / (2.0 * pi)) * sr;\n\n// Gate IFT instantaneous frequency: only trust when within +/- 18% of the YIN octave anchor.\n// This follows vibrato/glissandi at the sample rate while making octave errors impossible.\nlet devRatio = abs(rawInstHz - anchorHz) / maximum(anchorHz, 20.0);\nif (devRatio < 0.18 && instAmp > 0.0002) {\n\tlet IFTSlew = 1.0 - exp(-1.0 / (0.0018 * sr));\n\tIFTInstHz += (rawInstHz - IFTInstHz) * IFTSlew;\n} else {\n\tlet anchorSlew = 1.0 - exp(-1.0 / (0.006 * sr));\n\tIFTInstHz += (anchorHz - IFTInstHz) * anchorSlew;\n}\n\n// ============================================================================\n// 5. YIN + IFT CONFIDENCE-WEIGHTED FUSION & PHASE-LOCKED LOOP (PLL) OSCILLATOR\n// (Complementary blend, not a Kalman filter: fixed IFT_speed mix, with YIN\n// confidence scaling how quickly the fused pitch adapts.)\n// ============================================================================\nlet speed = clamp(IFT_speed, 0.0, 1.0);\nlet targetF0 = linearinterp(speed, anchorHz, IFTInstHz);\n\n// Soft confidence weight: 0 at yinConf <= 0.35, ramping to 1 at yinConf >= 0.75.\n// Replaces the old hard yinConf > 0.35 gate so adaptation fades in smoothly.\nlet confW = clamp((yinConf - 0.35) / 0.4, 0.0, 1.0);\n\n// Hold last valid pitch when player stops blowing or confidence is low\n// (no pitch drop on note release).\nif (isPlaying > 0.5 && confW > 0.0) {\n\tlet trackSlew = (1.0 - exp(-1.0 / ((0.010 - 0.0085 * speed) * sr))) * confW;\n\tfusedF0 += (targetF0 - fusedF0) * trackSlew;\n}\nfusedF0 = clamp(fusedF0, min_freq_hz, max_freq_hz);\n\n// Smooth confidence output [0..1]\nlet targetConf = isPlaying * yinConf;\nsmoothConf += (targetConf - smoothConf) * (1.0 - exp(-1.0 / (0.010 * sr)));\n\n// Advance PLL Phasor & gently phase-lock to the analytic phase of the tuba fundamental\nlet targetPh = wrap((theta + pi) / (2.0 * pi), 0.0, 1.0);\nlet phErr = targetPh - pllPhase;\nif (phErr > 0.5) { phErr -= 1.0; }\nelse if (phErr < -0.5) { phErr += 1.0; }\n\nlet pllLockStrength = 0.015 * smoothConf;\npllPhase = wrap(pllPhase + (fusedF0 / sr) + pllLockStrength * phErr, 0.0, 1.0);\n\nout1 = fusedF0;\nout2 = smoothConf;\nout3 = pllPhase;\nout4 = sin(2.0 * pi * pllPhase) * smoothConf;"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "effect_code",
@@ -19238,11 +19248,11 @@
                                     "patching_rect": [ 700.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 1,
                                     "rnbo_uniqueid": "value_min_freq_hz",
@@ -19317,17 +19327,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 1,
@@ -19746,11 +19756,11 @@
                                     "patching_rect": [ 989.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 2,
                                     "rnbo_uniqueid": "value_max_freq_hz",
@@ -19825,17 +19835,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 2,
@@ -20254,11 +20264,11 @@
                                     "patching_rect": [ 1285.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 3,
                                     "rnbo_uniqueid": "value_IFT_speed",
@@ -20333,17 +20343,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 3,
@@ -20762,11 +20772,11 @@
                                     "patching_rect": [ 1548.0, 115.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 4,
                                     "rnbo_uniqueid": "value_gate_thresh_db",
@@ -20841,17 +20851,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 4,
@@ -21270,11 +21280,11 @@
                                     "patching_rect": [ 700.0, 230.0, 100.0, 23.0 ],
                                     "rnbo_classname": "number",
                                     "rnbo_extra_attributes": {
-                                        "order": "",
-                                        "maximum": "<none>",
                                         "minimum": "<none>",
+                                        "order": "",
+                                        "preset": 0,
                                         "initialFormat": "float",
-                                        "preset": 0
+                                        "maximum": "<none>"
                                     },
                                     "rnbo_serial": 5,
                                     "rnbo_uniqueid": "value_yin_window_ms",
@@ -21349,17 +21359,17 @@
                                     "rnbo_classname": "param",
                                     "rnbo_extra_attributes": {
                                         "unit": "",
-                                        "fromnormalized": "",
-                                        "order": "0",
-                                        "ctlin": 0.0,
-                                        "displayorder": "-",
-                                        "displayname": "",
-                                        "steps": 0.0,
-                                        "tonormalized": "",
                                         "sendinit": 1,
-                                        "enum": "",
+                                        "order": "0",
                                         "exponent": 1.0,
                                         "preset": 1,
+                                        "fromnormalized": "",
+                                        "tonormalized": "",
+                                        "displayorder": "-",
+                                        "enum": "",
+                                        "ctlin": 0.0,
+                                        "displayname": "",
+                                        "steps": 0.0,
                                         "meta": ""
                                     },
                                     "rnbo_serial": 5,
@@ -21895,18 +21905,8 @@
                     },
                     "patching_rect": [ 877.25, 147.0, 339.0, 22.0 ],
                     "rnboattrcache": {
-                        "max_freq_hz": {
-                            "label": "max_freq_hz",
-                            "isEnum": 0,
-                            "parsestring": ""
-                        },
                         "yin_window_ms": {
                             "label": "yin_window_ms",
-                            "isEnum": 0,
-                            "parsestring": ""
-                        },
-                        "IFT_speed": {
-                            "label": "IFT_speed",
                             "isEnum": 0,
                             "parsestring": ""
                         },
@@ -21917,6 +21917,16 @@
                         },
                         "gate_thresh_db": {
                             "label": "gate_thresh_db",
+                            "isEnum": 0,
+                            "parsestring": ""
+                        },
+                        "max_freq_hz": {
+                            "label": "max_freq_hz",
+                            "isEnum": 0,
+                            "parsestring": ""
+                        },
+                        "IFT_speed": {
+                            "label": "IFT_speed",
                             "isEnum": 0,
                             "parsestring": ""
                         }
@@ -22298,7 +22308,7 @@
             {
                 "box": {
                     "embed": 0,
-                    "filename": "bitcrush_pitch_hold.js",
+                    "filename": "vps_liquid_orbit.js",
                     "id": "obj-31",
                     "maxclass": "v8ui",
                     "numinlets": 1,
@@ -22309,7 +22319,7 @@
                     "presentation": 1,
                     "presentation_rect": [ 10.0, 184.0, 239.0, 671.0 ],
                     "textfile": {
-                        "filename": "bitcrush_pitch_hold.js",
+                        "filename": "vps_liquid_orbit.js",
                         "flags": 0,
                         "embed": 0,
                         "autowatch": 1
@@ -22751,7 +22761,7 @@
                             "version": 1,
                             "isbank": 0,
                             "isbase64": 1,
-                            "blob": "1684.hAGaoMGcv.i0AHv.DTfAGfPBJr.CWMWchQWdvUFWsEla0YVXiQWcxUlbeAAEFElXFkFazUlbPwVcmklaSQWXzUFUtEVakQEc4AWYWYWYxMWZu4lDFE0LvIgQgIlQOEQAfajQBMU.....lE............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3O...f+....................................9C...3O...f+B........DP...f.A....D........f+....9C....P..........................................................................................................................................fQQMCbC....7.....QkYVX0wFcfLUYzQWZtcF.....A....T.....Tx8VKQE....vP0MkUA.........vWP7.QkYVX0wFcfLUYzQWZtclDgUWalAA..f..U.PG.nB.AAfQ.rD.SA.V.zkAAYvTFfE.......f.A.........PC..................fAZA"
+                            "blob": "1684.hAGaoMGcv.i0AHv.DTfAGfPBJr.CWMWchQWdvUFWsEla0YVXiQWcxUlbeAAEFElXFkFazUlbPwVcmklaSQWXzUFUtEVakQEc4AWYWYWYxMWZu4lDFE0LvIgQgIlQOEQAfajQBMU.....lE............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3O...f+....................................9C...3O...f+B...9C...DP...f.A....D........f+....9C....P..........................................................................................................................................fQQMCbC....7.....QkYVX0wFcfLUYzQWZtcF.....A....T.....Tx8VKQE....vP0MkUA.........vWP7.QkYVX0wFcfLUYzQWZtclDgUWalAA..f..U.PG.nB.AAfQ.rD.SA.V.zkAAYvTFfE.......f.A.........PC..................fAZA"
                         },
                         "snapshotlist": {
                             "current_snapshot": 0,
@@ -22773,7 +22783,7 @@
                                         "version": 1,
                                         "isbank": 0,
                                         "isbase64": 1,
-                                        "blob": "1684.hAGaoMGcv.i0AHv.DTfAGfPBJr.CWMWchQWdvUFWsEla0YVXiQWcxUlbeAAEFElXFkFazUlbPwVcmklaSQWXzUFUtEVakQEc4AWYWYWYxMWZu4lDFE0LvIgQgIlQOEQAfajQBMU.....lE............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3O...f+....................................9C...3O...f+B........DP...f.A....D........f+....9C....P..........................................................................................................................................fQQMCbC....7.....QkYVX0wFcfLUYzQWZtcF.....A....T.....Tx8VKQE....vP0MkUA.........vWP7.QkYVX0wFcfLUYzQWZtclDgUWalAA..f..U.PG.nB.AAfQ.rD.SA.V.zkAAYvTFfE.......f.A.........PC..................fAZA"
+                                        "blob": "1684.hAGaoMGcv.i0AHv.DTfAGfPBJr.CWMWchQWdvUFWsEla0YVXiQWcxUlbeAAEFElXFkFazUlbPwVcmklaSQWXzUFUtEVakQEc4AWYWYWYxMWZu4lDFE0LvIgQgIlQOEQAfajQBMU.....lE............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3OZO2GAA.............f+....9C...vO.........9C....P...f+..............f+n8beDD..............9C...3O....+.........3O.....A...9C..............9i1y8QP..............3O...f+....7C........f+.....D...3O..............3O...f+....................................9C...3O...f+B...9C...DP...f.A....D........f+....9C....P..........................................................................................................................................fQQMCbC....7.....QkYVX0wFcfLUYzQWZtcF.....A....T.....Tx8VKQE....vP0MkUA.........vWP7.QkYVX0wFcfLUYzQWZtclDgUWalAA..f..U.PG.nB.AAfQ.rD.SA.V.zkAAYvTFfE.......f.A.........PC..................fAZA"
                                     },
                                     "fileref": {
                                         "name": "Pro-Q 3",
@@ -22956,7 +22966,7 @@
                     "lockeddragscroll": 0,
                     "lockedsize": 0,
                     "maxclass": "bpatcher",
-                    "name": "bitcrush_pitch_hold.maxpat",
+                    "name": "vps_liquid_orbit.maxpat",
                     "numinlets": 0,
                     "numoutlets": 0,
                     "offset": [ 0.0, 0.0 ],
@@ -23036,6 +23046,13 @@
             },
             {
                 "patchline": {
+                    "destination": [ "obj-46", 0 ],
+                    "order": 0,
+                    "source": [ "obj-16", 2 ]
+                }
+            },
+            {
+                "patchline": {
                     "destination": [ "obj-5", 1 ],
                     "order": 3,
                     "source": [ "obj-16", 0 ]
@@ -23044,6 +23061,7 @@
             {
                 "patchline": {
                     "destination": [ "obj-78", 0 ],
+                    "order": 1,
                     "source": [ "obj-16", 2 ]
                 }
             },
@@ -23169,13 +23187,6 @@
             {
                 "patchline": {
                     "destination": [ "obj-3", 2 ],
-                    "order": 3,
-                    "source": [ "obj-4", 0 ]
-                }
-            },
-            {
-                "patchline": {
-                    "destination": [ "obj-43", 0 ],
                     "order": 2,
                     "source": [ "obj-4", 0 ]
                 }
@@ -23513,7 +23524,7 @@
         "parameters": {
             "obj-16": [ "rnbo~[2]", "rnbo~", 0 ],
             "obj-20": [ "rnbo~[4]", "rnbo~", 0 ],
-            "obj-21::obj-9": [ "rnbo~", "rnbo~", 0 ],
+            "obj-21::obj-11": [ "rnbo~", "rnbo~", 0 ],
             "obj-22": [ "rnbo~[5]", "rnbo~", 0 ],
             "obj-32": [ "rnbo~[6]", "rnbo~", 0 ],
             "obj-33": [ "rnbo~[7]", "rnbo~", 0 ],
