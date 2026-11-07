@@ -16,11 +16,11 @@ diagram).
 
 PARAMETERS (4 + output gain)
 
-1. drive_db — 0…40 dB, default 18 dB
+1. drive_db — 0…40 dB, default 20 dB
    Level into the power stage. Sag only bites once the stage is working
    hard, so it scales with this.
 
-2. sag_pct — 0…100 %, default 60 %
+2. sag_pct — 0…100 %, default 70 %
    Rectifier/supply resistance. 0 = stiff solid-state supply (no sag).
    Measured on a sustained loud 110 Hz note: about 4.4 dB of droop at 60 %,
    6.6 dB at 100 %, with harder clipping as it sags.

@@ -27,11 +27,11 @@
 // ============================================================================
 
 // Drive (dB of op-amp gain)
-@param({ min: 0, max: 40 }) drive_db = 24;
+@param({ min: 0, max: 40 }) drive_db = 15;
 // Gain-branch high-pass (Hz)
 @param({ min: 40, max: 800, exponent: 2 }) bass_cut_hz = 250;
 // Tone lowpass (Hz)
-@param({ min: 500, max: 8000, exponent: 2 }) tone_hz = 2000;
+@param({ min: 500, max: 8000, exponent: 2 }) tone_hz = 6000;
 // Dry/wet
 @param({ min: 0, max: 1 }) mix = 1;
 // Output gain (dB)

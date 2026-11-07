@@ -39,9 +39,9 @@
 // ============================================================================
 
 // Speaker resonance (Hz)
-@param({ min: 50, max: 150 }) resonance_hz = 80;
+@param({ min: 50, max: 150 }) resonance_hz = 100;
 // Drive into the speaker (dB)
-@param({ min: 0, max: 30 }) excursion_db = 12;
+@param({ min: 0, max: 30 }) excursion_db = 20;
 // Cone breakup (Hz)
 @param({ min: 1000, max: 5000, exponent: 2 }) breakup_hz = 2500;
 // Closed back (0 = open back)

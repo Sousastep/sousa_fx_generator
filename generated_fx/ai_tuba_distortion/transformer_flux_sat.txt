@@ -41,7 +41,7 @@
 // ============================================================================
 
 // Drive into the transformer (dB)
-@param({ min: 0, max: 36 }) drive_db = 12;
+@param({ min: 0, max: 36 }) drive_db = 9;
 // Core size (saturation flux, relative)
 @param({ min: 0.1, max: 2, exponent: 2 }) core_size = 1;
 // Hysteresis

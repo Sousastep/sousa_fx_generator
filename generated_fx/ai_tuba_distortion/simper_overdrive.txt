@@ -62,7 +62,7 @@
 // Op-amp gain, 20*log10(1 + R2/R1) (dB)
 @param({ min: 0, max: 40 }) gain_db = 20;
 // Gain-leg high-pass (Hz)
-@param({ min: 10, max: 1000, exponent: 3 }) tight_hz = 10;
+@param({ min: 10, max: 1000, exponent: 3 }) tight_hz = 130;
 // Extra series diodes on the positive side (%)
 @param({ min: 0, max: 100 }) asym = 0;
 // Tone lowpass (Hz)

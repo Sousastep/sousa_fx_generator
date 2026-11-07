@@ -15,7 +15,7 @@ Zavalishin & Le Bivic, DAFx-16 paper 41 §2, §5.1 (ADAA tanh).
 
 PARAMETERS (4 + output gain)
 
-1. drive_db — 0…40 dB, default 24 dB
+1. drive_db — 0…40 dB, default 15 dB
    Op-amp gain of the clipped branch (the pedal's Drive knob). 0 dB = clean.
 
 2. bass_cut_hz — 40…800 Hz, default 250 Hz
@@ -23,7 +23,7 @@ PARAMETERS (4 + output gain)
    adjustable for tuba). Lower = the fundamental gets clipped too, fuzzier;
    higher = only the mids break up.
 
-3. tone_hz — 500…8000 Hz, default 2000 Hz
+3. tone_hz — 500…8000 Hz, default 6000 Hz
    Lowpass after the clipper (Tone knob). Darker to the left.
 
 4. mix — 0…1, default 1

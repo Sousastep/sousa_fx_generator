@@ -17,7 +17,7 @@ models, coupling-cap state); Dunkel et al., DAFx-16 paper 53 §2.2, §3.4
 
 PARAMETERS (5 + output gain)
 
-1. drive_db — 0…40 dB, default 20 dB
+1. drive_db — 0…40 dB, default 6 dB
    Level into the first stage. Even 0 dB breaks up with 2+ stages.
 
 2. bias — 0…1, default 0.5
@@ -29,7 +29,7 @@ PARAMETERS (5 + output gain)
    no choke; 60 ms = about 15 dB dip for ~100 ms; 500 ms = silence for
    ~300 ms, then a slow swell back.
 
-4. stages — 1…3 (stepped), default 2
+4. stages — 1…3 (stepped), default 1
    Number of triode stages in series (later stages get ×3 gain).
 
 5. mix — 0…1, default 1

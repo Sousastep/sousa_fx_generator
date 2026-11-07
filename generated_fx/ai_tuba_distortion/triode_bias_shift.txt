@@ -38,13 +38,13 @@
 // ============================================================================
 
 // Drive into the first stage (dB)
-@param({ min: 0, max: 40 }) drive_db = 20;
+@param({ min: 0, max: 40 }) drive_db = 6;
 // Bias: cold (0) .. hot (1)
 @param({ min: 0, max: 1 }) bias = 0.5;
 // Coupling-cap recovery (ms)
 @param({ min: 5, max: 500, exponent: 2 }) blocking_ms = 60;
 // Number of triode stages
-@param({ min: 1, max: 3, steps: 3 }) stages = 2;
+@param({ min: 1, max: 3, steps: 3 }) stages = 1;
 // Dry/wet
 @param({ min: 0, max: 1 }) mix = 1;
 // Output gain (dB)

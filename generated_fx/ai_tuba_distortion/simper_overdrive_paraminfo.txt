@@ -39,7 +39,7 @@ PARAMETERS (7)
    Op-amp gain, 20·log10(1 + R2/R1), the pedal's Drive knob and the
    original's `in2` gain (gain 9 = 20 dB). 0 dB = clean.
 
-3. tight_hz — 10…1000 Hz, default 10 Hz
+3. tight_hz — 10…1000 Hz, default 130 Hz
    Corner of the capacitor in the op amp's ground leg. Only content above it
    reaches the diodes; below it the horn passes clean. 10 Hz = the original
    (full-range clipping, fat). A real Tube Screamer sits at ~720 Hz: the

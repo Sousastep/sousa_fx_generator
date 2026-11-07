@@ -35,9 +35,9 @@
 // ============================================================================
 
 // Drive into the power stage (dB)
-@param({ min: 0, max: 40 }) drive_db = 18;
+@param({ min: 0, max: 40 }) drive_db = 20;
 // Sag (rectifier resistance)
-@param({ min: 0, max: 100 }) sag_pct = 60;
+@param({ min: 0, max: 100 }) sag_pct = 70;
 // Supply recovery (ms)
 @param({ min: 20, max: 1000, exponent: 2 }) recovery_ms = 150;
 // Dry/wet

@@ -16,7 +16,7 @@ transformer in a push-pull amp); Chowdhury, DAFx-19 paper 3 §2.2, §3
 
 PARAMETERS (5 + output gain)
 
-1. drive_db — 0…36 dB, default 12 dB
+1. drive_db — 0…36 dB, default 9 dB
    How hard the core is hit (level-neutral while unsaturated). 0 = clean;
    24+ = heavily saturated: thin, buzzy and quieter (the collapsing core
    eats the low end; about -45 dB RMS at 36 dB vs -32 dB at 0).

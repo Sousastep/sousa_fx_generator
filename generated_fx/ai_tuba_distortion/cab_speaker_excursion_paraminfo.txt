@@ -17,12 +17,12 @@ end of the amp chain).
 
 PARAMETERS (6 + output gain)
 
-1. resonance_hz — 50…150 Hz, default 80 Hz
+1. resonance_hz — 50…150 Hz, default 100 Hz
    Free-air speaker resonance (a sealed box raises it, up to ×1.4). Below
    it the output falls at 12 dB/oct, like a real cab: the tuba's lowest
    fundamentals get thinner and the harmonics take over.
 
-2. excursion_db — 0…30 dB, default 12 dB
+2. excursion_db — 0…30 dB, default 20 dB
    How hard the cone is driven (level-neutral while linear). 0 = clean
    cab sim; 20+ = a speaker being wrecked. On a 0.3 sine at the default:
    THD -6 dB at 110 Hz but +9 dB at 55 Hz (low notes distort most).
