@@ -1,0 +1,62 @@
+Kick Sidechain Low-Shelf Duck — sidechain compressor that ducks only the bass's low end
+From: DAFx-20 Paper 31 §2 (first-order allpass low shelf, Eqs. 4-10),
+      DAFx-22 Paper 35 §2.1 (soft-knee gain computer, Eqs. 1-2),
+      DAFx-17 Paper 55 §2 (drum-controlled cross-adaptive effect)
+
+What it is: a normal kick-keyed sidechain compressor, except the gain
+reduction drives a low shelf instead of a volume fader. When the kick hits,
+the bass loses sub and low-mid by up to range_db, while its upper harmonics
+(the tuba's attack, buzz and growl) pass at full level. When nothing ducks,
+the output is the input sample for sample (shelf gain 0 dB = no filter).
+The shelf is first-order, so the cut fades in gently below shelf_hz rather
+than splitting the bass at a hard crossover. Zero latency, no lookahead.
+
+Defaults aim for transparency: a modest 6 dB cut under ~90 Hz, a soft knee,
+a 5 ms attack (slow enough not to click a low note, fast enough to clear the
+kick's body) and a 120 ms release that is back before the next 1/8 at 140 BPM.
+
+Inputs:
+  in1/in2  bassline, left/right (the mono tuba on both is fine)
+  in3/in4  stereo drum audio, left/right (the sidechain key). Summed to mono
+           and lowpassed at key_hz so the kick keys it, not the hats.
+
+Parameters:
+
+- shelf_hz  (Hz) 30..400, default 60
+  Corner of the low shelf: everything well below it is cut by the full duck,
+  at the corner about half of it, well above it nothing. 60-100 = just the
+  sub under the kick (most transparent). 150-300 = the whole low end pumps.
+
+- key_hz  (Hz) 40..300, default 120
+  Lowpass on the drum key. 80-120 hears the kick and not the snare. Raise it
+  for a clicky, high-tuned kick; lower it if snare or toms trigger the duck.
+
+- threshold_db  (dB) -60..0, default -33
+  Kick level (peak, after the key lowpass) where ducking starts. Lower it
+  until every kick is caught; raise it if kick tails hold the bass down.
+
+- ratio  (:1) 1..20, default 5
+  How hard the duck follows kick level above the threshold (6 dB soft knee).
+  Low ratios let soft kicks duck less than hard ones; 20 = every kick over
+  the threshold ducks the full range_db. 1 = bypass.
+
+- range_db  (dB) 0..24, default 12
+  The most the low shelf ever cuts. 3-6 = room for the kick you feel more
+  than hear. 9-12 = obvious. 18+ = the sub vanishes under the kick (riddim
+  pump). 0 = bypass.
+
+- attack_ms  (ms) 0.5..50, default 3
+  Time for the cut to reach 90 % of its target. 3-8 is clean on low notes.
+  Under 2 ms can click or thump on long sub notes (the gain moves faster
+  than one cycle of the note); over 15 ms lets the bass overlap the kick.
+
+- release_ms  (ms) 20..1000, default 90
+  Time for the low end to come back 90 % of the way. 80-150 follows fast
+  patterns without audible pumping; 300+ is a slow, obvious swell.
+
+Notes:
+- One gain for both channels (linked), so the stereo image does not move.
+- The key detector holds each peak 12 ms (half a cycle of a 42 Hz kick) and
+  decays in 10 ms, so the duck does not wobble at the kick's own frequency.
+- Sibling: mrelwood_BandbAss_live ducks a band split at a crossover instead
+  of using a shelf.

@@ -1,0 +1,162 @@
+/* BandbAss Live — kick-keyed low-band ducker for a live bass instrument.
+   RNBO codebox~ rework of the idea in BandbAss 0.02 BETA by mrelwood
+   (https://mrelwood5.wixsite.com/plugins/bandbass). NOT a faithful port:
+   mrelwood_BandbAss.txt is the port, this file keeps its job (duck only the
+   band below a crossover while the kick sounds) and replaces the DSP.
+
+   in1/in2: bass L/R (a mono tuba on both is fine)
+   in3/in4: stereo drum audio L/R (the sidechain; exception to the rig
+            contract). Summed to mono and lowpassed at 110 Hz (LR4) so the
+            kick keys the duck and snare / hats mostly do not.
+   out1/out2: processed L/R. Zero latency, no lookahead.
+
+   Differences from the port:
+   - Linkwitz-Riley 4 crossover (two Butterworth TPT SVFs per slope) instead
+     of 10th-order LP at 1.2x and HP at 0.8x: the bands sum to an allpass
+     (the port's sum is within +-0.25 dB, so this is not an audible fix), with
+     about half the crossover group delay and 3 filters per channel, not 10.
+   - Duck depth is set in dB and follows the kick only. The port ducked the
+     bass down to a bass threshold, so depth changed with playing dynamics
+     (and quiet notes were not ducked at all).
+   - Gain moves in dB through a one-pole attack / hold / one-pole release
+     (the port's attack 0 stepped the gain in one sample), starts at unity
+     (the port faded in from silence) and has no 5 s sleep bypass.
+   - Both channels are filtered and share one gain; no Mono/Stereo switch.
+   - attack / hold / release are in ms (time to 90 %).
+*/
+
+// Crossover
+@param({ min: 60, max: 500, exponent: 2 }) crossover_hz = 160;
+// Kick threshold
+@param({ min: -60, max: 0 }) kick_thresh_db = -30;
+// Duck depth
+@param({ min: 0, max: 36 }) depth_db = 9;
+// Attack
+@param({ min: 0.5, max: 30, exponent: 2 }) attack_ms = 3;
+// Hold
+@param({ min: 0, max: 200, exponent: 2 }) hold_ms = 20;
+// Release
+@param({ min: 20, max: 800, exponent: 2 }) release_ms = 140;
+
+// Eight TPT state-variable filters (ic1, ic2): 0..2 left LP/LP/HP,
+// 3..5 right LP/LP/HP, 6..7 drum sidechain LP/LP.
+@state svf = new FixedFloat64Array(8, 2);
+@state svfHp = 0;
+@state svfA1 = 0;
+@state svfA2 = 0;
+@state svfA3 = 0;
+@state kickA1 = 0;
+@state kickA2 = 0;
+@state kickA3 = 0;
+@state lastSr = 0;
+@state lastFc = -1;
+@state lastThr = 1;
+@state lastDepth = -1;
+@state lastAtt = -1;
+@state lastHold = -1;
+@state lastRel = -1;
+@state thrLin = 0.03;
+@state depthK = 0;
+@state attC = 1;
+@state relC = 1;
+@state holdSamps = 0;
+@state pkHoldSamps = 0;
+@state pkDecay = 0;
+@state pk = 0;
+@state pkHold = 0;
+@state env = 0;
+@state holdCount = 0;
+
+// One Butterworth 2nd-order TPT SVF tick: returns the lowpass, leaves the
+// highpass in svfHp.
+function svfTick(x, bank: Int, a1, a2, a3) {
+    let v3 = x-svf[bank][1];
+    let v1 = a1*svf[bank][0]+a2*v3;
+    let v2 = svf[bank][1]+a2*svf[bank][0]+a3*v3;
+    svf[bank][0] = 2*v1-svf[bank][0];
+    svf[bank][1] = 2*v2-svf[bank][1];
+    svfHp = x-1.4142135623730951*v1-v2;
+    return v2;
+}
+
+let sr = maximum(samplerate(), 1.0);
+if (sr != lastSr || crossover_hz != lastFc) {
+    let fc = clamp(crossover_hz, 20.0, sr*0.45);
+    let g = tan(PI*fc/sr);
+    svfA1 = 1/(1+g*(g+1.4142135623730951));
+    svfA2 = g*svfA1;
+    svfA3 = g*svfA2;
+    lastFc = crossover_hz;
+    // Kick peak detector: 12 ms hold bridges the half period of a 42 Hz kick.
+    pkHoldSamps = 0.012*sr;
+    pkDecay = exp(0.0-1/(0.008*sr));
+    // Sidechain lowpass, fixed at 110 Hz: above a kick's body, below a snare's.
+    let gk = tan(PI*minimum(110.0, sr*0.45)/sr);
+    kickA1 = 1/(1+gk*(gk+1.4142135623730951));
+    kickA2 = gk*kickA1;
+    kickA3 = gk*kickA2;
+    lastAtt = -1;
+    lastHold = -1;
+    lastRel = -1;
+    lastSr = sr;
+}
+if (kick_thresh_db != lastThr) {
+    thrLin = dbtoa(kick_thresh_db);
+    lastThr = kick_thresh_db;
+}
+if (depth_db != lastDepth) {
+    depthK = 0.0-clamp(depth_db, 0.0, 36.0)*0.11512925464970229;
+    lastDepth = depth_db;
+}
+if (attack_ms != lastAtt) {
+    attC = 1-exp(0.0-2.302585092994046/maximum(1, attack_ms*0.001*sr));
+    lastAtt = attack_ms;
+}
+if (hold_ms != lastHold) {
+    holdSamps = maximum(0, hold_ms)*0.001*sr;
+    lastHold = hold_ms;
+}
+if (release_ms != lastRel) {
+    relC = 1-exp(0.0-2.302585092994046/maximum(1, release_ms*0.001*sr));
+    lastRel = release_ms;
+}
+
+let kickLp1 = svfTick((in3+in4)*0.5, 6, kickA1, kickA2, kickA3);
+let kickLp = svfTick(kickLp1, 7, kickA1, kickA2, kickA3);
+let ka = abs(kickLp);
+if (ka >= pk) {
+    pk = ka;
+    pkHold = pkHoldSamps;
+} else if (pkHold > 0) {
+    pkHold -= 1;
+} else {
+    pk *= pkDecay;
+    if (pk < 0.000001) pk = 0;
+}
+
+// Key: 0 at the threshold, 1 (full depth) 12 dB above it.
+let key = 0;
+if (pk > thrLin) key = minimum(1, (atodb(pk)-kick_thresh_db)*0.08333333333333333);
+if (key > env) {
+    env += (key-env)*attC;
+    holdCount = holdSamps;
+} else if (holdCount > 0) {
+    holdCount -= 1;
+} else {
+    env += (key-env)*relC;
+    if (env < 0.0000001) env = 0;
+}
+let lowGain = exp(env*depthK);
+
+let lowL1 = svfTick(in1, 0, svfA1, svfA2, svfA3);
+let highL1 = svfHp;
+let lowL = svfTick(lowL1, 1, svfA1, svfA2, svfA3);
+let unusedL = svfTick(highL1, 2, svfA1, svfA2, svfA3);
+let highL = svfHp;
+let lowR1 = svfTick(in2, 3, svfA1, svfA2, svfA3);
+let highR1 = svfHp;
+let lowR = svfTick(lowR1, 4, svfA1, svfA2, svfA3);
+let unusedR = svfTick(highR1, 5, svfA1, svfA2, svfA3);
+let highR = svfHp;
+out1 = lowL*lowGain+highL;
+out2 = lowR*lowGain+highR;

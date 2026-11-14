@@ -1,0 +1,61 @@
+BandbAss Live — kick-keyed low-band ducker (rework of mrelwood BandbAss)
+Idea from: BandbAss 0.02 BETA, https://mrelwood5.wixsite.com/plugins/bandbass
+This is NOT a faithful port (mrelwood_BandbAss is). It keeps the job and
+replaces the DSP for live use.
+
+What it is: when the kick hits, only the band below the crossover is turned
+down by a set number of dB, then let back up. Everything above the crossover
+passes untouched, so the tuba's attack and growl stay put while the sub makes
+room. Zero latency. With no kick, the output equals the input in level at
+every frequency (the crossover only rotates phase).
+
+Inputs:
+  in1/in2  bass, left/right (the mono tuba on both is fine)
+  in3/in4  stereo drum audio, left/right. The two are summed and only what
+           is below 110 Hz reaches the detector, so the kick keys the duck
+           and hats do not. A loud snare or floor tom with energy down there
+           can still trigger it; raise kick_thresh_db if that happens.
+
+Parameters:
+
+- crossover_hz  (Hz) 60..500, default 160
+  Only what is below this is ducked. 100-160 = just the sub, hardest to
+  notice. 200-300 = the whole low end moves, a more obvious pump.
+
+- kick_thresh_db  (dB) -60..0, default -30
+  Drum level (peak, below 110 Hz) where ducking starts. The duck reaches
+  full depth 12 dB above this, so soft kicks duck less than hard ones.
+  Lower it until every kick you want is caught; raise it if snare, toms
+  or kick tails keep the bass down.
+
+- depth_db  (dB) 0..36, default 9
+  How far the low band drops at full depth. 3-6 = barely audible room for
+  the kick, 9-12 = clear but still natural, 20+ = the sub disappears under
+  the kick (riddim pump). 0 = bypass.
+
+- attack_ms  (ms) 0.5..30, default 3
+  Time for the duck to reach 90 % of its depth. 1-5 keeps the kick's
+  transient clear. Under 1 ms can add a small thump on long low notes;
+  over 10 ms lets the bass overlap the front of the kick.
+
+- hold_ms  (ms) 0..200, default 20
+  Time the duck stays down after the kick falls away, before release starts.
+  Raise it for long 808-style kicks so the bass does not creep back early.
+
+- release_ms  (ms) 20..800, default 140
+  Time for the bass to come back 90 % of the way. 60-150 follows fast
+  patterns without audible pumping; 300+ is a slow swell.
+
+Changes from mrelwood_BandbAss (original names -> here):
+- threshold_kick -> kick_thresh_db. threshold_bass, link_thresholds and depth
+  (%) are gone: the original turned the bass down to a bass threshold, so the
+  amount depended on how loud you played and quiet notes were not ducked.
+  Here depth_db is a fixed amount set by the kick alone.
+- attack / hold / release were slider positions with their own curves; here
+  they are milliseconds. The original's attack 0 moved the gain in a single
+  sample; the fastest here is 0.5 ms.
+- stereo and channel4 are gone: both bass channels are always processed
+  with one shared gain, and in3/in4 are always the stereo drum pair (the
+  original used in3 as the kick and in4 as an optional second sidechain).
+- The sidechain lowpass is fixed at 110 Hz instead of following the
+  crossover, to keep the snare out of the detector.

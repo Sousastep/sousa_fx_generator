@@ -1,0 +1,163 @@
+// ============================================================================
+// comp_kick_sidechain_lowshelf_duck.txt
+// Kick-keyed sidechain compressor whose gain element is a LOW SHELF: when the
+// kick hits, only the bass's low end is turned down, then let back up.
+//
+// From:
+//  - Shelf: DAFx-20, Paper 31, Section 2, Eqs. (4)-(6), (8)-(10): first-order
+//    allpass-based low-frequency shelving filter (LFS),
+//      H(z) = 1 + (H0/2) * [1 + A1(z)],  A1(z) = (z^-1 + a) / (1 + a z^-1),
+//      H0 = V0 - 1, V0 = 10^(G/20), cut coefficient
+//      aC = (tan(pi fc/fs) - V0) / (tan(pi fc/fs) + V0)   (Eq. 6),
+//    so the -3 dB-style corner stays at fc for every depth (symmetric cut).
+//    G = 0 gives H0 = 0, i.e. the output equals the input sample for sample.
+//  - Gain computer: DAFx-22, Paper 35 (Wright & Valimaki, "Grey-Box Modelling
+//    of Dynamic Range Compression"), Section 2.1, Eqs. (1)-(2): quadratic
+//    soft-knee threshold/ratio law in dB (knee width fixed at 6 dB).
+//  - Sidechain from another instrument's drums: DAFx-17, Paper 55 (Sarkar,
+//    Reiss & Brandtsegg, "Investigation of a Drum Controlled Cross-adaptive
+//    Audio Effect for Live Performance"), Sections 2-2.2: drum envelope ->
+//    attack / release control envelope applied to another instrument.
+//
+// Inlets (exception to the rig contract - this is a sidechain effect):
+//   in1 / in2: stereo bassline L / R (a mono tuba on both is fine)
+//   in3 / in4: stereo drum audio L / R (the key). Summed to mono and
+//              lowpassed (Linkwitz-Riley 4, key_hz) so the kick keys the duck
+//              and snare / hats mostly do not.
+// Outlets:
+//   out1 / out2: processed bass L / R. Zero latency, no lookahead.
+//
+// Signal flow:
+//   drums -> mono -> LR4 lowpass -> peak detector (12 ms hold, 10 ms decay)
+//         -> dB -> soft-knee gain computer (threshold, ratio) -> clip to range
+//         -> attack / release smoothing in dB -> shelf gain G = -reduction
+//   bass L/R -> first-order low shelf at shelf_hz, gain G (one gain, linked)
+// ============================================================================
+
+// Shelf corner
+@param({ min: 30, max: 400, exponent: 2 }) shelf_hz = 60;
+// Kick key lowpass
+@param({ min: 40, max: 300, exponent: 2 }) key_hz = 120;
+// Threshold
+@param({ min: -60, max: 0 }) threshold_db = -33;
+// Ratio
+@param({ min: 1, max: 20, exponent: 2 }) ratio = 5;
+// Max duck
+@param({ min: 0, max: 24 }) range_db = 12;
+// Attack
+@param({ min: 0.5, max: 50, exponent: 2 }) attack_ms = 3;
+// Release
+@param({ min: 20, max: 1000, exponent: 2 }) release_ms = 90;
+
+// Two TPT state-variable filters (ic1, ic2) for the LR4 key lowpass.
+@state keySvf = new FixedFloat64Array(2, 2);
+@state keyA1 = 0;
+@state keyA2 = 0;
+@state keyA3 = 0;
+// Shelf allpass states xh(n-1), left / right.
+@state s_xhL = 0;
+@state s_xhR = 0;
+@state lastSr = 0;
+@state lastKey = -1;
+@state lastShelf = -1;
+@state lastAtt = -1;
+@state lastRel = -1;
+@state shelfT = 0;
+@state pkHoldSamps = 0;
+@state pkDecay = 0;
+@state attC = 0;
+@state relC = 0;
+@state pk = 0;
+@state pkHold = 0;
+@state grDb = 0;
+
+// One Butterworth 2nd-order TPT SVF lowpass tick on keySvf[bank].
+function keyTick(x, bank: Int) {
+    let v3 = x-keySvf[bank][1];
+    let v1 = keyA1*keySvf[bank][0]+keyA2*v3;
+    let v2 = keySvf[bank][1]+keyA2*keySvf[bank][0]+keyA3*v3;
+    keySvf[bank][0] = 2*v1-keySvf[bank][0];
+    keySvf[bank][1] = 2*v2-keySvf[bank][1];
+    return v2;
+}
+
+let sr = maximum(samplerate(), 1.0);
+if (sr != lastSr) {
+    // Peak hold bridges the half period of a 42 Hz kick, then a fast decay.
+    pkHoldSamps = 0.012*sr;
+    pkDecay = exp(0.0-2.302585092994046/(0.010*sr));
+    lastKey = -1;
+    lastShelf = -1;
+    lastAtt = -1;
+    lastRel = -1;
+    lastSr = sr;
+}
+if (key_hz != lastKey) {
+    let gk = tan(PI*clamp(key_hz, 20.0, sr*0.45)/sr);
+    keyA1 = 1/(1+gk*(gk+1.4142135623730951));
+    keyA2 = gk*keyA1;
+    keyA3 = gk*keyA2;
+    lastKey = key_hz;
+}
+if (shelf_hz != lastShelf) {
+    shelfT = tan(PI*clamp(shelf_hz, 10.0, sr*0.45)/sr);
+    lastShelf = shelf_hz;
+}
+// Smoothing coefficients: time to 90 % of the target.
+if (attack_ms != lastAtt) {
+    attC = 1-exp(0.0-2.302585092994046/maximum(1, attack_ms*0.001*sr));
+    lastAtt = attack_ms;
+}
+if (release_ms != lastRel) {
+    relC = 1-exp(0.0-2.302585092994046/maximum(1, release_ms*0.001*sr));
+    lastRel = release_ms;
+}
+
+// ---- Key: mono drums -> LR4 lowpass -> peak with hold ----
+let k1 = keyTick((in3+in4)*0.5, 0);
+let k2 = keyTick(k1, 1);
+let ka = abs(k2);
+if (ka >= pk) {
+    pk = ka;
+    pkHold = pkHoldSamps;
+} else if (pkHold > 0) {
+    pkHold -= 1;
+} else {
+    pk *= pkDecay;
+    if (pk < 0.000001) pk = 0;
+}
+
+// ---- Gain computer (DAFx-22 P35 Eq. 1), reduction in positive dB ----
+let xDb = atodb(maximum(pk, 0.000001));
+let over = xDb-threshold_db;
+let slope = 1-1/maximum(ratio, 1.0);
+let knee = 6.0;
+let target = 0;
+if (2*over > knee) {
+    target = slope*over;
+} else if (2*over > 0.0-knee) {
+    let kx = over+knee*0.5;
+    target = slope*kx*kx/(2*knee);
+}
+target = minimum(target, maximum(range_db, 0.0));
+
+// ---- Ballistics in the dB domain ----
+if (target > grDb) {
+    grDb += (target-grDb)*attC;
+} else {
+    grDb += (target-grDb)*relC;
+    if (grDb < 0.000001) grDb = 0;
+}
+
+// ---- First-order low shelf (DAFx-20 P31 Eqs. 4, 6, 8-10), cut by grDb ----
+let v0 = dbtoa(0.0-grDb);
+let h0 = v0-1;
+let aC = (shelfT-v0)/(shelfT+v0);
+let xhL = in1-aC*s_xhL;
+let apL = aC*xhL+s_xhL;
+s_xhL = xhL;
+let xhR = in2-aC*s_xhR;
+let apR = aC*xhR+s_xhR;
+s_xhR = xhR;
+out1 = in1+h0*0.5*(in1+apL);
+out2 = in2+h0*0.5*(in2+apR);
